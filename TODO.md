@@ -1,6 +1,6 @@
 # Rotelyx TODO
 
-Status as of 16 August 2026. 155 tests passing.
+Status as of 16 August 2026. 158 tests passing.
 
 This file is the honest ledger. Items move to **Done** only when a test proves
 them, not when the code exists. Three separate defects in this project were
@@ -108,7 +108,12 @@ which needs no hole punching. Real traversal cannot be asserted from one host.
 Requires a relay on a public address and two devices behind different NATs.
 Everything needed for this is built.
 
-- [!] Deploy `rotelyx-relay` to a public host
+- [x] DNS, nginx and TLS configured for `relay-rotelyx.ideoa.co`
+- [!] **Turn off the Cloudflare proxy for the relay record.** It terminates TLS
+      and therefore observes which endpoints connect, which is the metadata self
+      hosting exists to protect. Set the record to DNS only
+- [!] Deploy the `rotelyx-relay` binary to 192.168.68.46. Currently answering
+      502 because nothing is listening on 3340
 - [ ] Measure hole punch success rate across NAT types
 - [ ] Measure how often `PreferDirect` costs a connection that `Fastest` would
       have kept

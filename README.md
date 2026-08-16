@@ -1,17 +1,20 @@
 <div align="center">
 
-# Rotelyx
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/rotelyx-logo-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/brand/rotelyx-logo-light.png">
+  <img src="docs/brand/rotelyx-logo-light.png" alt="Rotelyx" width="380">
+</picture>
 
 **Peer to peer end to end encrypted messaging on a transport that lives in this repository.**
 
 Identity is an Ed25519 key. No phone number, no email, no account, no directory.
 
-[![tests](https://img.shields.io/badge/tests-155%20passing-4FB39A?style=flat-square)](#testing)
-[![rust](https://img.shields.io/badge/rust-1.85%2B-E8A33D?style=flat-square)](#running-it)
-[![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-8B96A8?style=flat-square)](#licence)
+[![tests](https://img.shields.io/badge/tests-158%20passing-6a31ee?style=flat-square)](#testing)
+[![rust](https://img.shields.io/badge/rust-1.85%2B-6a31ee?style=flat-square)](#running-it)
+[![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-8b8b8b?style=flat-square)](#licence)
 [![status](https://img.shields.io/badge/status-unaudited-E0808C?style=flat-square)](#security-status)
 
-*by Ideoa Labs &middot; Andryu Schittone (Malios Dark)*
 
 </div>
 
@@ -44,6 +47,7 @@ Identity is an Ed25519 key. No phone number, no email, no account, no directory.
 - [Repository layout](#repository-layout)
 - [Testing](#testing)
 - [Provenance and licences](#provenance-and-licences)
+- [Deployment](#deployment)
 - [Roadmap](#roadmap)
 - [Security status](#security-status)
 - [Licence](#licence)
@@ -700,6 +704,8 @@ crates/
   rotelyx-web              local browser harness
   net/                     the vendored transport stack, 121,197 lines
 docs/
+  brand/                       logo, light and dark variants, and the square mark
+  DEPLOYMENT.md                what is deployed, where, and why each choice was made
   THREAT-MODEL.md              what Rotelyx defends against, and what it does not
   PQ-COMPOSITION.md            the novel construction, specified for review
   rotelyx-architecture.html    the architecture assessment
@@ -735,7 +741,7 @@ sudo mkswap /swapfile2 && sudo swapon /swapfile2
 cargo test --workspace
 ```
 
-**155 tests.** The distribution matters more than the count:
+**158 tests.** The distribution matters more than the count:
 
 | Suite | Tests | What it proves |
 |---|---:|---|
@@ -779,7 +785,7 @@ flowchart LR
     T["<b>Tailscale</b><br/>NAT traversal<br/>BSD-3-Clause"] --> I
     Q["<b>quinn</b><br/>QUIC<br/>MIT / Apache-2.0"] --> N["<b>noq</b><br/>N0's quinn fork"]
     N --> I["<b>iroh</b><br/>N0, INC.<br/>MIT / Apache-2.0"]
-    I --> R["<b>Rotelyx</b><br/>Ideoa Labs<br/>MIT / Apache-2.0"]
+    I --> R["<b>Rotelyx</b><br/>Malios Dark<br/>MIT / Apache-2.0"]
 
     style R fill:#33280F,stroke:#E8A33D,color:#E8A33D
     style I fill:#1B222D,stroke:#8B96A8,color:#DFE5EE
@@ -808,6 +814,18 @@ replacement plan are in
 licence obligation and must not be removed.
 
 ---
+
+## Deployment
+
+Hosts, nginx configuration, firewall rules and verification commands are in
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+> [!CAUTION]
+> **A relay must not sit behind a TLS terminating CDN.** The relay's entire
+> security position is that it learns who talks to whom and that this is
+> therefore visible to an operator you chose rather than to a stranger. A proxy
+> that terminates TLS observes exactly that. Content stays encrypted either way,
+> but the metadata is the thing being protected.
 
 ## Roadmap
 
@@ -844,6 +862,5 @@ MIT, Apache-2.0 and BSD-3-Clause. See
 
 <div align="center">
 
-**Ideoa Labs** &middot; Andryu Schittone (Malios Dark)
 
 </div>

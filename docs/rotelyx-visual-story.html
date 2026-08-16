@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#05070a">
-<title>Umbra Protocol | Visual Flow</title>
+<title>Rotelyx Protocol | Visual Flow</title>
+<meta name="description" content="How a message moves through Rotelyx: two independent encryption layers, a direct peer to peer path, and a blind mailbox when the recipient is offline.">
 <style>
 :root{
   --bg:#05070a;
@@ -47,17 +48,15 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:0}
 }
 .brand{display:flex;align-items:center;gap:12px;font-size:13px;font-weight:800;letter-spacing:.12em}
 .logo{
-  width:30px;height:30px;border:1px solid rgba(119,237,255,.45);border-radius:9px;position:relative;
-  background:linear-gradient(145deg,rgba(119,237,255,.08),rgba(160,145,255,.03));
-  box-shadow:0 0 26px rgba(119,237,255,.07) inset,0 0 20px rgba(119,237,255,.04)
+  width:30px;height:30px;border-radius:9px;
+  background:url("data:image/png;base64,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") center/contain no-repeat;
+  filter:drop-shadow(0 0 14px rgba(106,49,238,.35))
 }
-.logo:before,.logo:after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(119,237,255,.55)}
-.logo:before{inset:6px}.logo:after{inset:10px}
 .proto{
   font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace;
   letter-spacing:.16em;color:#58636e;padding-top:8px
 }
-.stage{height:700vh;position:relative;z-index:3}
+.stage{height:800vh;position:relative;z-index:3}
 .copy{
   position:fixed;z-index:12;
   left:clamp(24px,7vw,120px);
@@ -167,22 +166,22 @@ h1{
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<canvas id="c" role="img" aria-label="An animated diagram tracing one message through Rotelyx: encrypted at the message layer, wrapped again by the transport, delivered directly between devices, relayed when a direct path is impossible, and left in a blind mailbox when the recipient is offline."></canvas>
 <div class="vignette"></div>
 <div class="noise"></div>
 
 <div class="topbar">
-  <div class="brand"><span class="logo"></span><span>UMBRA</span></div>
+  <div class="brand"><span class="logo"></span><span>ROTELYX</span></div>
   <div class="proto">PROTOCOL VISUALIZATION</div>
 </div>
 
-<div class="stagecounter"><span id="counter">01</span> / 07</div>
+<div class="stagecounter"><span id="counter">01</span> / 08</div>
 
 <div class="copy">
   <section class="copyblock active" data-s="0">
     <div class="kicker">Private by construction</div>
     <h1>One message.<br>No central conversation.</h1>
-    <div class="sub">Scroll to watch a message move through Umbra.</div>
+    <div class="sub">Scroll to watch a message move through Rotelyx.</div>
     <div class="pillrow">
       <div class="pill"><b></b>ED25519 IDENTITY</div>
       <div class="pill">NO PHONE</div>
@@ -209,27 +208,36 @@ h1{
   </section>
 
   <section class="copyblock" data-s="4">
+    <div class="kicker">When a direct path is impossible</div>
+    <h1>Some networks cannot be punched through.</h1>
+    <div class="sub">Then a relay forwards ciphertext it cannot read. It does learn which endpoint talks to which, which is why any direct path is preferred over any relayed one, at any latency.</div>
+    <div class="pillrow">
+      <div class="pill" style="color:#c8aa71;border-color:rgba(240,191,103,.16)">RELAY SEES THE PAIR, NOT THE MESSAGE</div>
+    </div>
+  </section>
+
+  <section class="copyblock" data-s="5">
     <div class="kicker">Offline path</div>
     <h1>Offline does not mean readable by a server.</h1>
     <div class="sub">The message becomes a sealed, padded envelope with a rotating tag.</div>
   </section>
 
-  <section class="copyblock" data-s="5">
+  <section class="copyblock" data-s="6">
     <div class="kicker">Blind mailbox</div>
     <h1>Stored as something the mailbox cannot read.</h1>
     <div class="sub">Short TTL. Delete on collection. Self-hostable.</div>
   </section>
 
-  <section class="copyblock" data-s="6">
+  <section class="copyblock" data-s="7">
     <div class="kicker">Back online</div>
     <h1>Collected.<br>Delivered.<br>Direct again.</h1>
-    <div class="sub">Umbra is designed to reduce what infrastructure can learn.</div>
+    <div class="sub">Rotelyx is designed to reduce what infrastructure can learn.</div>
     <div class="pillrow"><div class="pill" style="color:#c8aa71;border-color:rgba(240,191,103,.16)">PRE-RELEASE · UNAUDITED</div></div>
   </section>
 </div>
 
 <div class="progress">
-  <i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i>
+  <i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
 </div>
 
 <div class="legend"><span class="mouse"></span>SCROLL TO TRACE THE MESSAGE</div>
@@ -406,6 +414,26 @@ function mailbox(x,y,s=1){
   text('OPAQUE STORE',0,h*.36,8*s,'#626d78','center',700,1.2*s);
   ctx.restore()
 }
+function relayNode(x,y,s=1){
+  ctx.save();ctx.translate(x,y);
+  nodeHalo(0,0,120*s,'rgba(240,191,103,1)',.07);
+  const w=126*s,h=96*s;
+  let body=ctx.createLinearGradient(-w/2,-h/2,w/2,h/2);
+  body.addColorStop(0,'rgba(240,191,103,.10)');body.addColorStop(1,'#0a0e14');
+  ctx.shadowColor='rgba(240,191,103,.26)';ctx.shadowBlur=30;
+  ctx.fillStyle=body;ctx.strokeStyle='rgba(240,191,103,.40)';ctx.lineWidth=1;
+  rr(-w/2,-h/2,w,h,16*s);ctx.fill();ctx.stroke();ctx.shadowBlur=0;
+  text('RELAY',0,-h*.20,10*s,'#f0bf67','center',700,1.5*s);
+  // A crossed eye: it forwards, it does not read.
+  ctx.strokeStyle='rgba(240,191,103,.55)';ctx.lineWidth=1.2;
+  ctx.beginPath();
+  ctx.moveTo(-15*s,h*.10);ctx.quadraticCurveTo(0,h*.10-9*s,15*s,h*.10);
+  ctx.quadraticCurveTo(0,h*.10+9*s,-15*s,h*.10);ctx.stroke();
+  circle(0,h*.10,3*s,'rgba(240,191,103,.7)','transparent',1,0);
+  ctx.strokeStyle='rgba(255,130,145,.85)';ctx.lineWidth=1.6;
+  ctx.beginPath();ctx.moveTo(-17*s,h*.10+8*s);ctx.lineTo(17*s,h*.10-8*s);ctx.stroke();
+  ctx.restore()
+}
 function beam(x1,y1,x2,y2,color='#77edff',progress=1){
   const xx=lerp(x1,x2,progress),yy=lerp(y1,y2,progress);
   glowLine(x1,y1,xx,yy,color,2,.7,16);
@@ -430,8 +458,8 @@ function infoChip(x,y,label,value,color='#77edff'){
 function drawScene(progress){
   drawBackdrop();
 
-  const sp=progress*6.999;
-  const stage=Math.min(6,Math.floor(sp));
+  const sp=progress*7.999;
+  const stage=Math.min(7,Math.floor(sp));
   const t=smooth(sp-stage);
 
   const mobile=W<800;
@@ -441,10 +469,10 @@ function drawScene(progress){
   const cy=mobile?H*.70:H*.56;
   const phoneScale=mobile?Math.min(.78,W/520):Math.min(1,H/850);
 
-  if(stage<=3){
+  if(stage<=4){
     phone(leftX,cy,phoneScale,true,'PEER A');
     phone(rightX,cy,phoneScale,true,'PEER B');
-  }else if(stage<=5){
+  }else if(stage<=6){
     phone(leftX,cy,phoneScale,true,'PEER A');
     phone(rightX,cy,phoneScale,false,'OFFLINE');
   }else{
@@ -487,6 +515,30 @@ function drawScene(progress){
   }
 
   if(stage===4){
+    // Hole punching failed, so the path bends through a relay.
+    const rx=midX,ry=mobile?cy-120*phoneScale:cy-150*phoneScale;
+    relayNode(rx,ry,.86*phoneScale);
+
+    ctx.save();ctx.strokeStyle='rgba(240,191,103,.20)';ctx.lineWidth=1.2;ctx.setLineDash([6,7]);
+    ctx.beginPath();ctx.moveTo(leftX+62*phoneScale,cy);ctx.lineTo(rx-58*phoneScale,ry+18*phoneScale);
+    ctx.moveTo(rx+58*phoneScale,ry+18*phoneScale);ctx.lineTo(rightX-62*phoneScale,cy);ctx.stroke();
+    ctx.restore();
+
+    // The direct path it could not take.
+    ctx.save();ctx.globalAlpha=.30;
+    line(leftX+62*phoneScale,cy+34*phoneScale,rightX-62*phoneScale,cy+34*phoneScale,'rgba(255,130,145,.5)',1,[4,6]);
+    ctx.restore();
+    text('DIRECT PATH BLOCKED',midX,cy+52*phoneScale,8*phoneScale,'#ff8291','center',700,1);
+
+    const k=easeInOut(t);
+    const half=k<.5?k*2:(k-.5)*2;
+    const x=k<.5?lerp(leftX+68*phoneScale,rx,half):lerp(rx,rightX-72*phoneScale,half);
+    const y=k<.5?lerp(cy,ry+22*phoneScale,half):lerp(ry+22*phoneScale,cy,half);
+    packet(x,y,.62*phoneScale);
+    infoChip(midX,cy+112*phoneScale,'RELAY LEARNS','WHO TALKS TO WHOM','#f0bf67');
+  }
+
+  if(stage===5){
     const boxX=midX,boxY=mobile?cy+125*phoneScale:cy+160*phoneScale;
     mailbox(boxX,boxY,.70*phoneScale);
     ctx.save();
@@ -500,7 +552,7 @@ function drawScene(progress){
     infoChip(boxX,boxY+108*phoneScale,'ENVELOPE','SEALED + PADDED','#a091ff');
   }
 
-  if(stage===5){
+  if(stage===6){
     mailbox(midX,cy,.90*phoneScale);
     packet(midX,cy-4*phoneScale,.62*phoneScale,'sealed');
     const baseX=mobile?midX:midX+154*phoneScale;
@@ -519,7 +571,7 @@ function drawScene(progress){
     })
   }
 
-  if(stage===6){
+  if(stage===7){
     mailbox(midX,cy+155*phoneScale,.50*phoneScale);
     beam(leftX+66*phoneScale,cy,rightX-66*phoneScale,cy,'#77edff',1);
     const k=easeInOut(t);
@@ -539,11 +591,21 @@ const blocks=[...document.querySelectorAll('.copyblock')];
 const bars=[...document.querySelectorAll('.progress i')];
 const counter=document.getElementById('counter');
 
+const reduceMotion=matchMedia('(prefers-reduced-motion: reduce)');
+
 function frame(){
   const max=document.documentElement.scrollHeight-innerHeight;
   targetProgress=max>0?clamp(scrollY/max):0;
-  currentProgress=lerp(currentProgress,targetProgress,.085);
-  mouseX=lerp(mouseX,targetMouseX,.05);mouseY=lerp(mouseY,targetMouseY,.05);
+  // Honour the reduced-motion preference in the canvas too. The CSS rule
+  // only stops transitions; requestAnimationFrame keeps running regardless,
+  // so without this the scene still animates for somebody who asked it not to.
+  if(reduceMotion.matches){
+    currentProgress=targetProgress;
+    mouseX=targetMouseX=.5;mouseY=targetMouseY=.5;
+  }else{
+    currentProgress=lerp(currentProgress,targetProgress,.085);
+    mouseX=lerp(mouseX,targetMouseX,.05);mouseY=lerp(mouseY,targetMouseY,.05);
+  }
 
   const stage=drawScene(currentProgress);
   if(stage!==lastStage){
