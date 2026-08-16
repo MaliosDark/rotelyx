@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The vendored transport is large. One job per core exhausts memory on a
+  # standard runner, and the failure looks like a mysterious kill rather than
+  # an out of memory error.
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  # Runs first and on its own, because this is the check that must never be
+  # skipped or buried under a compile failure in something unrelated.
+  no-foreign-infrastructure:
+    name: contacts no third party infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: guard
+        run: cargo test -p rotelyx-net --test no_foreign_infrastructure -- --nocapture
+
+      - name: no upstream transport package is resolved
+        run: |
+          # A clone must build without fetching anything from a third party
+          # registry. If this ever finds something, the vendoring has leaked.
+          found=$(cargo metadata --format-version 1 \
+            | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          bad = sorted({p['name'] for p in d['packages']
+                        if p['name'].startswith(('iroh','noq','n0-','netwatch','portmapper','pkarr'))})
+          print(' '.join(bad))
+          ")
+          if [ -n "$found" ]; then
+            echo "upstream transport packages resolved: $found" >&2
+            exit 1
+          fi
+          echo "no upstream transport packages resolved"
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  lint:
+    name: format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # Only our own crates. The vendored tree carries upstream's style and
+      # reformatting it would turn every future patch import into a conflict.
+      - name: fmt
+        run: cargo fmt --check -p rotelyx-core -p rotelyx-crypto -p rotelyx-mailbox
+             -p rotelyx-net -p rotelyx-cli -p rotelyx-relay -p rotelyx-web
+
+      - name: clippy
+        run: cargo clippy -p rotelyx-core -p rotelyx-crypto -p rotelyx-mailbox
+             -p rotelyx-net -p rotelyx-relay -- -D warnings
+
+  vectors:
+    name: post quantum vectors reproduce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The published vectors are the artefact an external reviewer checks
+      # against. If they stop reproducing, either the construction changed or
+      # the file is stale, and both are protocol breaks.
+      - run: cargo test -p rotelyx-crypto --test pq_vectors
