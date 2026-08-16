@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Launch the Rotelyx desktop window.
+#
+# Why this wrapper exists: when a terminal is started from inside a snap, for
+# example VS Code's, the snap runtime leaks its own library and GTK paths into
+# the environment. A normally linked binary then picks up the snap's
+# libpthread and dies with:
+#
+#   symbol lookup error: /snap/core20/.../libpthread.so.0:
+#   undefined symbol: __libc_pthread_init
+#
+# Clearing those variables is enough. Nothing here changes how Rotelyx behaves,
+# it only stops a foreign runtime being injected under it.
+
+set -euo pipefail
+
+BIN="${ROTELYX_BIN:-$(dirname "$0")/../target/debug/rotelyx-desktop}"
+
+if [ ! -x "$BIN" ]; then
+  echo "not built yet: $BIN" >&2
+  echo "run: cargo build -p rotelyx-desktop" >&2
+  exit 1
+fi
+
+exec env \
+  -u SNAP -u SNAP_REVISION -u SNAP_NAME -u SNAP_INSTANCE_NAME \
+  -u SNAP_LIBRARY_PATH -u SNAP_USER_COMMON -u SNAP_USER_DATA \
+  -u GTK_PATH -u GIO_MODULE_DIR -u GSETTINGS_SCHEMA_DIR \
+  -u GDK_PIXBUF_MODULE_FILE -u LOCPATH -u LD_LIBRARY_PATH \
+  -u XDG_DATA_DIRS -u XDG_DATA_HOME -u XDG_CONFIG_DIRS \
+  DISPLAY="${DISPLAY:-:0}" \
+  "$BIN" "$@"

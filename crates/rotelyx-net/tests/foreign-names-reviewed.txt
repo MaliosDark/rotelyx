@@ -1,0 +1,45 @@
+# Reviewed occurrences of upstream hostnames.
+#
+# Every line here has been looked at by a human and judged to be attribution or
+# prose rather than something Rotelyx can connect to. Anything NOT listed here
+# fails the build.
+#
+# Format:  <path substring> | <matched token> | <reason>
+#
+# Rules for adding an entry:
+#
+#   1. A hostname inside a Rust string literal can never be excepted. That is a
+#      hard failure in the guard and no entry here will silence it.
+#   2. Attribution must not be removed. Author emails in a vendored manifest are
+#      a courtesy to the people who wrote the code and they stay.
+#   3. If you are adding an entry to make a build pass, stop and check whether
+#      the thing you are excepting is actually reachable first.
+
+# --- author attribution in vendored manifests --------------------------------
+crates/net/rotelyx-error/Cargo.toml         | n0.computer | author email, attribution
+crates/net/rotelyx-error-macros/Cargo.toml  | n0.computer | author email, attribution
+crates/net/rotelyx-future/Cargo.toml        | n0.computer | author email, attribution
+crates/net/rotelyx-metrics/Cargo.toml       | n0.computer | author email, attribution
+crates/net/rotelyx-metrics-derive/Cargo.toml| n0.computer | author email, attribution
+crates/net/rotelyx-watcher/Cargo.toml       | n0.computer | author email, attribution
+crates/net/rotelyx-netwatch/Cargo.toml      | n0.computer | author email, attribution
+crates/net/rotelyx-quic/Cargo.toml          | n0.computer | author email, attribution
+crates/net/rotelyx-quic-proto/Cargo.toml    | n0.computer | author email, attribution
+crates/net/rotelyx-quic-udp/Cargo.toml      | n0.computer | author email, attribution
+crates/net/rotelyx-transport/Cargo.toml     | n0.computer | author email, attribution
+crates/net/rotelyx-transport-base/Cargo.toml| n0.computer | author email, attribution
+crates/net/rotelyx-relay-proto/Cargo.toml   | n0.computer | author email, attribution
+crates/net/rotelyx-discovery/Cargo.toml     | n0.computer | author email, attribution
+
+# --- documentation links in vendored source ----------------------------------
+crates/net/rotelyx-transport/src/lib.rs             | n0.computer | doc link naming the upstream project
+crates/net/rotelyx-transport/src/address_lookup.rs  | n0.computer | doc link naming the upstream project
+crates/net/rotelyx-transport/src/endpoint.rs        | n0.computer | doc link naming the upstream project
+crates/net/rotelyx-quic-proto/src/n0_nat_traversal.rs | n0.computer | doc link naming the upstream project
+crates/net/rotelyx-quic-proto/src/connection/mod.rs | n0.computer | doc link naming the upstream project
+
+# --- Rotelyx's own documentation of what it refuses to do ---------------------
+# These lines name upstream infrastructure in order to say that Rotelyx does not
+# contact it. Removing them would make the code less clear, not more secure.
+crates/rotelyx-net/src/lib.rs      | iroh.link | prose describing infrastructure Rotelyx does not use
+crates/rotelyx-net/src/endpoint.rs | iroh.link | prose describing infrastructure Rotelyx does not use

@@ -1,0 +1,34 @@
+[package]
+name = "rotelyx-core"
+description = "Rotelyx L0/L1: iroh transport, identity, and framed session wire format"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rotelyx-net.workspace = true
+
+blake3.workspace = true
+data-encoding.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+chacha20poly1305.workspace = true
+argon2.workspace = true
+
+postcard.workspace = true
+serde.workspace = true
+
+tokio.workspace = true
+futures-lite.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "time"] }
+tracing-subscriber.workspace = true

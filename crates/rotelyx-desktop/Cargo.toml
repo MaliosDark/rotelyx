@@ -1,0 +1,30 @@
+[package]
+name = "rotelyx-desktop"
+description = "Rotelyx desktop client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+rotelyx-core.workspace = true
+rotelyx-crypto.workspace = true
+rotelyx-net.workspace = true
+
+# No Node, no bundler. The frontend is plain HTML served from `ui/`, so the
+# only toolchain needed to build this is cargo.
+tauri = { version = "2", features = [] }
+
+anyhow.workspace = true
+serde = { workspace = true }
+serde_json = "1"
+data-encoding.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rpassword = "7"

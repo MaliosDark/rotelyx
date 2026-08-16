@@ -1,0 +1,14 @@
+# Build settings for this workspace.
+#
+# Why the job limit exists: the vendored transport is 121,000 lines and includes
+# a 50,000 line QUIC state machine, and Tauri pulls in a large graph of its own.
+# Cargo defaults to one job per core, and on eight cores that peaks high enough
+# to exhaust a 2 GiB swap file. When swap runs out the kernel starts killing
+# processes, and an editor is a large, easy target.
+#
+# Four jobs roughly halves peak memory at a modest cost in wall clock time.
+# Raise it if you have more swap or more RAM headroom; lower it if the machine
+# still stalls.
+[build]
+jobs = 4
+

@@ -1,0 +1,1300 @@
+<title>Rotelyx Protocol Paper</title>
+<style>
+  :root {
+    --ground:      #FBFAF8;
+    --surface:     #FFFFFF;
+    --surface-2:   #F1EFEC;
+    --ink:         #1A1815;
+    --ink-2:       #5C574F;
+    --rule:        #DAD5CD;
+    --rule-soft:   #EBE7E1;
+    --accent:      #9A6410;
+    --accent-soft: #F5E9D4;
+    --good:        #256B5B;
+    --good-soft:   #DCEBE6;
+    --risk:        #A33B4D;
+    --risk-soft:   #F6DDE1;
+
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --body: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #14120F;
+      --surface:     #1C1A16;
+      --surface-2:   #24211C;
+      --ink:         #E9E4DA;
+      --ink-2:       #9C958A;
+      --rule:        #363129;
+      --rule-soft:   #262219;
+      --accent:      #D9A24A;
+      --accent-soft: #33280F;
+      --good:        #57B79C;
+      --good-soft:   #142A25;
+      --risk:        #DE8090;
+      --risk-soft:   #2E1A1E;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #14120F;
+    --surface:     #1C1A16;
+    --surface-2:   #24211C;
+    --ink:         #E9E4DA;
+    --ink-2:       #9C958A;
+    --rule:        #363129;
+    --rule-soft:   #262219;
+    --accent:      #D9A24A;
+    --accent-soft: #33280F;
+    --good:        #57B79C;
+    --good-soft:   #142A25;
+    --risk:        #DE8090;
+    --risk-soft:   #2E1A1E;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 1.04rem;
+    line-height: 1.72;
+    margin: 0;
+    padding: 0 1.5rem 8rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { width: 1000px; max-width: 100%; margin: 0 auto; }
+  .col { max-width: 68ch; }
+
+  p { margin: 0 0 1.05rem; text-wrap: pretty; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  strong { font-weight: 700; }
+  em { font-style: italic; }
+
+  code {
+    font-family: var(--mono); font-size: .86em;
+    background: var(--surface-2); padding: .1em .35em; border-radius: 3px;
+  }
+
+  /* masthead */
+  header {
+    padding: 5rem 0 2.5rem;
+    border-bottom: 2px solid var(--ink);
+    margin-bottom: 3rem;
+  }
+  .kicker {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 1.2rem;
+  }
+  h1 {
+    font-family: var(--display); font-weight: 400;
+    font-size: clamp(2.2rem, 5.5vw, 3.4rem); line-height: 1.08;
+    letter-spacing: -.02em; margin: 0 0 1rem; text-wrap: balance; max-width: 20ch;
+  }
+  .subtitle {
+    font-size: clamp(1.05rem, 2.2vw, 1.3rem); line-height: 1.5;
+    color: var(--ink-2); margin: 0 0 2rem; max-width: 50ch;
+  }
+  .byline {
+    font-family: var(--sans); font-size: .88rem; color: var(--ink-2);
+    display: flex; flex-wrap: wrap; gap: .4rem 1.6rem;
+  }
+  .byline b { color: var(--ink); font-weight: 600; }
+
+  .notice {
+    background: var(--risk-soft); border-left: 3px solid var(--risk);
+    padding: 1rem 1.2rem; margin: 2rem 0 0; max-width: 68ch;
+    font-size: .95rem; color: var(--ink);
+  }
+  .notice b { color: var(--risk); }
+
+  /* abstract */
+  .abstract {
+    background: var(--surface-2); border-radius: 4px;
+    padding: 1.6rem 1.8rem; margin-bottom: 3.5rem; max-width: 74ch;
+  }
+  .abstract h2 {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--ink-2); margin: 0 0 .8rem;
+    font-weight: 400; border: none; padding: 0;
+  }
+  .abstract p:last-child { margin-bottom: 0; }
+
+  /* sections */
+  section { margin-bottom: 3.5rem; }
+  h2 {
+    font-family: var(--display); font-weight: 400;
+    font-size: clamp(1.5rem, 3vw, 1.95rem); line-height: 1.2;
+    letter-spacing: -.012em; margin: 0 0 1.2rem; text-wrap: balance;
+    padding-bottom: .5rem; border-bottom: 1px solid var(--rule);
+  }
+  h2 .num {
+    font-family: var(--mono); font-size: .62em; color: var(--accent);
+    margin-right: .7rem; letter-spacing: .02em;
+  }
+  h3 {
+    font-family: var(--sans); font-size: 1.02rem; font-weight: 650;
+    margin: 2rem 0 .7rem; letter-spacing: -.005em;
+  }
+  h3 .num { font-family: var(--mono); font-size: .82em; color: var(--ink-2); margin-right: .55rem; }
+  h4 {
+    font-family: var(--sans); font-size: .92rem; font-weight: 650;
+    margin: 1.5rem 0 .5rem; color: var(--ink-2);
+  }
+
+  ul, ol { margin: 0 0 1.05rem; padding-left: 1.35rem; max-width: 68ch; }
+  li { margin-bottom: .45rem; }
+  li::marker { color: var(--ink-2); }
+
+  /* figures */
+  figure {
+    margin: 2.2rem 0; padding: 1.6rem;
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 5px;
+  }
+  figure svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  figcaption {
+    font-family: var(--sans); font-size: .84rem; line-height: 1.55;
+    color: var(--ink-2); margin-top: 1.2rem;
+    padding-top: .9rem; border-top: 1px solid var(--rule-soft);
+  }
+  figcaption b { color: var(--ink); font-weight: 650; }
+
+  /* tables */
+  .tablewrap {
+    overflow-x: auto; margin: 1.8rem 0;
+    border: 1px solid var(--rule); border-radius: 5px; background: var(--surface);
+  }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; }
+  th, td {
+    text-align: left; padding: .72rem 1rem; font-size: .9rem;
+    border-bottom: 1px solid var(--rule-soft); vertical-align: top;
+    font-family: var(--sans); line-height: 1.5;
+  }
+  thead th {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-2); font-weight: 400;
+    border-bottom: 1px solid var(--rule); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .t-good { color: var(--good); font-weight: 600; }
+  .t-risk { color: var(--risk); font-weight: 600; }
+  .t-mid { color: var(--accent); font-weight: 600; }
+
+  /* callouts */
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    padding: 1rem 1.2rem; margin: 1.6rem 0; max-width: 70ch;
+    font-size: .96rem;
+  }
+  .callout.risk { border-color: var(--risk); background: var(--risk-soft); }
+  .callout.good { border-color: var(--good); background: var(--good-soft); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .label {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .14em;
+    text-transform: uppercase; display: block; margin-bottom: .45rem; color: var(--accent);
+  }
+  .callout.risk .label { color: var(--risk); }
+  .callout.good .label { color: var(--good); }
+
+  pre {
+    background: var(--surface-2); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 1rem 1.1rem; overflow-x: auto;
+    font-family: var(--mono); font-size: .82rem; line-height: 1.6; margin: 1.4rem 0;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  /* references */
+  .refs { counter-reset: ref; list-style: none; padding: 0; max-width: 74ch; }
+  .refs li {
+    counter-increment: ref; position: relative; padding-left: 2.6rem;
+    margin-bottom: .85rem; font-size: .9rem; line-height: 1.55;
+    font-family: var(--sans); color: var(--ink-2);
+  }
+  .refs li::before {
+    content: "[" counter(ref) "]"; position: absolute; left: 0;
+    font-family: var(--mono); font-size: .78rem; color: var(--accent);
+  }
+  .refs li b { color: var(--ink); font-weight: 600; }
+
+  sup a { text-decoration: none; font-family: var(--mono); font-size: .72em; padding: 0 .1em; }
+
+  footer {
+    border-top: 2px solid var(--ink); padding-top: 2rem; margin-top: 4rem;
+    font-family: var(--sans); font-size: .86rem; color: var(--ink-2); max-width: 68ch;
+  }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="kicker">Ideoa Labs &middot; Technical Report &middot; August 2026</p>
+  <h1>Rotelyx: Metadata Resistant Messaging on a Peer to Peer Transport</h1>
+  <p class="subtitle">
+    A layered protocol combining MLS group encryption, a hybrid post quantum key
+    agreement, and a blind store and forward mailbox, with an explicit account
+    of what it does not protect.
+  </p>
+  <div class="byline">
+    <span><b>Andryu Schittone</b> (Malios Dark)</span>
+    <span>Ideoa Labs</span>
+    <span>16 August 2026</span>
+    <span>Revision 1</span>
+  </div>
+
+  <div class="notice">
+    <b>Status: unaudited.</b> This report describes a working implementation
+    that has not undergone independent cryptographic review. No security claim
+    made here should be relied upon until that review is complete. The
+    limitations in section 9 are not hypothetical; several are unsolved.
+  </div>
+</header>
+
+<div class="abstract">
+  <h2>Abstract</h2>
+  <p>
+    Modern end to end encrypted messengers protect message content well and
+    message metadata poorly. The identity of who communicates with whom, at what
+    times, and at what message sizes, remains visible to service operators and
+    frequently to network observers. This report describes Rotelyx, a protocol
+    that treats metadata minimisation as a first class design constraint rather
+    than an afterthought.
+  </p>
+  <p>
+    Rotelyx makes three contributions. First, it composes a hybrid post quantum
+    key encapsulation mechanism with the Messaging Layer Security standard
+    (RFC 9420) through the pre shared key input the standard already defines,
+    obtaining post quantum epoch keys without modifying MLS. Second, it inverts
+    the objective function of peer to peer path selection, preferring any direct
+    network path over any relayed path regardless of latency, on the grounds
+    that a relay operator learns the communication graph. Third, it specifies a
+    store and forward mailbox whose operator observes only an opaque rotating
+    tag and a payload of one of five fixed sizes.
+  </p>
+  <p>
+    We report measured characteristics of the implementation, including a
+    constant 145 byte MLS ciphertext overhead that made an initial padding
+    scheme ineffective, and we analyse the protocol against known traffic
+    analysis results. We conclude that the mailbox design remains vulnerable to
+    the class of statistical disclosure attacks that break Signal's sealed
+    sender, and we state the conditions under which that vulnerability applies.
+  </p>
+</div>
+
+<!-- ================= 1 ================= -->
+<section>
+  <h2><span class="num">1</span>Introduction</h2>
+  <div class="col">
+    <p>
+      The deployment of the Signal protocol across WhatsApp, Signal, and Google
+      Messages made end to end message confidentiality ordinary. It did not make
+      metadata privacy ordinary. A service operator running any of those systems
+      observes which accounts exchange messages, when, and how large those
+      messages are, and in the common case those accounts are bound to telephone
+      numbers.
+    </p>
+    <p>
+      This is not an implementation oversight. Metadata is what routing requires.
+      A system that delivers a message must know where to deliver it, and the
+      engineering question is how little it can be made to know while still
+      functioning. Rotelyx is an attempt to push that boundary in three specific
+      places: the identity layer, the transport path, and the store and forward
+      layer.
+    </p>
+
+    <h3><span class="num">1.1</span>Design principles</h3>
+    <p>
+      Three rules governed the implementation, and each was violated at least
+      once during development before being caught by a test.
+    </p>
+    <p>
+      <strong>Do not invent cryptography.</strong> Group and message encryption
+      is MLS via OpenMLS. The post quantum component is X-Wing. The single novel
+      construction is the composition of the two, and it is approximately forty
+      lines. The failure modes of hand written ratchets are not algebraic. They
+      are nonce reuse under concurrency, state rollback after a backup restore,
+      unbounded skipped key retention, and replay across device re registration.
+      A specification prevents none of them; a widely reviewed implementation
+      mostly does.
+    </p>
+    <p>
+      <strong>Enforce guarantees structurally, not by configuration.</strong> A
+      wrong configuration value is discovered in production. A missing
+      constructor is discovered at compile time. Where a guarantee could be
+      expressed as the absence of an enum variant, it was.
+    </p>
+    <p>
+      <strong>State the boundary.</strong> Every claim in this report has a
+      matching statement of what it does not cover. A threat model that lists
+      only solved problems is marketing.
+    </p>
+  </div>
+</section>
+
+<!-- ================= 2 ================= -->
+<section>
+  <h2><span class="num">2</span>Threat model</h2>
+  <div class="col">
+    <p>
+      We model ten adversaries. The table below summarises them; the full model
+      is maintained alongside the source and is treated as a peer of the code
+      rather than as documentation of it.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Adversary</th><th>Capability assumed</th><th>Content</th><th>Communication graph</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Passive network observer</td><td>Reads all traffic on some links</td><td class="t-good">Protected</td><td class="t-mid">Flow existence visible</td></tr>
+        <tr><td>Active network attacker</td><td>Modifies, injects, replays; controls DNS</td><td class="t-good">Protected</td><td class="t-mid">Flow existence visible</td></tr>
+        <tr><td>Relay operator</td><td>Full control of a relay carrying a session</td><td class="t-good">Protected</td><td class="t-risk">Fully exposed</td></tr>
+        <tr><td>Mailbox operator</td><td>Full control of the mailbox and its disk</td><td class="t-good">Protected</td><td class="t-mid">Timing correlation possible</td></tr>
+        <tr><td>Server seizure</td><td>Obtains all operator state, plus compulsion</td><td class="t-good">Protected</td><td class="t-mid">Retention window only</td></tr>
+        <tr><td>Compromised endpoint</td><td>Code execution on a participant device</td><td class="t-risk">Not protected</td><td class="t-risk">Not protected</td></tr>
+        <tr><td>Malicious group member</td><td>A legitimate participant</td><td class="t-risk">Not protected</td><td class="t-good">Additions are visible</td></tr>
+        <tr><td>Global passive adversary</td><td>Observes many points, correlates globally</td><td class="t-good">Protected</td><td class="t-risk">Not protected</td></tr>
+        <tr><td>Push notification provider</td><td>Sees device wake events</td><td class="t-good">Protected</td><td class="t-risk">Presence exposed</td></tr>
+        <tr><td>Spam and abuse actor</td><td>Unlimited free identities</td><td class="t-good">Protected</td><td class="t-mid">Bulk economics broken</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <div class="callout risk">
+      <span class="label">The honest boundary</span>
+      <p>
+        Rotelyx provides no protection against a compromised endpoint and no
+        protection against a global passive adversary. A device that renders
+        plaintext to a screen can have that plaintext taken. An adversary that
+        observes the whole network can correlate flows by timing and volume
+        regardless of what any single message contains. Users at risk from
+        either class need different tools.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 3 ================= -->
+<section>
+  <h2><span class="num">3</span>Architecture</h2>
+  <div class="col">
+    <p>
+      Rotelyx is organised into five layers. The two encryption layers are
+      independent by construction: no key material is derived from one into the
+      other, so a break in either leaves the other intact.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 860 470" role="img" aria-label="Five layer architecture showing which layers carry encryption and where the independence boundary sits">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+
+      <!-- layer bands -->
+      <g font-family="ui-monospace, Menlo, monospace" font-size="12">
+        <!-- L4 -->
+        <rect x="60" y="20" width="560" height="62" rx="4" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+        <text x="76" y="44" font-size="13" font-weight="600" fill="currentColor">L4  Client surface</text>
+        <text x="76" y="64" font-size="11.5" fill="currentColor" fill-opacity=".65">safety numbers, membership alerts, device management</text>
+
+        <!-- L3 -->
+        <rect x="60" y="94" width="560" height="62" rx="4" fill="none" stroke="#9A6410" stroke-width="1.6"/>
+        <text x="76" y="118" font-size="13" font-weight="600" fill="#9A6410">L3  Sealed envelopes</text>
+        <text x="76" y="138" font-size="11.5" fill="currentColor" fill-opacity=".65">padding buckets, rotating tags, blind mailbox</text>
+
+        <!-- L2 -->
+        <rect x="60" y="168" width="560" height="76" rx="4" fill="none" stroke="#9A6410" stroke-width="1.6"/>
+        <text x="76" y="192" font-size="13" font-weight="600" fill="#9A6410">L2  Message crypto</text>
+        <text x="76" y="212" font-size="11.5" fill="currentColor" fill-opacity=".65">MLS (RFC 9420), ChaCha20-Poly1305</text>
+        <text x="76" y="230" font-size="11.5" fill="currentColor" fill-opacity=".65">X-Wing hybrid PQ as external PSK</text>
+
+        <!-- L1 -->
+        <rect x="60" y="256" width="560" height="76" rx="4" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+        <text x="76" y="280" font-size="13" font-weight="600" fill="#256B5B">L1  Transport security</text>
+        <text x="76" y="300" font-size="11.5" fill="currentColor" fill-opacity=".65">QUIC + TLS 1.3, peer authenticated by public key</text>
+        <text x="76" y="318" font-size="11.5" fill="currentColor" fill-opacity=".65">admission control, length capped framing</text>
+
+        <!-- L0 -->
+        <rect x="60" y="344" width="560" height="62" rx="4" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+        <text x="76" y="368" font-size="13" font-weight="600" fill="#256B5B">L0  Path</text>
+        <text x="76" y="388" font-size="11.5" fill="currentColor" fill-opacity=".65">hole punching, relay policy, metadata resistant selection</text>
+      </g>
+
+      <!-- independence brace -->
+      <g stroke="currentColor" fill="none" stroke-opacity=".5">
+        <path d="M 636 172 L 652 172 L 652 240 L 636 240" stroke-width="1.2"/>
+        <path d="M 636 260 L 652 260 L 652 328 L 636 328" stroke-width="1.2"/>
+      </g>
+      <g font-family="ui-monospace, Menlo, monospace" font-size="11" fill="currentColor">
+        <text x="662" y="200">encryption</text>
+        <text x="662" y="216">layer A</text>
+        <text x="662" y="288">encryption</text>
+        <text x="662" y="304">layer B</text>
+      </g>
+      <line x1="700" y1="230" x2="700" y2="270" stroke="#A33B4D" stroke-width="1.6" marker-start="url(#ar)" marker-end="url(#ar)"/>
+      <text x="712" y="246" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#A33B4D">no key</text>
+      <text x="712" y="262" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#A33B4D">material</text>
+
+      <!-- flow arrow -->
+      <line x1="40" y1="30" x2="40" y2="396" stroke="currentColor" stroke-opacity=".45" stroke-width="1.2" marker-end="url(#ar)"/>
+      <text x="26" y="220" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="currentColor" fill-opacity=".6" transform="rotate(-90 26 220)" text-anchor="middle">outbound</text>
+
+      <text x="60" y="440" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#9A6410">amber: layers Rotelyx implements</text>
+      <text x="60" y="458" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#256B5B">teal: layers derived from an existing transport</text>
+    </svg>
+    <figcaption>
+      <b>Figure 1.</b> The layered architecture. The two encryption layers, L2
+      and L1, share no key material. If TLS 1.3 inside QUIC were broken, L2
+      would still hold; if a device leaked an MLS epoch key, the raw stream
+      would still be denied to a network observer. The separation is a design
+      rule enforced by keeping the derivation inputs disjoint.
+    </figcaption>
+  </figure>
+</section>
+
+<!-- ================= 4 ================= -->
+<section>
+  <h2><span class="num">4</span>Post quantum composition</h2>
+  <div class="col">
+    <p>
+      RFC 9420 defines seven ciphersuites, all of them classical.<sup><a href="#r1">[1]</a></sup>
+      Post quantum ciphersuites for MLS remain in draft. A conversation recorded
+      today is therefore decryptable by a future adversary with a
+      cryptographically relevant quantum computer, an attack pattern usually
+      called harvest now, decrypt later.
+    </p>
+
+    <h3><span class="num">4.1</span>Choice of primitive</h3>
+    <p>
+      Rotelyx does not construct a key encapsulation combiner. It uses
+      X-Wing,<sup><a href="#r2">[2]</a><a href="#r3">[3]</a></sup> a hybrid KEM
+      built from ML-KEM-768 and X25519 whose security claim is that the shared
+      secret is secure if SHA3 is secure and <em>either</em> X25519 <em>or</em>
+      ML-KEM-768 is secure. Both would need to fail simultaneously for the
+      output to be compromised.
+    </p>
+    <p>
+      Measured wire sizes of the implementation, recorded as assertions in the
+      test suite because published documentation and the draft disagreed:
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Element</th><th class="num">Bytes</th><th>Composition</th></tr></thead>
+      <tbody>
+        <tr><td>Encapsulation key (public)</td><td class="num">1216</td><td>ML-KEM-768 (1184) + X25519 (32)</td></tr>
+        <tr><td>Decapsulation key (private)</td><td class="num">32</td><td>Seed, expanded on use</td></tr>
+        <tr><td>Ciphertext</td><td class="num">1120</td><td>ML-KEM-768 (1088) + X25519 (32)</td></tr>
+        <tr><td>Shared secret</td><td class="num">32</td><td>SHA3-256 of the combiner input</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <h3><span class="num">4.2</span>Injection into the MLS key schedule</h3>
+    <p>
+      The contribution of this work is the composition, not the primitive. Rather
+      than forking MLS to add a post quantum ciphersuite, Rotelyx injects the
+      hybrid secret at the pre shared key input that RFC 9420 already defines,
+      carried as a <code>PreSharedKeyProposal</code> inside a commit.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 880 420" role="img" aria-label="Sequence showing the hybrid post quantum secret being injected into the MLS key schedule as an external pre shared key">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+        </marker>
+        <marker id="ar2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#9A6410"/>
+        </marker>
+      </defs>
+
+      <g font-family="ui-monospace, Menlo, monospace" font-size="12" fill="currentColor">
+        <!-- lifelines -->
+        <rect x="40" y="16" width="130" height="30" rx="3" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="105" y="36" text-anchor="middle" font-weight="600">Alice</text>
+        <line x1="105" y1="46" x2="105" y2="360" stroke="currentColor" stroke-opacity=".22"/>
+
+        <rect x="360" y="16" width="160" height="30" rx="3" fill="none" stroke="#9A6410" stroke-width="1.4"/>
+        <text x="440" y="36" text-anchor="middle" font-weight="600" fill="#9A6410">MLS group state</text>
+        <line x1="440" y1="46" x2="440" y2="360" stroke="#9A6410" stroke-opacity=".3"/>
+
+        <rect x="700" y="16" width="130" height="30" rx="3" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="765" y="36" text-anchor="middle" font-weight="600">Bob</text>
+        <line x1="765" y1="46" x2="765" y2="360" stroke="currentColor" stroke-opacity=".22"/>
+
+        <!-- step 1 -->
+        <line x1="765" y1="76" x2="115" y2="76" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar2)"/>
+        <text x="440" y="70" text-anchor="middle" font-size="11">hybrid public key, 1216 B, inside the signed key package</text>
+
+        <!-- step 2 -->
+        <rect x="30" y="96" width="150" height="34" rx="3" fill="none" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="105" y="117" text-anchor="middle" font-size="11">encapsulate</text>
+
+        <!-- step 3 -->
+        <line x1="115" y1="152" x2="755" y2="152" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar2)"/>
+        <text x="440" y="146" text-anchor="middle" font-size="11">X-Wing ciphertext, 1120 B</text>
+
+        <!-- step 4 -->
+        <rect x="690" y="170" width="150" height="34" rx="3" fill="none" stroke="currentColor" stroke-opacity=".3"/>
+        <text x="765" y="191" text-anchor="middle" font-size="11">decapsulate</text>
+
+        <!-- shared secret band -->
+        <rect x="40" y="220" width="800" height="34" rx="3" fill="#9A6410" fill-opacity=".1" stroke="#9A6410" stroke-opacity=".5"/>
+        <text x="440" y="241" text-anchor="middle" font-size="11.5" fill="#9A6410">both derive PSK = BLAKE3(secret, label ‖ group id ‖ epoch)</text>
+
+        <!-- step 5 -->
+        <line x1="115" y1="286" x2="430" y2="286" stroke="#9A6410" stroke-width="1.6" marker-end="url(#ar2a)"/>
+        <text x="272" y="280" text-anchor="middle" font-size="11" fill="#9A6410">commit with PreSharedKeyProposal</text>
+
+        <line x1="450" y1="286" x2="755" y2="286" stroke="#9A6410" stroke-width="1.6" marker-end="url(#ar2a)"/>
+        <text x="602" y="280" text-anchor="middle" font-size="11" fill="#9A6410">every member validates it</text>
+
+        <!-- outcome -->
+        <rect x="240" y="312" width="400" height="38" rx="3" fill="#256B5B" fill-opacity=".1" stroke="#256B5B" stroke-opacity=".6"/>
+        <text x="440" y="336" text-anchor="middle" font-size="11.5" fill="#256B5B">epoch key is post quantum secure, MLS unmodified</text>
+
+        <text x="40" y="386" font-size="11" fill-opacity=".65">The binding to group id and epoch is what prevents a PSK captured in one epoch</text>
+        <text x="40" y="404" font-size="11" fill-opacity=".65">from being replayed into another. The binding never travels on the wire.</text>
+      </g>
+    </svg>
+    <figcaption>
+      <b>Figure 2.</b> Post quantum secret injection. Because the mechanism is
+      the one MLS already defines, two properties follow without extra work:
+      material refreshes per epoch rather than being fixed at group creation,
+      and no member can inject a chosen pre shared key silently, because the
+      proposal is part of the commit that every member validates. That is the
+      same property that makes a ghost member addition visible.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <h3><span class="num">4.3</span>Why this is a small contribution on purpose</h3>
+    <p>
+      MLS has received machine checked symbolic security analysis, both for
+      TreeKEM<sup><a href="#r4">[4]</a></sup> and for the external operations
+      introduced in RFC 9420.<sup><a href="#r5">[5]</a></sup> Any modification
+      to the protocol forfeits the benefit of that analysis. Injecting at a
+      defined extension point does not.
+    </p>
+    <div class="callout">
+      <span class="label">Review target</span>
+      <p>
+        The composition is approximately forty lines of code. It is the single
+        novel cryptographic construction in the system, and it is deliberately
+        small enough to be reviewed in an afternoon. Test vectors for it are an
+        open item, listed in section 10.
+      </p>
+    </div>
+
+    <h3><span class="num">4.4</span>Verification that the layer is load bearing</h3>
+    <p>
+      During development the injection function was written, compiled, and
+      covered by tests that passed while the function was in fact dead code: it
+      emitted commits no receiver could apply, because the receiving side had no
+      way to stage the secret locally. The defect was invisible because no test
+      exercised the full path.
+    </p>
+    <p>
+      The implementation now includes a test asserting that a commit carrying
+      the proposal <em>fails</em> for a member that has not staged the secret.
+      That negative test is what demonstrates the post quantum layer is load
+      bearing rather than decorative.
+    </p>
+  </div>
+</section>
+
+<!-- ================= 5 ================= -->
+<section>
+  <h2><span class="num">5</span>Metadata resistant path selection</h2>
+  <div class="col">
+    <p>
+      Peer to peer transports attempt a direct hole punched path and fall back to
+      a relay when NAT traversal fails. Approximately 10 to 20 percent of NAT
+      pairs on the public internet cannot be punched, so the fallback is not
+      rare.
+    </p>
+    <p>
+      The upstream transport selects among available paths by biased round trip
+      time, treating relayed paths as a lower tier but breaking ties by latency.
+      Rotelyx replaces the objective function entirely.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 840 300" role="img" aria-label="Comparison of latency first and metadata first path selection given the same two candidate paths">
+      <defs>
+        <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g font-family="ui-monospace, Menlo, monospace" font-size="12" fill="currentColor">
+
+        <text x="40" y="28" font-size="12.5" font-weight="600">Same two candidate paths, two objectives</text>
+
+        <!-- candidates -->
+        <rect x="40" y="52" width="160" height="46" rx="4" fill="none" stroke="currentColor" stroke-opacity=".45"/>
+        <text x="120" y="72" text-anchor="middle" font-size="11.5">direct path</text>
+        <text x="120" y="89" text-anchor="middle" font-size="11.5" fill-opacity=".7">200 ms</text>
+
+        <rect x="40" y="118" width="160" height="46" rx="4" fill="none" stroke="currentColor" stroke-opacity=".45"/>
+        <text x="120" y="138" text-anchor="middle" font-size="11.5">relayed path</text>
+        <text x="120" y="155" text-anchor="middle" font-size="11.5" fill-opacity=".7">20 ms</text>
+
+        <!-- upstream -->
+        <line x1="204" y1="141" x2="336" y2="120" stroke="#A33B4D" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="204" y1="75" x2="336" y2="108" stroke="currentColor" stroke-opacity=".3" stroke-dasharray="4 3" stroke-width="1.2"/>
+        <rect x="340" y="82" width="200" height="66" rx="4" fill="#A33B4D" fill-opacity=".1" stroke="#A33B4D" stroke-width="1.4"/>
+        <text x="440" y="104" text-anchor="middle" font-size="11.5" fill="#A33B4D" font-weight="600">latency first</text>
+        <text x="440" y="122" text-anchor="middle" font-size="11">selects the relay</text>
+        <text x="440" y="139" text-anchor="middle" font-size="10.5" fill-opacity=".7">saves 180 ms</text>
+
+        <line x1="544" y1="115" x2="620" y2="115" stroke="#A33B4D" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <rect x="624" y="86" width="190" height="58" rx="4" fill="none" stroke="#A33B4D" stroke-opacity=".6"/>
+        <text x="719" y="108" text-anchor="middle" font-size="11" fill="#A33B4D">relay operator learns</text>
+        <text x="719" y="126" text-anchor="middle" font-size="11" fill="#A33B4D">the communication pair</text>
+
+        <!-- rotelyx -->
+        <line x1="204" y1="75" x2="336" y2="212" stroke="#256B5B" stroke-width="1.6" marker-end="url(#ar3)"/>
+        <line x1="204" y1="141" x2="336" y2="224" stroke="currentColor" stroke-opacity=".3" stroke-dasharray="4 3" stroke-width="1.2"/>
+        <rect x="340" y="186" width="200" height="66" rx="4" fill="#256B5B" fill-opacity=".1" stroke="#256B5B" stroke-width="1.4"/>
+        <text x="440" y="208" text-anchor="middle" font-size="11.5" fill="#256B5B" font-weight="600">metadata first</text>
+        <text x="440" y="226" text-anchor="middle" font-size="11">selects the direct path</text>
+        <text x="440" y="243" text-anchor="middle" font-size="10.5" fill-opacity=".7">costs 180 ms</text>
+
+        <line x1="544" y1="219" x2="620" y2="219" stroke="#256B5B" stroke-width="1.4" marker-end="url(#ar3)"/>
+        <rect x="624" y="190" width="190" height="58" rx="4" fill="none" stroke="#256B5B" stroke-opacity=".6"/>
+        <text x="719" y="212" text-anchor="middle" font-size="11" fill="#256B5B">no third party observes</text>
+        <text x="719" y="230" text-anchor="middle" font-size="11" fill="#256B5B">that the pair exists</text>
+
+        <text x="40" y="286" font-size="11" fill-opacity=".65">Dashed edges are the candidate each objective rejects.</text>
+      </g>
+    </svg>
+    <figcaption>
+      <b>Figure 3.</b> The two objectives given identical inputs. Latency first
+      is correct for a general purpose transport and wrong for a private
+      messenger: it exchanges the communication graph for 180 milliseconds. The
+      cost of the Rotelyx policy is real and is paid in latency, sometimes
+      substantially.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <p>
+      Three policies are exposed. <code>PreferDirect</code> is the default and
+      selects any direct path over any relayed path at any latency, falling back
+      to a relay only when no direct path exists. <code>DirectOnceAvailable</code>
+      additionally refuses to return to a relay once a direct path has been
+      established, accepting connection failure as the outcome if that path dies.
+      <code>Fastest</code> reproduces the upstream objective and exists so the
+      privacy preserving policies have a measurable baseline.
+    </p>
+  </div>
+</section>
+
+<!-- ================= 6 ================= -->
+<section>
+  <h2><span class="num">6</span>The blind mailbox</h2>
+  <div class="col">
+    <p>
+      Direct delivery requires both peers online. On mobile devices that is the
+      exception, so a store and forward component is unavoidable. The design goal
+      is to make its operator's knowledge as close to nothing as routing permits.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 860 340" role="img" aria-label="What a mailbox operator observes: an opaque tag and a fixed size payload, with everything else removed by construction">
+      <defs>
+        <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g font-family="ui-monospace, Menlo, monospace" font-size="12" fill="currentColor">
+
+        <!-- sender -->
+        <rect x="30" y="60" width="170" height="150" rx="4" fill="none" stroke="#256B5B" stroke-width="1.3"/>
+        <text x="115" y="84" text-anchor="middle" font-size="12" font-weight="600" fill="#256B5B">Sender</text>
+        <text x="46" y="112" font-size="11">MLS ciphertext</text>
+        <text x="46" y="136" font-size="11">pad to a bucket</text>
+        <text x="46" y="160" font-size="11">derive tag from</text>
+        <text x="46" y="176" font-size="11">shared MLS secret</text>
+        <text x="46" y="198" font-size="10.5" fill-opacity=".6">tag never transmitted</text>
+
+        <line x1="204" y1="135" x2="272" y2="135" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar4)"/>
+
+        <!-- operator view -->
+        <rect x="276" y="40" width="300" height="190" rx="4" fill="#A33B4D" fill-opacity=".07" stroke="#A33B4D" stroke-width="1.5"/>
+        <text x="426" y="64" text-anchor="middle" font-size="12" font-weight="600" fill="#A33B4D">Everything the operator holds</text>
+
+        <rect x="298" y="80" width="256" height="34" rx="3" fill="none" stroke="currentColor" stroke-opacity=".4"/>
+        <text x="312" y="102" font-size="11">tag</text>
+        <text x="540" y="102" text-anchor="end" font-size="11" fill-opacity=".7">32 opaque bytes</text>
+
+        <rect x="298" y="122" width="256" height="34" rx="3" fill="none" stroke="currentColor" stroke-opacity=".4"/>
+        <text x="312" y="144" font-size="11">payload</text>
+        <text x="540" y="144" text-anchor="end" font-size="11" fill-opacity=".7">one of five sizes</text>
+
+        <rect x="298" y="164" width="256" height="34" rx="3" fill="none" stroke="currentColor" stroke-opacity=".4"/>
+        <text x="312" y="186" font-size="11">arrival time</text>
+        <text x="540" y="186" text-anchor="end" font-size="11" fill-opacity=".7">unavoidable</text>
+
+        <text x="426" y="220" text-anchor="middle" font-size="11" fill="#A33B4D">no sender, no recipient identity, no length</text>
+
+        <line x1="580" y1="135" x2="648" y2="135" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar4)"/>
+
+        <!-- recipient -->
+        <rect x="652" y="60" width="176" height="150" rx="4" fill="none" stroke="#256B5B" stroke-width="1.3"/>
+        <text x="740" y="84" text-anchor="middle" font-size="12" font-weight="600" fill="#256B5B">Recipient</text>
+        <text x="668" y="112" font-size="11">derives the same</text>
+        <text x="668" y="128" font-size="11">tags independently</text>
+        <text x="668" y="152" font-size="11">polls an hour window</text>
+        <text x="668" y="176" font-size="11">collection deletes</text>
+        <text x="668" y="198" font-size="10.5" fill-opacity=".6">no ack of deletion</text>
+
+        <!-- residual -->
+        <rect x="276" y="252" width="300" height="56" rx="4" fill="none" stroke="#A33B4D" stroke-dasharray="5 4" stroke-width="1.3"/>
+        <text x="426" y="274" text-anchor="middle" font-size="11" fill="#A33B4D">residual: deposit and collection timing</text>
+        <text x="426" y="292" text-anchor="middle" font-size="11" fill="#A33B4D">can still be correlated (section 9.1)</text>
+      </g>
+    </svg>
+    <figcaption>
+      <b>Figure 4.</b> The operator's complete view. Sender identity is absent
+      because no field carries it. Recipient identity is absent because delivery
+      is to a tag derived from a secret the operator does not hold. Message
+      length is absent because every payload is padded to one of five fixed
+      sizes. Arrival time cannot be removed, and that residual is the basis of
+      the attack discussed in section 9.1.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <h3><span class="num">6.1</span>Three implementation decisions</h3>
+    <p>
+      <strong>No length prefix.</strong> Padding is trailing zeroes, and the
+      recipient recovers the real content because the inner MLS message is self
+      delimiting. Writing a length field is the natural implementation and would
+      have handed the operator precisely the information the buckets exist to
+      remove.
+    </p>
+    <p>
+      <strong>Addressing is never transmitted.</strong> Both parties derive the
+      tag key from the MLS exporter secret, so no addressing information crosses
+      the network. The derivation must be pinned at a mutually known epoch: the
+      exporter changes with every MLS epoch, and a sender one commit ahead of a
+      recipient would otherwise deposit under a tag the recipient cannot compute,
+      producing silent undeliverability.
+    </p>
+    <p>
+      <strong>Collection is destructive.</strong> A collected envelope is
+      removed. A client that crashes mid collection loses those messages. The
+      alternative is a mailbox that retains copies, which is the property being
+      designed against.
+    </p>
+
+    <div class="callout risk">
+      <span class="label">Not enforced by the protocol</span>
+      <p>
+        Deletion is a promise the reference implementation makes, not one the
+        protocol enforces. A hostile operator can retain everything and no client
+        can detect it. The mitigation is structural rather than cryptographic:
+        the mailbox is a single self hostable binary, so compromising one
+        operator compromises one community rather than a population.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 7 ================= -->
+<section>
+  <h2><span class="num">7</span>Message padding, measured</h2>
+  <div class="col">
+    <p>
+      Traffic analysis of encrypted messengers recovers user actions, message
+      language, and message length from observed packet sizes with accuracy above
+      96 percent.<sup><a href="#r6">[6]</a></sup> Padding is the standard
+      countermeasure and its effectiveness is frequently overestimated: random
+      padding can reduce attack accuracy to zero at over 300 percent bandwidth
+      overhead, while per packet schemes reduce it to roughly 8
+      percent.<sup><a href="#r6">[6]</a><a href="#r7">[7]</a></sup>
+    </p>
+
+    <h3><span class="num">7.1</span>An initial scheme that did not work</h3>
+    <p>
+      Rotelyx originally padded envelopes to five buckets with the smallest at
+      256 bytes, which appeared generous for a chat message. Measurement of the
+      MLS layer showed otherwise.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th class="num">Plaintext (B)</th><th class="num">MLS ciphertext (B)</th><th class="num">Overhead (B)</th><th>Envelope bucket</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0</td><td class="num">145</td><td class="num">145</td><td>256 B</td></tr>
+        <tr><td class="num">2</td><td class="num">147</td><td class="num">145</td><td>256 B</td></tr>
+        <tr><td class="num">100</td><td class="num">246</td><td class="num">146</td><td>256 B</td></tr>
+        <tr><td class="num">150</td><td class="num">296</td><td class="num">146</td><td class="t-risk">4096 B</td></tr>
+        <tr><td class="num">500</td><td class="num">646</td><td class="num">146</td><td class="t-risk">4096 B</td></tr>
+        <tr><td class="num">2000</td><td class="num">2146</td><td class="num">146</td><td class="t-risk">4096 B</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      Two findings followed. First, OpenMLS applies no plaintext padding by
+      default: overhead is a constant 145 to 146 bytes and the remainder is one
+      to one, so ciphertext length discloses plaintext length exactly. This
+      matters most on the direct peer to peer path, where there is no envelope
+      and the bucket scheme therefore does not apply at all.
+    </p>
+    <p>
+      Second, a 256 byte bucket accommodates barely one hundred characters after
+      MLS overhead, so ordinary messages straddled the boundary. The scheme
+      communicated a binary short-or-long signal to the operator on every
+      message, which is materially worse than no padding would suggest.
+    </p>
+    <p>
+      The corrections were to enable MLS plaintext padding to a 256 byte multiple,
+      which protects the direct path as well, and to raise the smallest envelope
+      bucket to 1 KiB. Ordinary conversation now collapses into a single bucket.
+      The cost is that a one word reply occupies 1 KiB on the wire.
+    </p>
+
+    <div class="callout">
+      <span class="label">Method note</span>
+      <p>
+        Neither defect was found by review. Both were found by a cross layer test
+        asserting that a 2 byte and a 150 byte message are the same size on the
+        wire. The unit tests for each layer passed throughout.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 8 ================= -->
+<section>
+  <h2><span class="num">8</span>Reachability and abuse resistance</h2>
+  <div class="col">
+    <p>
+      Removing telephone numbers from the identity layer removes the natural
+      scarcity that limits bulk unsolicited contact. An Ed25519 keypair costs
+      nothing to generate and nothing to discard when blocked. This is the same
+      property that made Kik, a username based messenger, a persistent venue for
+      unsolicited contact.
+    </p>
+    <p>
+      Cryptography does not address this. Scarcity does, and only two forms are
+      available: authorisation and cost.
+    </p>
+
+    <h3><span class="num">8.1</span>Authorisation as the default</h3>
+    <p>
+      An identity is unreachable unless the caller holds an invitation it issued
+      out of band. The caller proves possession with a MAC over its own identity
+      and the current hour, checked against the identity the QUIC handshake
+      already authenticated. An observed proof therefore cannot be replayed by a
+      different caller without also stealing that caller's private key.
+    </p>
+    <p>
+      Revocation is distinct from expiry and is surgical: revoking a leaked
+      invitation does not affect holders of others. Expiry is a promise about the
+      future; a leak is a present problem.
+    </p>
+
+    <h3><span class="num">8.2</span>Cost for publicly reachable identities</h3>
+    <p>
+      Identities that must accept strangers, such as a support account, may
+      require a proof of work. The proof binds to the sender, the recipient, and
+      the hour. Each binding removes a specific reuse strategy.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Binding</th><th>Reuse strategy it removes</th></tr></thead>
+      <tbody>
+        <tr><td>Recipient</td><td>Solving once and spending the work across an address book. The sender pays per recipient.</td></tr>
+        <tr><td>Sender</td><td>Solving once and reusing across a fleet of throwaway identities. Each identity pays again.</td></tr>
+        <tr><td>Hour</td><td>Stockpiling proofs in advance. Proofs also expire without any revocation step.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      Jointly these force a bulk sender to choose between reusing one identity,
+      which is blockable, and paying the work for every new one. The mechanism
+      does not stop a determined individual attacker and is not intended to. It
+      targets the economics of bulk contact.
+    </p>
+    <p>
+      The blocklist is consulted before any verification work, so a blocked
+      identity imposes no computational cost on the recipient. A block that still
+      consumes CPU is a block the blocked party can exploit.
+    </p>
+  </div>
+</section>
+
+<!-- ================= 9 ================= -->
+<section>
+  <h2><span class="num">9</span>Limitations</h2>
+  <div class="col">
+    <p>
+      This section states the known weaknesses of the design. Several are
+      unsolved and at least one is unsolvable within the current architecture.
+    </p>
+
+    <h3><span class="num">9.1</span>Statistical disclosure against rotating tags</h3>
+    <p>
+      Signal's sealed sender removes the sender field from a message, and the
+      resulting one sided anonymity is broken when two parties exchange messages
+      back and forth. The attack belongs to the family of statistical disclosure
+      attacks and is made substantially more effective by delivery receipts,
+      which are enabled by default and cannot be
+      disabled.<sup><a href="#r8">[8]</a></sup> The attack has been extended from
+      deanonymising communicating pairs to deanonymising entire group
+      conversations.<sup><a href="#r9">[9]</a></sup>
+    </p>
+    <p>
+      Rotelyx's rotating tags face the same class of attack, and the analysis
+      transfers with two differences.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 820 290" role="img" aria-label="How deposit and collection timing lets a mailbox operator link two rotating tags into one conversation">
+      <defs>
+        <marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#A33B4D"/>
+        </marker>
+      </defs>
+      <g font-family="ui-monospace, Menlo, monospace" font-size="12" fill="currentColor">
+
+        <text x="40" y="30" font-size="12.5" font-weight="600">Operator timeline, one hour</text>
+
+        <!-- axis -->
+        <line x1="60" y1="200" x2="760" y2="200" stroke="currentColor" stroke-opacity=".4"/>
+        <text x="60" y="222" font-size="10.5" fill-opacity=".6">t0</text>
+        <text x="750" y="222" font-size="10.5" fill-opacity=".6" text-anchor="end">t0 + 1h</text>
+
+        <!-- events -->
+        <g>
+          <circle cx="130" cy="200" r="5" fill="#9A6410"/>
+          <line x1="130" y1="195" x2="130" y2="120" stroke="currentColor" stroke-opacity=".25"/>
+          <text x="130" y="112" text-anchor="middle" font-size="10.5">deposit tag A</text>
+
+          <circle cx="196" cy="200" r="5" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+          <line x1="196" y1="195" x2="196" y2="146" stroke="currentColor" stroke-opacity=".25"/>
+          <text x="196" y="138" text-anchor="middle" font-size="10.5">collect tag A</text>
+
+          <circle cx="252" cy="200" r="5" fill="#9A6410"/>
+          <line x1="252" y1="195" x2="252" y2="120" stroke="currentColor" stroke-opacity=".25"/>
+          <text x="252" y="112" text-anchor="middle" font-size="10.5">deposit tag B</text>
+
+          <circle cx="318" cy="200" r="5" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+          <line x1="318" y1="195" x2="318" y2="146" stroke="currentColor" stroke-opacity=".25"/>
+          <text x="318" y="138" text-anchor="middle" font-size="10.5">collect tag B</text>
+
+          <circle cx="392" cy="200" r="5" fill="#9A6410"/>
+          <circle cx="452" cy="200" r="5" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+          <circle cx="512" cy="200" r="5" fill="#9A6410"/>
+          <circle cx="576" cy="200" r="5" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+          <circle cx="650" cy="200" r="5" fill="#9A6410"/>
+          <circle cx="712" cy="200" r="5" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+        </g>
+
+        <!-- inference arc -->
+        <path d="M 130 236 Q 224 274 318 236" fill="none" stroke="#A33B4D" stroke-width="1.5" marker-end="url(#ar5)"/>
+        <text x="224" y="286" text-anchor="middle" font-size="11" fill="#A33B4D">repeated close pairing suggests one conversation</text>
+
+        <!-- legend -->
+        <g transform="translate(560,40)">
+          <circle cx="8" cy="8" r="5" fill="#9A6410"/>
+          <text x="22" y="12" font-size="10.5">deposit</text>
+          <circle cx="8" cy="30" r="5" fill="none" stroke="#256B5B" stroke-width="1.6"/>
+          <text x="22" y="34" font-size="10.5">collection</text>
+        </g>
+      </g>
+    </svg>
+    <figcaption>
+      <b>Figure 5.</b> The residual attack. The operator cannot read any
+      envelope, cannot link tag A to tag B cryptographically, and cannot see any
+      identity. It can observe that a deposit under one tag is repeatedly
+      followed within seconds by a collection under another. Over enough
+      exchanges that correlation identifies a conversation, which is precisely
+      the statistical disclosure attack applied to Signal's sealed sender.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <p>
+      Two properties of the Rotelyx design change the attacker's task relative to
+      Signal, one favourably and one not.
+    </p>
+    <p>
+      <strong>Favourably:</strong> Rotelyx sends no delivery receipts. The
+      published attack is significantly strengthened by receipts that guarantee
+      an immediate response, and their absence removes that amplification.
+      Delivery confirmation, if it is ever added, must be treated as a
+      metadata decision rather than a user experience one.
+    </p>
+    <p>
+      <strong>Unfavourably:</strong> tags rotate hourly rather than per message,
+      so all envelopes for one pair within an hour share a tag. This is a
+      deliberate trade for deliverability against clock skew and offline
+      recipients, and it gives the operator a clustering key that Signal's per
+      message sealed sender does not provide.
+    </p>
+    <div class="callout risk">
+      <span class="label">Unsolved</span>
+      <p>
+        We do not claim resistance to statistical disclosure. Plausible
+        mitigations include per message tags with a recipient side scan,
+        randomised collection delays, and decoy deposits. Each carries a cost in
+        bandwidth, battery, or latency, and none has been implemented or
+        evaluated.
+      </p>
+    </div>
+
+    <h3><span class="num">9.2</span>Push notification metadata</h3>
+    <p>
+      Mobile platforms will not permit a background socket, so waking a device
+      requires the platform push service. Apple and Google therefore observe that
+      a device received a wake signal and when. Content free silent pushes,
+      jittered delivery, and decoy pushes raise the cost of correlating a push
+      with a mailbox deposit, but none of them solves the problem, and all cost
+      battery. This is inherent to the platforms rather than to the protocol.
+    </p>
+
+    <h3><span class="num">9.3</span>Relay observation is inherent</h3>
+    <p>
+      A relay carrying a session necessarily learns which endpoint identifier
+      communicates with which. No configuration removes this. Path selection
+      minimises how often a relay is used; self hosting changes who holds the
+      observation. Neither eliminates it. Relay chaining, which would split the
+      knowledge across two operators, is not implemented.
+    </p>
+
+    <h3><span class="num">9.4</span>Derived rather than original transport</h3>
+    <p>
+      The transport comprises 121,197 lines vendored from iroh, whose socket
+      layer is itself derived from Tailscale under BSD-3-Clause and whose QUIC
+      layer is a fork of quinn. Rotelyx owns the policy layers, has deleted the
+      identity publishing code outright, and has replaced the path selection
+      objective. It has not rewritten the NAT traversal or the QUIC state
+      machine, and the defensible claim is a derived and substantially modified
+      transport rather than an original one.
+    </p>
+    <p>
+      Vendoring also transfers the maintenance burden. Upstream security fixes no
+      longer arrive automatically and must be tracked and ported by hand. In a
+      cryptographic project this is not optional work.
+    </p>
+
+    <h3><span class="num">9.5</span>Storage at rest</h3>
+    <p>
+      Identity keys are sealed with Argon2id, using 64 MiB of memory and three
+      passes, and XChaCha20-Poly1305 with the file header bound as associated
+      data. Key files written by earlier builds are migrated in place rather
+      than rejected, because refusing to start would push people back to the
+      binary that wrote plaintext.
+    </p>
+    <p>
+      Two limitations remain. The sealing key comes from a passphrase rather
+      than from a platform keystore, so its strength is whatever the user
+      chose. And MLS group state is not yet encrypted at rest, nor is there a
+      backup format that avoids introducing a state rollback vector. Both are
+      open items.
+    </p>
+
+    <h3><span class="num">9.6</span>Client trust boundaries differ</h3>
+    <p>
+      Three clients exist and they do not offer the same guarantee. The desktop
+      client uses in process IPC, so plaintext never crosses a socket. The
+      browser harness speaks to a local process over loopback, which admits
+      anything on the machine that can reach that port. The command line client
+      holds everything in one process.
+    </p>
+    <p>
+      The harness is labelled as such in its own interface. Documenting the
+      difference matters more than removing it: a project that ships several
+      clients and describes them all with one security claim is making a false
+      statement about at least one of them.
+    </p>
+  </section>
+
+<!-- ================= 10 ================= -->
+<section>
+  <h2><span class="num">10</span>Implementation status</h2>
+  <div class="col">
+    <p>
+      The implementation is written in Rust across seven first party crates plus
+      a vendored transport tree, and is exercised by 157 tests. The distribution
+      of those tests is more informative than the count.
+    </p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Component</th><th class="num">Tests</th><th>Notable coverage</th></tr></thead>
+      <tbody>
+        <tr><td>Identity, framing, admission</td><td class="num">64</td><td>Admission control verified over live QUIC connections, not only in unit tests</td></tr>
+        <tr><td>Message crypto</td><td class="num">23</td><td>Negative test proving a PSK commit fails without the staged secret</td></tr>
+        <tr><td>Blind mailbox</td><td class="num">23</td><td>Expiry enforced on collection, not only on sweep</td></tr>
+        <tr><td>Transport and path policy</td><td class="num">21</td><td>Live connections, and a guard that fails the build on any third party hostname</td></tr>
+        <tr><td>Cross layer</td><td class="num">6</td><td>Operator's serialised view scanned byte wise for plaintext and identities</td></tr>
+        <tr><td>Relay</td><td class="num">4</td><td>Refusal to start on an empty allowlist</td></tr>
+        <tr><td>Sealed storage</td><td class="num">14</td><td>Wrong passphrase rejected, tampered header rejected, plaintext migration preserves the identity</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <h3><span class="num">10.1</span>Defects found by testing rather than review</h3>
+    <p>
+      Three classes of defect survived code review and were caught only by tests
+      that crossed a layer boundary or used real sockets. We record them because
+      the pattern is more useful than the individual bugs.
+    </p>
+    <ol>
+      <li>
+        <strong>Absent padding.</strong> MLS applied none by default, so plaintext
+        length leaked exactly. Section 7.
+      </li>
+      <li>
+        <strong>Silently discarded data.</strong> A QUIC send stream dropped
+        without an explicit finish resets, discarding data the sender's write call
+        reported as successful. Write then drop is the obvious usage pattern and
+        it lost the final message of every session with no error anywhere.
+      </li>
+      <li>
+        <strong>Unreachable policy types.</strong> On three separate occasions a
+        type documenting a security guarantee was never consulted by the code
+        path it was supposed to govern. The path selection policy, the
+        reachability policy, and the post quantum commit function each compiled,
+        passed their unit tests, and enforced nothing.
+      </li>
+    </ol>
+    <div class="callout">
+      <span class="label">Observation</span>
+      <p>
+        The recurring failure is not incorrect logic but unreached logic. Unit
+        tests confirm that a decision function returns the right answer; they do
+        not confirm that anything asks it. Every security control in Rotelyx now
+        has a test that exercises it through the surface a real caller uses.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 11 ================= -->
+<section>
+  <h2><span class="num">11</span>Comparison</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Property</th><th>Telegram</th><th>Signal</th><th>Rotelyx</th></tr></thead>
+      <tbody>
+        <tr><td>End to end encryption by default</td><td class="t-risk">No</td><td class="t-good">Yes</td><td class="t-good">Yes, no other mode</td></tr>
+        <tr><td>Group end to end encryption</td><td class="t-risk">None</td><td class="t-mid">Sender keys</td><td class="t-good">MLS tree</td></tr>
+        <tr><td>Identity</td><td class="t-risk">Phone number</td><td class="t-mid">Phone number</td><td class="t-good">Public key</td></tr>
+        <tr><td>Transport</td><td class="t-mid">Central</td><td class="t-mid">Central</td><td class="t-good">Peer to peer</td></tr>
+        <tr><td>Post quantum</td><td class="t-risk">No</td><td class="t-good">Yes</td><td class="t-good">Yes, hybrid</td></tr>
+        <tr><td>Message length hidden</td><td class="t-risk">No</td><td class="t-mid">Partially</td><td class="t-good">Padded and bucketed</td></tr>
+        <tr><td>Self hostable</td><td class="t-risk">No</td><td class="t-risk">Not practically</td><td class="t-good">Relay and mailbox</td></tr>
+        <tr><td>Resists statistical disclosure</td><td class="t-risk">No</td><td class="t-risk">No</td><td class="t-risk">No</td></tr>
+        <tr><td>Independent audit</td><td class="t-risk">Criticised</td><td class="t-good">Repeatedly audited</td><td class="t-risk">None</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="col">
+    <p>
+      The final two rows are the ones that matter for an honest assessment.
+      Rotelyx improves on both comparators in identity, transport topology, and
+      length hiding, matches Signal on post quantum protection, and is behind
+      both on the only measure that establishes trustworthiness rather than
+      design quality.
+    </p>
+  </div>
+</section>
+
+<!-- ================= 12 ================= -->
+<section>
+  <h2><span class="num">12</span>Conclusion</h2>
+  <div class="col">
+    <p>
+      Rotelyx demonstrates that a messaging protocol can treat metadata as a
+      primary design constraint without inventing new cryptography. The three
+      mechanisms that carry that claim, hybrid post quantum injection at a
+      standard extension point, an inverted path selection objective, and a
+      mailbox that observes only an opaque tag and a bucketed payload, are each
+      small, each independently testable, and each accompanied by a statement of
+      what they do not cover.
+    </p>
+    <p>
+      The most important limitation is section 9.1. The mailbox reduces what an
+      operator can read to nothing and reduces what it can identify to a
+      correlation problem, but it does not solve that correlation problem, and
+      the published attacks against Signal's sealed sender apply. Claiming
+      otherwise would place this work in the category of systems that assert
+      unbreakability, and those claims have been false every time they have been
+      made.
+    </p>
+    <p>
+      The work required before any public security claim is a full independent
+      cryptographic audit covering the post quantum composition and the
+      implementation of both encryption layers. Until then, Rotelyx is a design
+      with a working implementation and no verified guarantees.
+    </p>
+  </div>
+</section>
+
+<!-- ================= refs ================= -->
+<section>
+  <h2><span class="num">13</span>References</h2>
+  <ol class="refs">
+    <li id="r1"><b>R. Barnes, B. Beurdouche, R. Robert, J. Millican, E. Omara, K. Cohn-Gordon.</b> The Messaging Layer Security (MLS) Protocol. RFC 9420, IETF, July 2023.</li>
+    <li id="r2"><b>M. Barbosa, D. Connolly, J. Duarte, A. Kaiser, P. Schwabe, K. Varner, B. Westerbaan.</b> X-Wing: The Hybrid KEM You've Been Looking For. IACR ePrint 2024/039.</li>
+    <li id="r3"><b>D. Connolly, P. Schwabe, B. Westerbaan.</b> X-Wing: general-purpose hybrid post-quantum KEM. draft-connolly-cfrg-xwing-kem-10, IETF, March 2026.</li>
+    <li id="r4"><b>TreeKEM: A Modular Machine-Checked Symbolic Security Analysis of Group Key Agreement in Messaging Layer Security.</b> IACR ePrint 2025/410.</li>
+    <li id="r5"><b>ETK: External-Operations TreeKEM and the Security of MLS in RFC 9420.</b> IACR ePrint 2025/229.</li>
+    <li id="r6"><b>S. Coull, K. Dyer.</b> Traffic Analysis of Encrypted Messaging Services: Apple iMessage and Beyond. ACM SIGCOMM Computer Communication Review, 2014.</li>
+    <li id="r7"><b>J. Bushart, C. Rossow.</b> Padding Ain't Enough: Assessing the Privacy Guarantees of Encrypted DNS. arXiv:1907.01317.</li>
+    <li id="r8"><b>I. Martiny, G. Kaptchuk, A. Aviv, D. Roche, E. Wustrow.</b> Improving Signal's Sealed Sender. NDSS Symposium, 2021.</li>
+    <li id="r9"><b>No safety in numbers: traffic analysis of sealed-sender groups in Signal.</b> arXiv:2305.09799.</li>
+    <li id="r10"><b>iroh.</b> Peer-to-peer QUIC transport with NAT traversal. N0, INC. Version 1.0.3, 2026. MIT OR Apache-2.0.</li>
+    <li id="r11"><b>OpenMLS.</b> A Rust implementation of the Messaging Layer Security protocol. Version 0.8.1, 2026.</li>
+  </ol>
+</section>
+
+<footer>
+  <p>
+    <b>Rotelyx</b> is developed by Ideoa Labs. Source, threat model, and full
+    provenance documentation are maintained alongside the implementation under
+    MIT OR Apache-2.0, with portions derived from third party work under MIT,
+    Apache-2.0 and BSD-3-Clause.
+  </p>
+  <p>
+    Correspondence: Andryu Schittone (Malios Dark), Ideoa Labs.
+  </p>
+</footer>
+
+</div>

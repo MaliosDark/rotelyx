@@ -1,0 +1,24 @@
+[package]
+name = "rotelyx-net"
+description = "Rotelyx L0/L1: metadata-resistant QUIC transport. Never contacts third-party infrastructure."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The transport stack lives in this repository under crates/net/ — there is no
+# upstream package download. `rotelyx-net` owns every policy decision above it:
+# relay selection, path selection, discovery. No code path here may reach
+# infrastructure we do not operate; tests/no_foreign_infrastructure.rs enforces
+# that and fails the build otherwise. Provenance: VENDORING.md.
+rotelyx-transport = { path = "../net/rotelyx-transport", default-features = false, features = ["tls-ring", "unstable-custom-transports"] }
+
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "io-util", "time"] }

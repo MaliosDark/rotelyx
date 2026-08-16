@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Rotelyx</title>
+<style>
+  :root {
+    --ground:    #14120F;
+    --surface:   #1C1A16;
+    --surface-2: #24211C;
+    --ink:       #E9E4DA;
+    --ink-2:     #9C958A;
+    --rule:      #363129;
+    --accent:    #D9A24A;
+    --accent-bg: #33280F;
+    --good:      #57B79C;
+    --good-bg:   #142A25;
+    --risk:      #DE8090;
+    --risk-bg:   #2E1A1E;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.55;
+    display: flex; flex-direction: column; overflow: hidden;
+    user-select: none;
+  }
+  input, textarea, .selectable { user-select: text; }
+
+  /* titlebar */
+  .bar {
+    display: flex; align-items: center; gap: .7rem;
+    padding: .7rem 1rem; border-bottom: 1px solid var(--rule);
+    background: var(--surface); flex: 0 0 auto;
+  }
+  .mark {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 3px solid var(--accent); flex: 0 0 auto;
+  }
+  .bar h1 { font-size: .95rem; font-weight: 650; margin: 0; letter-spacing: .01em; }
+  .bar .spacer { flex: 1; }
+  .chip {
+    font-family: var(--mono); font-size: .64rem; letter-spacing: .1em;
+    text-transform: uppercase; padding: .2rem .5rem; border-radius: 3px;
+    background: var(--surface-2); color: var(--ink-2); white-space: nowrap;
+  }
+  .chip.ok   { background: var(--good-bg); color: var(--good); }
+  .chip.warn { background: var(--risk-bg); color: var(--risk); }
+  .chip.note { background: var(--accent-bg); color: var(--accent); }
+
+  .shell { flex: 1; display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
+
+  aside {
+    background: var(--surface); border-right: 1px solid var(--rule);
+    padding: 1.1rem; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 1.3rem;
+  }
+  .group { display: flex; flex-direction: column; gap: .6rem; }
+  .group + .group { padding-top: 1.1rem; border-top: 1px solid var(--rule); }
+  .group h2 { font-size: .82rem; font-weight: 650; margin: 0; }
+  label {
+    font-family: var(--mono); font-size: .63rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-2);
+  }
+  .hint { font-size: .74rem; color: var(--ink-2); margin: 0; }
+
+  input, textarea {
+    background: var(--surface-2); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 4px;
+    padding: .45rem .55rem; font-family: var(--mono); font-size: .76rem;
+    width: 100%; resize: vertical;
+  }
+  input:focus, textarea:focus, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .val {
+    font-family: var(--mono); font-size: .7rem; color: var(--ink-2);
+    background: var(--surface-2); border: 1px solid var(--rule);
+    border-radius: 4px; padding: .45rem .55rem; word-break: break-all;
+    max-height: 5.5rem; overflow-y: auto;
+  }
+  button {
+    background: var(--surface-2); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 4px;
+    padding: .5rem .7rem; font-family: inherit; font-size: .8rem;
+    cursor: pointer; transition: border-color .12s;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .38; cursor: not-allowed; }
+  button.primary { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+  button.danger  { background: var(--risk-bg);   border-color: var(--risk);   color: var(--risk); }
+  .row { display: flex; gap: .45rem; }
+  .row > * { flex: 1; }
+  .row > .grow0 { flex: 0 0 auto; }
+
+  main { display: flex; flex-direction: column; min-height: 0; }
+
+  .status {
+    padding: .8rem 1.1rem; border-bottom: 1px solid var(--rule);
+    background: var(--surface); display: flex; flex-direction: column; gap: .5rem;
+  }
+  .status .line { font-size: .82rem; color: var(--ink-2); }
+  .safety { display: none; flex-direction: column; gap: .25rem; }
+  .safety.on { display: flex; }
+  .safety .digits {
+    font-family: var(--mono); font-size: .95rem; letter-spacing: .05em;
+    color: var(--accent); word-spacing: .3em;
+  }
+  .safety .why { font-size: .72rem; color: var(--ink-2); max-width: 64ch; }
+
+  #log {
+    flex: 1; overflow-y: auto; padding: 1rem 1.1rem;
+    display: flex; flex-direction: column; gap: .5rem;
+  }
+  .msg {
+    max-width: 68%; padding: .45rem .7rem; border-radius: 8px;
+    font-size: .87rem; white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.me   { align-self: flex-end;   background: var(--accent-bg); }
+  .msg.them { align-self: flex-start; background: var(--surface-2); }
+  .sys {
+    align-self: center; font-family: var(--mono); font-size: .68rem;
+    color: var(--ink-2); letter-spacing: .03em; text-align: center; max-width: 80%;
+  }
+  .sys.bad { color: var(--risk); }
+
+  .compose {
+    display: flex; gap: .55rem; padding: .85rem 1.1rem;
+    border-top: 1px solid var(--rule); background: var(--surface);
+  }
+  .compose input { font-family: var(--sans); font-size: .88rem; }
+  .compose button { flex: 0 0 auto; }
+
+  dialog {
+    background: var(--surface); color: var(--ink); border: 1px solid var(--rule);
+    border-radius: 6px; padding: 1.2rem; max-width: 440px; width: 90%;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h3 { margin: 0 0 .6rem; font-size: .95rem; }
+  dialog ul { margin: .4rem 0 1rem; padding-left: 1.1rem; font-size: .8rem; color: var(--ink-2); }
+  dialog li { margin-bottom: .3rem; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="mark" aria-hidden="true"></div>
+  <h1>Rotelyx</h1>
+  <span class="chip" id="state">idle</span>
+  <span class="chip" id="path" hidden></span>
+  <div class="spacer"></div>
+  <button id="about" class="grow0">About</button>
+</div>
+
+<div class="shell">
+  <aside>
+    <div class="group">
+      <label>Your identity</label>
+      <div class="val selectable" id="me">loading</div>
+    </div>
+
+    <div class="group">
+      <h2>Invitations</h2>
+      <p class="hint">
+        You are unreachable until you issue one. Hand the code over a channel
+        you trust.
+      </p>
+      <div class="row">
+        <input id="hours" type="number" value="24" min="1" aria-label="Hours valid">
+        <button id="issue">Issue</button>
+      </div>
+      <div class="val selectable" id="code" hidden></div>
+      <p class="hint" id="counts"></p>
+    </div>
+
+    <div class="group">
+      <h2>Wait for someone</h2>
+      <p class="hint" style="display:flex;align-items:center;gap:.4rem">
+        <input type="checkbox" id="open" style="width:auto">
+        <span>Accept anyone, no invitation</span>
+      </p>
+      <button id="listen" class="primary">Listen</button>
+      <div class="val selectable" id="addr" hidden></div>
+    </div>
+
+    <div class="group">
+      <h2>Reach someone</h2>
+      <label>Their address</label>
+      <textarea id="peer-addr" rows="3" placeholder="eyJpZCI6"></textarea>
+      <label>Their invitation</label>
+      <input id="peer-invite" placeholder="7otIsVn_">
+      <button id="connect" class="primary">Connect</button>
+    </div>
+
+    <div class="group">
+      <h2>Blocked</h2>
+      <p class="hint">Persisted, so a restart does not reopen the door.</p>
+      <input id="block-id" placeholder="identity to block">
+      <div class="row">
+        <button id="do-block">Block</button>
+        <button id="do-unblock">Unblock</button>
+      </div>
+      <div class="val" id="block-list" hidden></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="status">
+      <div class="line" id="line">Issue an invitation and listen, or paste an address to connect.</div>
+      <div class="safety" id="safety">
+        <label>Safety number</label>
+        <div class="digits selectable" id="digits"></div>
+        <div class="why">
+          Read these to your peer over a channel Rotelyx does not control. If
+          they differ, someone is in the middle. The transport authenticated a
+          key, not a person.
+        </div>
+      </div>
+    </div>
+
+    <div id="log"></div>
+
+    <form class="compose" id="compose">
+      <input id="text" placeholder="Message" autocomplete="off" disabled>
+      <button type="submit" id="send" disabled>Send</button>
+      <button type="button" id="hangup" class="danger" disabled>End</button>
+    </form>
+  </main>
+</div>
+
+<dialog id="about-dialog">
+  <h3>Trust boundary</h3>
+  <p class="hint">
+    This window and the cryptography run in the same process. Plaintext never
+    crosses a socket, which is the difference from the browser harness.
+  </p>
+  <p class="hint" style="margin-top:.6rem">What still sees your messages:</p>
+  <ul>
+    <li>This device, and anything with code execution on it</li>
+    <li>The operating system</li>
+    <li>Whoever you are talking to</li>
+  </ul>
+  <p class="hint">
+    Rotelyx is unaudited. It makes no security claim until an independent
+    cryptographic review is complete.
+  </p>
+  <button id="about-close" style="margin-top:1rem">Close</button>
+</dialog>
+
+<script type="module">
+  const { invoke } = window.__TAURI__.core;
+  const { listen: onEvent } = window.__TAURI__.event;
+
+  const $ = (id) => document.getElementById(id);
+  let live = false;
+
+  const log = (text, cls = "sys") => {
+    const el = document.createElement("div");
+    el.className = cls;
+    el.textContent = text;
+    $("log").appendChild(el);
+    $("log").scrollTop = $("log").scrollHeight;
+  };
+
+  const setState = (text, kind = "") => {
+    $("state").textContent = text;
+    $("state").className = "chip " + kind;
+  };
+
+  const setLive = (on) => {
+    live = on;
+    $("text").disabled = !on;
+    $("send").disabled = !on;
+    $("hangup").disabled = !on;
+    $("listen").disabled = on;
+    $("connect").disabled = on;
+    if (on) $("text").focus();
+  };
+
+  async function refresh() {
+    try {
+      const s = await invoke("snapshot");
+      $("me").textContent = s.id;
+      $("counts").textContent =
+        s.invitations === 0
+          ? "No live invitations. You are unreachable."
+          : `${s.invitations} live invitation(s).`;
+      const list = await invoke("blocked");
+      $("block-list").hidden = list.length === 0;
+      $("block-list").textContent = list.join("\n");
+    } catch (e) {
+      $("me").textContent = String(e);
+    }
+  }
+
+  $("issue").onclick = async () => {
+    try {
+      const hours = parseInt($("hours").value, 10) || 24;
+      const code = await invoke("issue_invitation", { hours });
+      $("code").hidden = false;
+      $("code").textContent = code;
+      await refresh();
+    } catch (e) { log(String(e), "sys bad"); }
+  };
+
+  $("do-block").onclick = async () => {
+    try {
+      const id = $("block-id").value.trim();
+      if (!id) return;
+      const added = await invoke("block", { id });
+      log(added ? `blocked ${id.slice(0, 16)}` : "already blocked", "sys");
+      $("block-id").value = "";
+      await refresh();
+    } catch (e) { log(String(e), "sys bad"); }
+  };
+
+  $("do-unblock").onclick = async () => {
+    try {
+      const id = $("block-id").value.trim();
+      if (!id) return;
+      const removed = await invoke("unblock", { id });
+      log(removed ? `unblocked ${id.slice(0, 16)}` : "was not blocked", "sys");
+      $("block-id").value = "";
+      await refresh();
+    } catch (e) { log(String(e), "sys bad"); }
+  };
+
+  $("listen").onclick = async () => {
+    $("log").innerHTML = "";
+    setState("binding", "note");
+    try {
+      await invoke("start", { mode: "listen", open: $("open").checked });
+    } catch (e) { log(String(e), "sys bad"); setState("idle"); }
+  };
+
+  $("connect").onclick = async () => {
+    const addr = $("peer-addr").value.trim();
+    if (!addr) { log("paste the peer's address first", "sys bad"); return; }
+    $("log").innerHTML = "";
+    setState("connecting", "note");
+    try {
+      await invoke("start", {
+        mode: "connect",
+        addr,
+        invite: $("peer-invite").value.trim() || null,
+      });
+    } catch (e) { log(String(e), "sys bad"); setState("idle"); }
+  };
+
+  $("compose").onsubmit = async (e) => {
+    e.preventDefault();
+    const text = $("text").value;
+    if (!text || !live) return;
+    try {
+      await invoke("send_message", { text });
+      log(text, "msg me");
+      $("text").value = "";
+    } catch (err) { log(String(err), "sys bad"); }
+  };
+
+  $("hangup").onclick = async () => {
+    try { await invoke("hangup"); } catch (e) { log(String(e), "sys bad"); }
+  };
+
+  $("about").onclick = () => $("about-dialog").showModal();
+  $("about-close").onclick = () => $("about-dialog").close();
+
+  await onEvent("rotelyx", (e) => {
+    const m = e.payload;
+    switch (m.type) {
+      case "status":
+        $("line").textContent = m.text;
+        break;
+
+      case "listening":
+        setState("listening", "note");
+        $("line").textContent = "Waiting for a peer. Send them this address.";
+        $("addr").hidden = false;
+        $("addr").textContent = m.addr;
+        break;
+
+      case "connected":
+        setState("connected", "ok");
+        // A relay reads nothing but does learn who is talking to whom, so
+        // whether the path is direct is worth showing.
+        $("path").hidden = false;
+        $("path").textContent = m.direct ? "direct path" : "relayed";
+        $("path").className = "chip " + (m.direct ? "ok" : "warn");
+        $("line").textContent = "Peer " + m.peer.slice(0, 16);
+        $("safety").classList.add("on");
+        $("digits").textContent = m.safety_number;
+        setLive(true);
+        break;
+
+      case "message":
+        log(m.text, "msg them");
+        break;
+
+      // MLS makes membership changes visible. A silent UI discards that.
+      case "group_changed":
+        log(`the group changed, ${m.members} members`, "sys");
+        break;
+
+      case "disconnected":
+        log("peer disconnected: " + m.reason, "sys");
+        setState("closed", "warn");
+        setLive(false);
+        break;
+
+      case "error":
+        log(m.text, "sys bad");
+        setState("refused", "warn");
+        setLive(false);
+        break;
+    }
+  });
+
+  await refresh();
+</script>
+</body>
+</html>

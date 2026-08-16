@@ -1,0 +1,104 @@
+rotelyx-net
+Copyright (c) 2026 Malios Dark
+
+This product includes software developed by third parties, as required by
+Apache License 2.0 §4(b) and the BSD 3-Clause License.
+
+================================================================================
+1. iroh and sibling crates
+================================================================================
+
+Portions of this software are derived from iroh and its sibling crates
+(iroh-base, iroh-relay, iroh-dns, noq, noq-proto, noq-udp, netwatch,
+portmapper, iroh-metrics, n0-error, n0-future, n0-watcher).
+
+    Copyright (c) 2023-2026 N0, INC.
+    Licensed under either of Apache License, Version 2.0 or MIT license,
+    at your option.
+    Source: https://github.com/n0-computer/iroh
+
+    Full licence texts: LICENSE-APACHE, LICENSE-MIT (this directory).
+
+MODIFICATIONS MADE BY THIS PROJECT
+(stated in satisfaction of Apache-2.0 §4(b))
+
+  - Default relay infrastructure removed. Upstream ships `RelayMode::Default`
+    and `RelayMode::Staging`, which resolve to relay servers operated by
+    N0, INC. Neither is reachable through this crate's public API. Relay
+    selection is restricted to servers operated by the Rotelyx deployment.
+
+  - Identity-publishing code deleted from the tree, not merely disabled. The
+    `pkarr` and `dns` address-lookup providers and the `N0` / `N0DisableRelay`
+    presets are gone. The generic DNS *resolver* is retained: it translates our
+    own relay hostnames to addresses and has nothing to do with publishing
+    identities.
+
+  - Address lookup and discovery removed, not merely disabled. Upstream's
+    default preset registers a pkarr publisher, a pkarr resolver, and a DNS
+    address lookup against the `dns.iroh.link` zone operated by N0, INC.,
+    which publishes the endpoint's public key to a third party at startup.
+    Rotelyx performs rendezvous at the application layer instead.
+
+  - Environment-based infrastructure override neutralised. Upstream honours
+    the `IROH_FORCE_STAGING_RELAYS` environment variable to repoint relay
+    infrastructure from outside the process. It has no effect here.
+
+  - Path selection objective changed. Upstream selects network paths by
+    latency. Rotelyx selects by metadata resistance, preferring a slower direct
+    path over a faster relayed one.
+
+  - Path-selection API exposed. Upstream keeps its `socket` module private,
+    which makes the `PathSelector` trait impossible to implement from outside
+    the crate even though the endpoint builder accepts one. A `path_selection`
+    module re-exports the trait and its context types so that Rotelyx can supply
+    its own selector.
+
+  - Relay `ServerConfig` constructor added. The struct is `#[non_exhaustive]`
+    and upstream ships no constructor, so the relay server cannot be started
+    from another crate at all. Rotelyx operates its own relays, so a constructor
+    was added; it leaves the metrics socket unset.
+
+  - Default and staging relay modes deleted outright. Upstream's `RelayMode`
+    carried `Default` and `Staging` variants resolving to relay servers operated
+    by N0, INC., together with the `defaults::prod` and `defaults::staging`
+    modules holding their hostnames and a `default_relay_mode()` function that
+    selected between them from an environment variable. All of it is removed.
+    `RelayMode` now has only `Disabled` and `Custom`.
+
+  - Upstream examples and integration tests removed. They demonstrated the API
+    that was deleted above and no longer compiled.
+
+  - Public API renamed throughout to this project's own naming.
+
+================================================================================
+2. Tailscale
+================================================================================
+
+Portions of the upstream socket and NAT-traversal implementation
+(`iroh/src/socket/**`) are themselves derived from Tailscale.
+
+    Copyright (c) 2020 Tailscale Inc & AUTHORS.
+    Licensed under the BSD 3-Clause License.
+
+    Full licence text: LICENSE-BSD3 (this directory).
+
+Neither the name of Tailscale Inc nor the names of its contributors are used
+to endorse or promote this product.
+
+================================================================================
+3. quinn
+================================================================================
+
+The underlying QUIC protocol implementation (`noq`, `noq-proto`, `noq-udp`) is
+a fork by N0, INC. of the quinn project.
+
+    Copyright (c) The quinn Developers.
+    Licensed under either of Apache License, Version 2.0 or MIT license,
+    at your option.
+    Source: https://github.com/quinn-rs/quinn
+
+================================================================================
+
+These notices are a licence obligation and must not be removed. See
+VENDORING.md for the provenance audit, the line counts, and the plan for
+replacing each subsystem.

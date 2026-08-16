@@ -1,0 +1,43 @@
+[package]
+name = "rotelyx-crypto"
+description = "Rotelyx L2: MLS group crypto with a hybrid post-quantum key schedule"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# --- group crypto: adopted wholesale, never reimplemented ---
+openmls.workspace = true
+openmls_traits.workspace = true
+openmls_basic_credential.workspace = true
+openmls_rust_crypto.workspace = true
+openmls_memory_storage.workspace = true
+
+# --- hybrid post-quantum KEM ---
+# X-Wing (draft-connolly-cfrg-xwing-kem): ML-KEM-768 + X25519, secure if SHA3 is
+# secure AND either component is. Published, peer-reviewed, and deployed — this
+# is the whole point of not writing our own combiner.
+# `getrandom` routes key generation and encapsulation through the OS CSPRNG
+# without us plumbing an RNG trait across crate-version boundaries; `zeroize`
+# scrubs the decapsulation key and the encapsulation randomness on drop. Both
+# are off by default upstream, and both are non-negotiable here.
+x-wing = { version = "0.1.0", features = ["getrandom", "zeroize"] }
+
+blake3.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+
+serde.workspace = true
+postcard.workspace = true
+
+thiserror.workspace = true
+tracing.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+data-encoding.workspace = true

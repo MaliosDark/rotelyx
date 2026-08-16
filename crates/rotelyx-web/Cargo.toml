@@ -1,0 +1,30 @@
+[package]
+name = "rotelyx-web"
+description = "Rotelyx: a local browser UI for exercising the protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rotelyx-web"
+path = "src/main.rs"
+
+[dependencies]
+rotelyx-core.workspace = true
+rotelyx-crypto.workspace = true
+rotelyx-net.workspace = true
+
+axum = { version = "0.8", features = ["ws"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "signal"] }
+
+anyhow.workspace = true
+clap.workspace = true
+serde = { workspace = true }
+serde_json = "1"
+data-encoding.workspace = true
+futures-util = "0.3"
+tracing.workspace = true
+tracing-subscriber.workspace = true

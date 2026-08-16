@@ -1,0 +1,39 @@
+# Build output
+/target/
+**/*.rs.bk
+
+# --- Secrets and personal data -----------------------------------------------
+#
+# These are the files that must never reach a repository. An identity key is
+# the identity: there is no recovery and no revocation authority, so a key that
+# lands in a commit is compromised permanently and stays compromised in the
+# history even after the file is deleted.
+#
+# Invitations are capabilities. A blocklist is a list of people somebody chose
+# to avoid, which is personal information about them and about the user.
+
+*.key
+*.invites
+*.blocks
+rotelyx-identity.*
+*.allow
+
+# Swap files created for local testing
+/swapfile*
+
+# --- Editor and OS -----------------------------------------------------------
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- Deliberately NOT ignored ------------------------------------------------
+#
+# crates/net/ holds the vendored transport, 121,000 lines of source. It is
+# committed on purpose: it is what makes a fresh clone build without fetching
+# anything from a third party registry. Do not add it here.
+#
+# Cargo.lock is committed because this workspace produces binaries. It is what
+# pins the resolved graph so a clone gets the same dependencies.

@@ -1,0 +1,23 @@
+[package]
+name = "rotelyx-relay"
+description = "Rotelyx relay: a blind forwarder for peers that cannot hole-punch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rotelyx-relay"
+path = "src/main.rs"
+
+[dependencies]
+rotelyx-relay-proto = { path = "../net/rotelyx-relay-proto", features = ["server"] }
+rotelyx-net.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Rotelyx",
+  "version": "0.1.0",
+  "identifier": "com.ideoalabs.rotelyx",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Rotelyx",
+        "width": 1040,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 520,
+        "resizable": true,
+        "theme": "Dark"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage"],
+    "icon": ["icons/icon.png"],
+    "category": "SocialNetworking",
+    "shortDescription": "Peer to peer encrypted messaging",
+    "longDescription": "Rotelyx is a peer to peer end to end encrypted messenger. Identity is a public key, there is no directory, and messages travel directly between devices."
+  }
+}

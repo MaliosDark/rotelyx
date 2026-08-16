@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+# Vendored transport stack. Excluded from membership so upstream's own test
+# suites and lint config do not run as part of Rotelyx's. See crates/net/README.md.
+exclude = ["crates/net"]
+members = [
+    "crates/rotelyx-net",
+    "crates/rotelyx-core",
+    "crates/rotelyx-crypto",
+    "crates/rotelyx-mailbox",
+    "crates/rotelyx-cli",
+    "crates/rotelyx-relay",
+    "crates/rotelyx-web",
+    "crates/rotelyx-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/MaliosDark/rotelyx"
+authors = ["Malios Dark"]
+
+[workspace.dependencies]
+# --- message crypto (L2) ---
+# Versions pinned to what openmls 0.8.1 actually declares; the companion
+# crates are on 0.5.x, not 0.4.x.
+openmls = "0.8.1"
+openmls_traits = "0.5"
+openmls_basic_credential = "0.5"
+openmls_memory_storage = "0.5"
+# `openmls_libcrux_crypto` is the formally-verified provider and is the one we
+# want long term; `openmls_rust_crypto` is the pragmatic default while the
+# group plumbing is still moving.
+openmls_rust_crypto = "0.5.1"
+
+# --- post-quantum hybrid combiner (L2) ---
+ml-kem = "0.3.2"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+ed25519-dalek = { version = "3", features = ["rand_core"] }
+
+# --- symmetric / KDF (L2/L3) ---
+blake3 = "1.8"
+hkdf = "0.13"
+sha2 = "0.11"
+chacha20poly1305 = { version = "0.11", features = ["alloc"] }
+argon2 = "0.5"
+subtle = "2"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+# --- serialization (L3 wire) ---
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+data-encoding = "2"
+
+# --- runtime ---
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal"] }
+tokio-util = "0.7"
+futures-lite = "2"
+async-trait = "0.1"
+
+# --- ops ---
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.10"
+rand_core = "0.10"
+# Key generation goes straight to the OS CSPRNG rather than through a `rand`
+# trait bound, so a future `rand` major bump cannot silently change how secret
+# keys are produced. Matches iroh's own getrandom major.
+getrandom = "0.4"
+clap = { version = "4", features = ["derive"] }
+
+# --- internal ---
+rotelyx-net = { path = "crates/rotelyx-net" }
+rotelyx-core = { path = "crates/rotelyx-core" }
+rotelyx-crypto = { path = "crates/rotelyx-crypto" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# Secrets must not be optimised into leaked copies, and a debug build that is
+# 100x slower makes the crypto tests unusable. Keep dependencies optimised
+# even in dev.
+[profile.dev.package."*"]
+opt-level = 2

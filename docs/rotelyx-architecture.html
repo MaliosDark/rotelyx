@@ -1,0 +1,823 @@
+<title>Rotelyx Protocol</title>
+<style>
+  :root {
+    --ground:      #F4F5F8;
+    --surface:     #FFFFFF;
+    --surface-2:   #EAEDF2;
+    --ink:         #131820;
+    --ink-2:       #59636F;
+    --rule:        #D4D9E1;
+    --rule-soft:   #E3E7ED;
+    --accent:      #A76B12;
+    --accent-soft: #F0E2C6;
+    --good:        #26705F;
+    --good-soft:   #D8EBE5;
+    --risk:        #A83E50;
+    --risk-soft:   #F5DDE1;
+    --shadow:      0 1px 2px rgba(19,24,32,.06), 0 8px 24px rgba(19,24,32,.05);
+
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0D1118;
+      --surface:     #141A23;
+      --surface-2:   #1B222D;
+      --ink:         #DFE5EE;
+      --ink-2:       #8B96A8;
+      --rule:        #273040;
+      --rule-soft:   #1E2530;
+      --accent:      #E8A33D;
+      --accent-soft: #33280F;
+      --good:        #4FB39A;
+      --good-soft:   #122A26;
+      --risk:        #E0808C;
+      --risk-soft:   #2F1B20;
+      --shadow:      0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0D1118;
+    --surface:     #141A23;
+    --surface-2:   #1B222D;
+    --ink:         #DFE5EE;
+    --ink-2:       #8B96A8;
+    --rule:        #273040;
+    --rule-soft:   #1E2530;
+    --accent:      #E8A33D;
+    --accent-soft: #33280F;
+    --good:        #4FB39A;
+    --good-soft:   #122A26;
+    --risk:        #E0808C;
+    --risk-soft:   #2F1B20;
+    --shadow:      0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 1.02rem;
+    line-height: 1.68;
+    margin: 0;
+    padding: 0 1.4rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 100%;
+    width: 1080px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4.5rem;
+  }
+
+  .col {
+    max-width: 70ch;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+
+  p { margin: 0; text-wrap: pretty; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  strong { font-weight: 650; color: var(--ink); }
+  code {
+    font-family: var(--mono);
+    font-size: .87em;
+    background: var(--surface-2);
+    padding: .1em .38em;
+    border-radius: 3px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin: 0;
+  }
+
+  /* ---- masthead ---- */
+  header {
+    padding: 5rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.6rem;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 3rem;
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: clamp(2.7rem, 8vw, 4.6rem);
+    line-height: 1.02;
+    letter-spacing: -.022em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h1 em {
+    font-style: normal;
+    color: var(--accent);
+  }
+  .deck {
+    font-family: var(--display);
+    font-size: clamp(1.1rem, 2.4vw, 1.4rem);
+    line-height: 1.5;
+    color: var(--ink-2);
+    max-width: 46ch;
+    margin: 0;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 2rem;
+    font-family: var(--mono);
+    font-size: .73rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    padding-top: .6rem;
+  }
+  .meta b { color: var(--ink); font-weight: 500; }
+
+  /* ---- sections ---- */
+  section {
+    display: flex;
+    flex-direction: column;
+    gap: 1.6rem;
+  }
+  h2 {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: clamp(1.7rem, 3.6vw, 2.3rem);
+    line-height: 1.15;
+    letter-spacing: -.015em;
+    margin: 0;
+    text-wrap: balance;
+    max-width: 22ch;
+  }
+  h3 {
+    font-family: var(--body);
+    font-size: 1.03rem;
+    font-weight: 650;
+    letter-spacing: -.005em;
+    margin: 0;
+  }
+  .sec-head { display: flex; flex-direction: column; gap: .55rem; }
+
+  /* ---- verdict chips ---- */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: .22rem .55rem;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .chip.yes  { background: var(--good-soft); color: var(--good); }
+  .chip.no   { background: var(--risk-soft); color: var(--risk); }
+  .chip.care { background: var(--accent-soft); color: var(--accent); }
+
+  /* ---- call-out cards ---- */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+    gap: 1rem;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1.2rem 1.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: .7rem;
+  }
+  .card ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .45rem; }
+  .card li { padding-left: .15rem; }
+  .card li::marker { color: var(--ink-2); }
+  .card p { font-size: .96rem; color: var(--ink-2); }
+
+  .card.verdict {
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  /* ---- the layer stack ---- */
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--rule-soft);
+  }
+  .layer {
+    display: grid;
+    grid-template-columns: 5.2rem 1fr 12rem;
+    gap: 1.2rem;
+    align-items: baseline;
+    background: var(--surface);
+    padding: 1.05rem 1.3rem;
+  }
+  .layer .lid {
+    font-family: var(--mono);
+    font-size: .78rem;
+    letter-spacing: .06em;
+    color: var(--ink-2);
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+  }
+  .layer .lid b { color: var(--accent); font-weight: 500; font-size: .9rem; letter-spacing: .04em; }
+  .layer .lname { font-weight: 650; font-size: .99rem; }
+  .layer .ldesc { color: var(--ink-2); font-size: .93rem; line-height: 1.55; margin-top: .15rem; }
+  .layer .lowner {
+    font-family: var(--mono);
+    font-size: .74rem;
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+  .layer .lowner span { color: var(--ink); }
+  .layer.ours { background: linear-gradient(90deg, var(--accent-soft) 0 3px, var(--surface) 3px); }
+  .stack-key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1.4rem;
+    font-family: var(--mono);
+    font-size: .72rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+  @media (max-width: 720px) {
+    .layer { grid-template-columns: 1fr; gap: .5rem; }
+    .layer .lid { flex-direction: row; align-items: baseline; gap: .6rem; }
+  }
+
+  /* ---- tables ---- */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: .93rem; }
+  th, td { text-align: left; padding: .78rem 1.05rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: var(--mono);
+    font-size: .69rem;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    font-weight: 500;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td:first-child { font-weight: 600; }
+  .t-good { color: var(--good); }
+  .t-risk { color: var(--risk); }
+  .t-mid  { color: var(--accent); }
+
+  /* ---- ranked difficulty list ---- */
+  .ranked { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--rule); }
+  .rank {
+    display: grid;
+    grid-template-columns: 3.4rem 1fr 7rem;
+    gap: 1.2rem;
+    align-items: start;
+    padding: 1.05rem .2rem;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .rank .rn {
+    font-family: var(--mono);
+    font-size: .95rem;
+    color: var(--ink-2);
+    letter-spacing: .04em;
+    padding-top: .1rem;
+  }
+  .rank h3 + p { color: var(--ink-2); font-size: .95rem; margin-top: .3rem; }
+  .cost {
+    font-family: var(--mono);
+    font-size: .73rem;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    text-align: right;
+    padding-top: .18rem;
+  }
+  @media (max-width: 720px) {
+    .rank { grid-template-columns: 2.6rem 1fr; }
+    .cost { grid-column: 2; text-align: left; }
+  }
+
+  /* ---- pull quote ---- */
+  .pull {
+    font-family: var(--display);
+    font-size: clamp(1.25rem, 3vw, 1.7rem);
+    line-height: 1.4;
+    letter-spacing: -.01em;
+    color: var(--ink);
+    border-left: 2px solid var(--accent);
+    padding: .2rem 0 .2rem 1.4rem;
+    margin: .6rem 0;
+    max-width: 34ch;
+    text-wrap: balance;
+  }
+
+  /* ---- decisions ---- */
+  .decision {
+    background: var(--surface-2);
+    border-radius: 6px;
+    padding: 1.15rem 1.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+  .decision p { font-size: .96rem; color: var(--ink-2); }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 2rem;
+    font-size: .9rem;
+    color: var(--ink-2);
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+  }
+  footer .col { gap: .6rem; }
+
+  ol.plain { margin: 0; padding-left: 1.3rem; display: flex; flex-direction: column; gap: .55rem; }
+  ol.plain li::marker { font-family: var(--mono); font-size: .85rem; color: var(--ink-2); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Architecture assessment &middot; internal</p>
+    <h1>Rotelyx<br><em>Protocol</em></h1>
+    <p class="deck">Peer-to-peer messaging and calling on iroh, with message crypto that survives a compromised server, a compromised relay, and a future quantum adversary.</p>
+    <div class="meta">
+      <span>Author <b>Malios Dark</b></span>
+      <span>Date <b>15 Aug 2026</b></span>
+      <span>Status <b>L0 to L3 running, clients shipped</b></span>
+      <span>Transport <b>vendored, no upstream package</b></span>
+    </div>
+  </header>
+
+  <!-- ================= BUILT SO FAR ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Built &middot; verified by test, not by assertion</p>
+      <h2>What runs today</h2>
+      <p>Every claim below is backed by a test that fails if the claim stops holding. The interesting part is not the count. It is that the unit tests all passed while three real privacy defects sat underneath them, and only cross-layer tests and tests over real sockets found those.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Layer</th><th>What works</th><th>Tests</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>L3 blind mailbox</td><td>Sealed envelopes, five padding buckets, rotating unlinkable tags, TTL expiry enforced on collection</td><td>23</td></tr>
+          <tr><td>L2 message crypto</td><td>MLS conversations, one to one as a group of two, X-Wing hybrid post-quantum reaching the key schedule as an external PSK</td><td>23</td></tr>
+          <tr><td>L1 identity &amp; access</td><td>Ed25519 identity sealed at rest, safety numbers, length-capped framing, admission control enforced over live sockets</td><td>64</td></tr>
+          <tr><td>L0/L1 transport</td><td>Two endpoints connecting over real QUIC, mutual public-key authentication, metadata-resistant path selection, zero-foreign-infrastructure guard</td><td>21</td></tr>
+          <tr><td>Cross layer</td><td>A message surviving the whole offline path; the operator&rsquo;s view containing no plaintext, sender or recipient</td><td>6</td></tr>
+          <tr><td>Relay</td><td>Allowlist behaviour, including refusing to fall open on an empty file</td><td>4</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p><strong>Three clients run the same stack.</strong> A command line chat, a native desktop window, and a local browser harness. They do not offer identical guarantees: the desktop client keeps plaintext inside one process, while the harness carries it across loopback. That difference is stated in the harness itself rather than smoothed over.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="chip no">Found by testing</span>
+        <h3>MLS was not padding at all</h3>
+        <p>Overhead is a constant 145 bytes and the rest is one to one, so plaintext length leaked exactly. Worst on the direct peer-to-peer path, where there is no envelope to hide behind and this was the only length defence.</p>
+      </div>
+      <div class="card">
+        <span class="chip no">Found by testing</span>
+        <h3>Padding buckets were too small</h3>
+        <p>A 256-byte bucket held barely a hundred characters after MLS overhead, so ordinary messages straddled the boundary and told the operator &ldquo;short&rdquo; or &ldquo;long&rdquo; every time.</p>
+      </div>
+      <div class="card">
+        <span class="chip no">Found by testing</span>
+        <h3>Dropped streams discarded data</h3>
+        <p>A QUIC send stream dropped without finishing resets and silently discards data the sender believes was delivered. Write then drop is the obvious pattern; it lost the last message with no error anywhere.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= VERDICT ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">The short answer</p>
+      <h2>iroh is the right foundation. The homemade ratchet is not.</h2>
+    </div>
+    <div class="cards">
+      <div class="card verdict">
+        <span class="chip yes">Own it</span>
+        <h3>Derive the transport, own the policy</h3>
+        <p>QUIC + TLS 1.3 with stateless relays replaces the whole ICE / STUN / TURN / DTLS / SCTP stack, and identity becomes an Ed25519 key rather than a phone number. Rotelyx ships that as <code>rotelyx-net</code>: our relay policy, our path selection, our discovery — on machinery derived from iroh, which is itself derived from Tailscale and quinn. Nobody in this lineage wrote NAT traversal from zero.</p>
+      </div>
+      <div class="card verdict">
+        <span class="chip no">Reject</span>
+        <h3>A custom Double Ratchet</h3>
+        <p>A ratchet you write will be weaker than one you adopt — not because your algorithm is worse, but because the bugs live in state handling, not in the math. Use <code>OpenMLS</code>. Spend the saved months on the layer nobody has finished yet.</p>
+      </div>
+      <div class="card verdict">
+        <span class="chip care">Reframe</span>
+        <h3>"Impossible to access"</h3>
+        <p>No system is. Claiming it costs you every serious reviewer in the first five minutes. Ship a written threat model that says what Rotelyx defends against and what it does not — that is what earns trust.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= WHAT IROH IS ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Foundation</p>
+      <h2>What iroh hands you, and what it leaves entirely to you</h2>
+      <p>iroh reached 1.0 on 15 June 2026 and is at 1.0.3. It is a Rust library with bindings for Swift, Kotlin, C, C++, Python and JavaScript — which matters, because your clients are phones. Multipath landed in February 2026; NAT-traversal hardening ran through March and April.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="chip yes">Solved for you</span>
+        <ul>
+          <li><strong>NAT traversal on any network.</strong> Direct hole-punched paths first, relay fallback when the path is impossible.</li>
+          <li><strong>Stateless relays.</strong> Unlike TURN, an iroh relay forwards ciphertext without holding session state. Cheap to run, and it cannot read the stream.</li>
+          <li><strong>Dial by public key.</strong> Identity is location-independent — the same node ID across Wi-Fi, cellular and home.</li>
+          <li><strong>Authenticated transport encryption.</strong> QUIC + TLS 1.3, terminated at the two endpoints.</li>
+          <li><strong>Datagrams and multiplexed streams</strong> in one connection — the media path and the chat path share a socket.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="chip no">Still your problem</span>
+        <ul>
+          <li><strong>Asynchronous delivery.</strong> QUIC needs both peers live. Phones are not live. Nothing in iroh stores a message for an offline recipient.</li>
+          <li><strong>Message-level crypto.</strong> No ratcheting, no post-compromise security, no group keys, no multi-device.</li>
+          <li><strong>Metadata.</strong> A relay sees which node ID talks to which node ID. That is the social graph, in the clear, at the one place you were trying to make blind.</li>
+          <li><strong>Prekeys and rendezvous.</strong> Something must publish "here is how to reach and encrypt to this identity" before the first connection exists.</li>
+          <li><strong>The media stack.</strong> Transport ≠ jitter buffer, echo cancellation, congestion control. See below — this is the real cost.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="pull">iroh gives you a private pipe. It does not give you a private system.</p>
+  </section>
+
+  <!-- ================= THE STACK ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Architecture</p>
+      <h2>Five layers, two of which you actually build</h2>
+      <p>Defence in depth means the transport encryption and the message encryption are independent. If TLS 1.3 in QUIC were broken tomorrow, L2 would still hold. If a device leaked an MLS epoch key, L1 and L0 would still deny an eavesdropper the raw stream. Never let one layer's key material derive from another's.</p>
+    </div>
+
+    <div class="stack">
+      <div class="layer ours">
+        <div class="lid"><b>L4</b><span>app</span></div>
+        <div>
+          <div class="lname">Client &amp; identity surface</div>
+          <div class="ldesc">Safety-number verification, device management, contact discovery without a phone number, key-change warnings. The place most "secure" messengers actually fail.</div>
+        </div>
+        <div class="lowner"><span>you</span><br>Rust core + UniFFI</div>
+      </div>
+      <div class="layer ours">
+        <div class="lid"><b>L3</b><span>envelope</span></div>
+        <div>
+          <div class="lname">Sealed envelopes &amp; blind delivery</div>
+          <div class="ldesc">Sealed sender, fixed-size padding buckets, rotating recipient tags, short-TTL store-and-forward for offline peers. This layer is where you beat Signal, not L2.</div>
+        </div>
+        <div class="lowner"><span>you</span><br>the novel part</div>
+      </div>
+      <div class="layer ours">
+        <div class="lid"><b>L2</b><span>message</span></div>
+        <div>
+          <div class="lname">Group &amp; message crypto — MLS</div>
+          <div class="ldesc">RFC 9420 via OpenMLS. Forward secrecy, post-compromise security, O(log n) group rekeying, multi-device as a first-class concept. Wrapped in a hybrid PQ combiner.</div>
+        </div>
+        <div class="lowner"><span>adopt</span><br>openmls + ML-KEM</div>
+      </div>
+      <div class="layer ours">
+        <div class="lid"><b>L1</b><span>transport</span></div>
+        <div>
+          <div class="lname">QUIC + TLS 1.3</div>
+          <div class="ldesc">Authenticated, encrypted, multiplexed. Streams for chat and control; datagrams for media. The protocol machinery is derived; the configuration surface is ours, and it has no default that reaches infrastructure we do not operate.</div>
+        </div>
+        <div class="lowner"><span>rotelyx-net</span><br>derived + owned</div>
+      </div>
+      <div class="layer ours">
+        <div class="lid"><b>L0</b><span>path</span></div>
+        <div>
+          <div class="lname">Hole punching, relays, path policy</div>
+          <div class="ldesc">Direct-path upgrade and relay fallback are derived from upstream. Path <em>selection</em> is not: upstream optimises for latency, Rotelyx optimises for metadata resistance. Discovery is deleted outright — rendezvous moves to the sealed L3 mailbox.</div>
+        </div>
+        <div class="lowner"><span>rotelyx-net</span><br>own relays only</div>
+      </div>
+    </div>
+
+    <div class="stack-key">
+      <span><span class="chip care">amber rail</span> layers you own</span>
+      <span>media branches at L1 into RTP over QUIC, keyed from L2</span>
+    </div>
+    <div class="col">
+      <p><strong>What "own" honestly means at L0 and L1.</strong> The derived machinery under <code>rotelyx-net</code> measures 122,786 lines — and half of that is a QUIC state machine (a fork of quinn) that upstream did not write either, while the hole-punching core is BSD-3 code derived from Tailscale. Rotelyx owns the parts where privacy is actually decided: relay policy, path selection, and discovery. Discovery is deleted rather than configured off, because upstream's default publishes your public key to a third-party DNS zone on every startup. The defensible claim is "our own transport, derived and substantially rewritten for metadata resistance" — not "written from scratch", which would be false and checkable.</p>
+    </div>
+  </section>
+
+  <!-- ================= CRYPTO ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">L2 · the decision that matters most</p>
+      <h2>Why MLS, and where you can genuinely go beyond the state of the art</h2>
+      <p>The Double Ratchet is a <em>two-party</em> protocol. Every messenger that stretched it to groups did so with sender keys, which rekey in O(n²) and degrade post-compromise security exactly when a group is large enough to matter. MLS was built for this and 2026 is the year it stopped being theoretical: Discord ships it for end-to-end encrypted voice and video, and Google and Apple began rolling MLS over RCS in May.</p>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <h3>What you adopt unchanged</h3>
+        <p><code>openmls</code> for the group state machine, the tree, the epochs and the ratcheting. It is the most-reviewed Rust MLS implementation and it is doing the part that is hardest to get right: state.</p>
+      </div>
+      <div class="card">
+        <h3>What you actually invent</h3>
+        <p>A hybrid post-quantum combiner over MLS. RFC 9420's ciphersuites are all classical, and PQ suites are still in draft. Building X25519 + ML-KEM-768 hybrid key agreement in from day one is a real contribution — and the correct place to spend an audit budget.</p>
+      </div>
+      <div class="card">
+        <h3>What you deliberately skip</h3>
+        <p>Writing a ratchet. Signal's own team needed PQXDH and then SPQR over several years, with formal analysis, to get post-quantum ratcheting right. That is the benchmark a homemade ratchet is competing against.</p>
+      </div>
+    </div>
+
+    <p class="pull">Custom crypto is not how you beat Signal. Metadata is.</p>
+
+    <div class="col">
+      <p>The failures in a hand-rolled ratchet are almost never algebraic. They are nonce reuse under concurrency, state rollback after a crash or a restored backup, unbounded skipped-message key storage turned into a memory-exhaustion attack, replay across device re-registration, and non-constant-time comparisons. Every one of those is an implementation bug that a specification cannot save you from, and every one of them has shipped in a real product.</p>
+    </div>
+  </section>
+
+  <!-- ================= TOPOLOGY ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Topology · unresolved</p>
+      <h2>"One private server" and "the phone hosts everything" cannot both be true</h2>
+      <p>You described two different systems. They pull in opposite directions and the choice changes the threat model, the mobile engineering, and whether the product is usable at all. Here is the honest trade.</p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Topology</th>
+            <th>Offline messages</th>
+            <th>Metadata exposure</th>
+            <th>Mobile viability</th>
+            <th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Pure P2P<br><span style="font-weight:400;color:var(--ink-2)">phone hosts, Kik-style</span></td>
+            <td class="t-risk">None — both peers must be online</td>
+            <td class="t-good">Relay sees node-ID pairs only</td>
+            <td class="t-risk">iOS kills background sockets. Dead on arrival.</td>
+            <td class="t-risk">Not shippable alone</td>
+          </tr>
+          <tr>
+            <td>Single central server</td>
+            <td class="t-good">Reliable</td>
+            <td class="t-risk">One host sees the entire social graph</td>
+            <td class="t-good">Straightforward</td>
+            <td class="t-risk">Recreates what you are escaping</td>
+          </tr>
+          <tr>
+            <td><strong>Blind mailbox + P2P</strong><br><span style="font-weight:400;color:var(--ink-2)">recommended</span></td>
+            <td class="t-good">Opaque envelopes, short TTL, deleted on delivery</td>
+            <td class="t-mid">Rotating tags, sealed sender, padded sizes</td>
+            <td class="t-good">Silent push wakes the P2P session</td>
+            <td class="t-good">Ship this</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col">
+      <p>The recommended shape: when both peers are online, everything — messages, media, calls — flows direct over iroh and touches no server you operate. When the recipient is offline, the sender drops a fixed-size sealed envelope addressed to a rotating pseudonymous tag into a mailbox node that never learns the sender, never learns the plaintext, and deletes on delivery or TTL. The mailbox is self-hostable, so any user or community can run their own — that is the Kik-style autonomy you want, made survivable on real phones.</p>
+      <p>Push notifications are the leak nobody designs around. Apple and Google see that <em>some</em> message arrived for a device. Mitigate with content-free silent wakes, jittered delivery, and decoy pushes — and then write down in the threat model that you did not solve it, because you did not.</p>
+    </div>
+  </section>
+
+  <!-- ================= CALLS ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Media</p>
+      <h2>Dropping WebRTC is correct and more expensive than it looks</h2>
+      <p>The transport argument is settled. <code>iroh-roq</code> carries RTP over QUIC, and n0's own <code>callme</code> already does Opus audio over it with <code>cpal</code> for device access — Linux, macOS, Windows and Android working, iOS untested. It is explicitly experimental, which is the accurate description of where this path stands.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="chip yes">What you gain</span>
+        <ul>
+          <li>No SDP, no ICE agent, no TURN bill, no DTLS handshake on top of a handshake.</li>
+          <li>Relays that cannot read media and cost a fraction of TURN.</li>
+          <li>One connection carrying chat, control and media with independent stream priorities.</li>
+          <li>Media keys derived from MLS, so a call is as end-to-end as a message.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="chip no">What you give up</span>
+        <ul>
+          <li><strong>Fifteen years of libwebrtc tuning.</strong> Jitter buffer, packet-loss concealment, NetEq, acoustic echo cancellation, bandwidth estimation and congestion control are not transport features. You will port or rebuild all of them.</li>
+          <li><strong>Browsers.</strong> WebRTC is still the only peer-to-peer media transport a browser will give you. A web client means a separate path.</li>
+          <li><strong>Group calls above ~6.</strong> Full mesh stops scaling and an SFU breaks E2EE unless you add SFrame-style per-frame encryption keyed from L2.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <p>Plan accordingly: audio-only 1:1 is reachable in weeks on top of <code>callme</code>. Audio that sounds as good as WhatsApp on a bad cellular link is the single longest task in this project — longer than the cryptography.</p>
+    </div>
+  </section>
+
+  <!-- ================= COMPARISON ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Benchmark</p>
+      <h2>Telegram is the wrong target. Signal is the real one.</h2>
+      <p>Beating Telegram is not an achievement worth designing toward — its default chats are readable by its servers and its group chats have no end-to-end encryption at all. Measure against Signal, where the honest reading is: you match on crypto by reusing the same primitives, and you win on the things Signal chose not to fight.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Telegram</th>
+            <th>Signal</th>
+            <th>Rotelyx</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>E2EE by default</td>
+            <td class="t-risk">No — secret chats only, 1:1, mobile only</td>
+            <td class="t-good">Yes</td>
+            <td class="t-good">Yes, no non-E2EE mode exists</td>
+          </tr>
+          <tr>
+            <td>Group E2EE</td>
+            <td class="t-risk">None</td>
+            <td class="t-mid">Sender keys over Double Ratchet</td>
+            <td class="t-good">MLS tree, O(log n) rekey</td>
+          </tr>
+          <tr>
+            <td>Identity</td>
+            <td class="t-risk">Phone number</td>
+            <td class="t-mid">Phone number, usernames layered on</td>
+            <td class="t-good">Ed25519 key, no PII</td>
+          </tr>
+          <tr>
+            <td>Transport</td>
+            <td class="t-mid">MTProto to central servers</td>
+            <td class="t-mid">TLS to central servers</td>
+            <td class="t-good">Direct P2P, blind relay fallback</td>
+          </tr>
+          <tr>
+            <td>Post-quantum</td>
+            <td class="t-risk">No</td>
+            <td class="t-good">PQXDH + PQ ratchet</td>
+            <td class="t-good">Hybrid from day one — if you build it</td>
+          </tr>
+          <tr>
+            <td>Self-hostable</td>
+            <td class="t-risk">No</td>
+            <td class="t-risk">Not practically</td>
+            <td class="t-good">Relay and mailbox both</td>
+          </tr>
+          <tr>
+            <td>Independent audit</td>
+            <td class="t-risk">Protocol criticised repeatedly</td>
+            <td class="t-good">Repeatedly audited, formally analysed</td>
+            <td class="t-risk">None yet — the honest gap</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>That last row is the whole difference between a strong design and a trustworthy product, and no amount of architecture closes it.</p>
+    </div>
+  </section>
+
+  <!-- ================= HARD PARTS ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Cost · ordered by difficulty, hardest first</p>
+      <h2>You asked how hard this is. This is how hard.</h2>
+    </div>
+    <div class="ranked">
+      <div class="rank">
+        <div class="rn">01</div>
+        <div>
+          <h3>The media stack without libwebrtc</h3>
+          <p>Jitter buffer, PLC, echo cancellation, congestion control and bandwidth estimation on lossy mobile networks. Underestimated by roughly an order of magnitude in every project that tries this.</p>
+        </div>
+        <div class="cost">6–12 months</div>
+      </div>
+      <div class="rank">
+        <div class="rn">02</div>
+        <div>
+          <h3>Mobile background lifecycle</h3>
+          <p>iOS will not let you hold a socket. Every design decision downstream of "the phone hosts it" collides with this, and the workaround is push, which is the metadata leak you were avoiding.</p>
+        </div>
+        <div class="cost">2–4 months</div>
+      </div>
+      <div class="rank">
+        <div class="rn">03</div>
+        <div>
+          <h3>Multi-device and encrypted backup</h3>
+          <p>Adding a second device without a server that holds keys, restoring history without a rollback vector, and losing a phone without losing an identity. MLS helps; it does not solve it.</p>
+        </div>
+        <div class="cost">2–3 months</div>
+      </div>
+      <div class="rank">
+        <div class="rn">04</div>
+        <div>
+          <h3>End-to-end encrypted group calls above six</h3>
+          <p>SFrame keyed from MLS epochs, plus an SFU that routes frames it cannot decrypt.</p>
+        </div>
+        <div class="cost">2–3 months</div>
+      </div>
+      <div class="rank">
+        <div class="rn">05</div>
+        <div>
+          <h3>Abuse resistance without identity</h3>
+          <p>No phone number means no spam cost. Proof-of-work handshakes, contact-key invitations, per-user blocklists — all imperfect, all necessary.</p>
+        </div>
+        <div class="cost">ongoing</div>
+      </div>
+      <div class="rank">
+        <div class="rn">06</div>
+        <div>
+          <h3>Independent cryptographic audit</h3>
+          <p>Protocol design plus implementation review by a firm that does this seriously. Non-negotiable before any public security claim.</p>
+        </div>
+        <div class="cost">$50k–150k</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= OPEN SOURCE ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Distribution</p>
+      <h2>Open source it, and say less while doing it</h2>
+    </div>
+    <div class="col">
+      <p>Yes — open source, permissively, from the first commit. A closed security protocol is not evaluable, and an unevaluable protocol has no security claim to make. Kerckhoffs's principle is not a philosophical preference here; it is the only mechanism by which anyone can believe you.</p>
+      <p>What to publish: the protocol specification as a document separate from the code, the Rust core, the threat model, and the test vectors. What to withhold: nothing technical. What to never write in the README: "unbreakable", "impossible to intercept", "military-grade". Those three phrases are how security researchers decide within thirty seconds that a project is not serious, and they are also simply false — every one of them will be disproved by a determined enough adversary against a device endpoint rather than against your cryptography.</p>
+      <p>Publish the threat model as a peer of the code. State plainly: Rotelyx defends against network adversaries, relay operators, mailbox operators and server seizure. It does not defend against a compromised endpoint, a malicious OS, coercion of a participant, or traffic-analysis by a global passive adversary. Naming those honestly makes the claims you <em>do</em> make credible.</p>
+    </div>
+  </section>
+
+  <!-- ================= NEXT ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Sequence</p>
+      <h2>What to build, in this order</h2>
+    </div>
+    <div class="col">
+      <ol class="plain">
+        <li><strong>Threat model document.</strong> Before code. It is what every later decision is checked against.</li>
+        <li><strong>Rust core crate.</strong> iroh endpoint, identity keys, node discovery, connection lifecycle. Prove two devices on different networks connect through a NAT.</li>
+        <li><strong>MLS integration.</strong> OpenMLS group state, 1:1 as a group of two, key packages published through the mailbox. Text messages only.</li>
+        <li><strong>Blind mailbox node.</strong> Sealed sender, padding buckets, rotating tags, TTL deletion. Self-hostable single binary.</li>
+        <li><strong>Hybrid PQ combiner.</strong> X25519 + ML-KEM-768 over the MLS key schedule, with test vectors published for review.</li>
+        <li><strong>Audio calls.</strong> Fork or depend on <code>callme</code>, key the media from MLS exporters.</li>
+        <li><strong>Mobile clients.</strong> UniFFI bindings, background lifecycle, silent push. The point where the project becomes real, and the point where most of the pain arrives.</li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    <div class="col">
+      <p><strong>Open decisions blocking step 1.</strong> Topology confirmation — is the blind mailbox acceptable, or is pure P2P a hard requirement you are willing to pay for in usability? Platform priority — desktop first, or mobile from the start? And whether the post-quantum combiner is in scope for v1 or deferred, because it changes the audit scope and the timeline substantially.</p>
+      <p style="font-size:.83rem">Version claims verified 15 August 2026: iroh 1.0 released 15 June 2026, current 1.0.3. OpenMLS implements RFC 9420. <code>callme</code> and <code>iroh-roq</code> are experimental. Cost estimates are industry ranges, not quotes.</p>
+    </div>
+  </footer>
+
+</div>
