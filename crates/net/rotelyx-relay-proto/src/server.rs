@@ -76,15 +76,69 @@ pub use self::{
     resolver::{DEFAULT_CERT_RELOAD_INTERVAL, reloading_resolver},
 };
 
-const NO_CONTENT_CHALLENGE_HEADER: &str = "X-Iroh-Challenge";
-const NO_CONTENT_RESPONSE_HEADER: &str = "X-Iroh-Response";
+const NO_CONTENT_CHALLENGE_HEADER: &str = "X-Rotelyx-Challenge";
+const NO_CONTENT_RESPONSE_HEADER: &str = "X-Rotelyx-Response";
 const NOTFOUND: &[u8] = b"Not Found";
 const ROBOTS_TXT: &[u8] = b"User-agent: *\nDisallow: /\n";
-const INDEX: &[u8] = br#"<html><body>
-<h1>Iroh Relay</h1>
+// What anybody who visits the relay in a browser sees.
+//
+// It said "Iroh Relay" with a link to a third-party site until 16 August 2026,
+// which publicly claimed to be somebody else's software.
+//
+// Everything is inlined: the mark is a data URI and there is no stylesheet,
+// script or font fetched from anywhere. A relay that pulled a resource from a
+// CDN would hand that CDN a log of everyone who looked at it, which is the
+// same class of leak the relay design exists to avoid.
+const INDEX: &[u8] = br#"<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Rotelyx Relay</title>
+<link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=">
+<style>
+:root{--bg:#14120f;--panel:#1c1a16;--ink:#e9e4da;--dim:#9c958a;--rule:#363129;
+      --accent:#6a31ee}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);
+     font:15px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+     display:flex;align-items:center;justify-content:center;padding:32px}
+main{max-width:560px;width:100%}
+.mark{width:60px;height:60px;margin-bottom:26px;
+      background:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=") center/contain no-repeat;
+      filter:drop-shadow(0 0 22px rgba(106,49,238,.4))}
+h1{margin:0 0 6px;font-size:1.45rem;font-weight:650;letter-spacing:-.01em}
+.tag{margin:0 0 28px;font:600 .66rem ui-monospace,SFMono-Regular,Menlo,monospace;
+     letter-spacing:.18em;text-transform:uppercase;color:var(--accent)}
+p{margin:0 0 16px;color:var(--dim);max-width:60ch}
+p strong{color:var(--ink);font-weight:600}
+.card{background:var(--panel);border:1px solid var(--rule);
+      border-radius:5px;padding:16px 18px;margin:26px 0}
+.card p{margin:0;font-size:.92rem}
+footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--rule);
+       font:600 .64rem ui-monospace,SFMono-Regular,Menlo,monospace;
+       letter-spacing:.14em;text-transform:uppercase;color:#6b6459}
+</style></head><body><main>
+<div class="mark"></div>
+<p class="tag">Relay</p>
+<h1>Rotelyx Relay</h1>
 <p>
-  This is an <a href="https://rotelyx_transport.computer/">Iroh</a> Relay server.
+  This host forwards encrypted traffic between peers that cannot reach each
+  other directly. It <strong>holds no keys</strong> and cannot read what passes
+  through it.
 </p>
+<div class="card"><p>
+  It does observe <strong>which endpoints connect, and when</strong>. That is
+  inherent to relayed transport and no configuration removes it, which is why
+  Rotelyx prefers any direct path over any relayed one, at any latency.
+</p></div>
+<p>
+  Access is restricted to an allowlist. If you are not on it, connections are
+  refused without explanation: a detailed reason would turn this host into an
+  oracle for who it serves.
+</p>
+<footer>Rotelyx &middot; pre-release &middot; unaudited</footer>
+</main></body></html>
 "#;
 const TLS_HEADERS: [(&str, &str); 2] = [
     (
@@ -92,8 +146,20 @@ const TLS_HEADERS: [(&str, &str); 2] = [
         "max-age=63072000; includeSubDomains",
     ),
     (
+        // `default-src 'none'` blocks everything, which was correct when the
+        // landing page was bare markup and is not now: it also blocked the
+        // page's own inline stylesheet and its data URI mark, which is why the
+        // page rendered with no styling and no logo.
+        //
+        // The two additions are the minimum to let the page render, and both
+        // are still closed to the network: `'unsafe-inline'` permits only the
+        // stylesheet we ship in the same response, and `data:` permits only
+        // bytes already inside it. Nothing may be fetched from anywhere, which
+        // is the property that matters for a relay.
         "Content-Security-Policy",
-        "default-src 'none'; frame-ancestors 'none'; form-action 'none'; base-uri 'self'; block-all-mixed-content; plugin-types 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; img-src data:; \
+         frame-ancestors 'none'; form-action 'none'; base-uri 'self'; \
+         block-all-mixed-content",
     ),
 ];
 
@@ -1331,7 +1397,7 @@ mod tests {
         let response = client.get(&url).send().await.unwrap();
         assert_eq!(response.status(), 200);
         let body = response.text().await.unwrap();
-        assert!(body.contains("rotelyx_transport.computer"));
+        assert!(body.contains("Rotelyx Relay"));
     }
 
     #[tokio::test]

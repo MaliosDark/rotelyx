@@ -1,6 +1,6 @@
 //! Re-exports of abstractions and implementations deemed useful and good by number 0 engineers.
 //!
-//! Read up more on our challenges with rust's async: <https://www.rotelyx_transport.computer/blog/async-rust-challenges-in-rotelyx_transport>
+//! Read up more on our challenges with rust's async: the upstream iroh blog
 //!
 //! This library also allows importing a single [`task`] and [`time`] module that'll work
 //! in `wasm*-*-unknown` targets, using `wasm_bindgen` and `wasm_bindgen_futures`, but mirroring

@@ -214,7 +214,7 @@ mod tests {
     }
 
     fn relay(port: u16) -> transports::FourTuple {
-        let url = format!("https://relay{port}.rotelyx_transport.computer")
+        let url = format!("https://relay{port}.example.invalid")
             .parse::<RelayUrl>()
             .unwrap();
         transports::FourTuple::from_remote(Addr::Relay(

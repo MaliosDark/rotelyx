@@ -39,6 +39,11 @@ const FOREIGN_HOSTS: &[&str] = &[
     "relay.n0.",
     "staging-relay.n0.",
     ".n0.rotelyx",
+    // The rename also rewrote `iroh` inside wire identifiers and DNS names,
+    // producing shapes like `dns.rotelyx_transport.link`. Matching the Rust
+    // module spelling catches those.
+    "rotelyx_transport.link",
+    "rotelyx_transport.computer",
 ];
 
 /// Environment variables that let an outside party redirect our traffic.

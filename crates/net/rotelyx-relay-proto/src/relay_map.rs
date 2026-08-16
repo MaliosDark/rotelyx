@@ -225,7 +225,7 @@ impl fmt::Display for RelayMap {
 /// Information on a specific relay server.
 ///
 /// Includes the Url where it can be dialed.
-// Please note that this is documented in the `rotelyx_transport.computer` repository under
+// Please note that this is documented in the upstream iroh repository under
 // `src/app/docs/reference/config/page.mdx`.  Any changes to this need to be updated there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 #[non_exhaustive]

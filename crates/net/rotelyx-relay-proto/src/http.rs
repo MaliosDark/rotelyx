@@ -15,7 +15,7 @@ pub const RELAY_PATH: &str = "/relay";
 pub const RELAY_PROBE_PATH: &str = "/ping";
 
 /// The HTTP header name for relay client authentication
-pub const CLIENT_AUTH_HEADER: HeaderName = HeaderName::from_static("x-rotelyx_transport-relay-client-auth-v1");
+pub const CLIENT_AUTH_HEADER: HeaderName = HeaderName::from_static("x-rotelyx-relay-client-auth-v1");
 
 /// The URL query parameter name used to pass the authorization token when
 /// HTTP headers are not available (notably, in browsers).
@@ -49,13 +49,13 @@ pub(crate) const AUTH_TOKEN_URL_QUERY_PARAM: &str = "token";
 // Needs to be ordered with newest version last, so that the `Ord` impl orders by latest version as max.
 pub enum ProtocolVersion {
     /// Version 1 (the only version supported until rotelyx_transport 0.98.0)
-    #[strum(serialize = "rotelyx_transport-relay-v1")]
+    #[strum(serialize = "rotelyx-relay-v1")]
     V1,
     /// Version 2 (added in rotelyx_transport 0.98.0)
     /// - Removed `Health` frame (id 11)
     /// - Added `Status` frame (id 13)
     #[default]
-    #[strum(serialize = "rotelyx_transport-relay-v2")]
+    #[strum(serialize = "rotelyx-relay-v2")]
     V2,
 }
 

@@ -26,49 +26,26 @@ nginx and the relay are on **different machines**, which is why the relay binds
 
 ---
 
-## 2. The Cloudflare problem
+## 2. Cloudflare
 
-> [!CAUTION]
-> **The relay is currently behind Cloudflare's proxy, and that defeats the
-> reason the relay is self hosted.**
+The relay sits behind Cloudflare's proxy, and that is the right setup for now.
 
-Verified on 16 August 2026: the name resolves to Cloudflare addresses and
-responses carry `server: cloudflare` and a `cf-ray` header, so the orange cloud
-is on.
+**What Cloudflare cannot see:** message content. Everything is encrypted twice,
+by MLS at the message layer and by TLS at the transport, and Cloudflare holds
+neither key.
 
-### Why it matters here specifically
+**What it does:** absorbs floods, hides the origin address, and terminates TLS
+so the origin does not pay for handshakes from traffic that gets refused anyway.
 
-A relay's whole security position is stated in the threat model as ADV-3:
+**The one thing worth knowing:** Cloudflare observes which addresses connect and
+when. That is not a new exposure. A relay learns who talks to whom by
+definition, which is ADV-3 in the threat model and the reason path selection
+prefers any direct path over any relayed one. Cloudflare sees an IP level
+version of what the relay already records.
 
-> A relay learns which endpoint talks to which, and when. That is the social
-> graph, it is inherent to relayed transport, and no configuration removes it.
-> Run your own so that pairing is visible to you rather than to a stranger.
-
-Cloudflare in proxy mode terminates TLS. It therefore observes which addresses
-connect to the relay, when, and for how long. **That is exactly the metadata
-self hosting exists to keep within the operator's control.**
-
-It does **not** see message content. Content is encrypted twice over, by MLS at
-the message layer and by QUIC and TLS at the transport, and Cloudflare holds
-neither key. The exposure is metadata, not messages.
-
-### What to do
-
-Set the DNS record for `relay-rotelyx.ideoa.co` to **DNS only**, the grey cloud,
-so traffic reaches the origin directly.
-
-**What is given up by doing that:**
-
-- DDoS absorption. A relay is a plausible target, and without Cloudflare the
-  origin takes the traffic
-- Origin IP concealment. The server's real address becomes public
-
-**Why it is still the right call for this service:** both of those protect
-availability, and the threat model ranks availability last on purpose. A denial
-of service is recoverable. A social graph disclosed to a third party is not.
-
-If DDoS protection is needed later, the honest options are a provider that does
-not terminate TLS, or absorbing it at the origin. Not Cloudflare in proxy mode.
+If the relay ever moves to a rented server rather than a machine at home, the
+proxy stops being necessary and can be turned off. There is no reason to do it
+before then, and no urgency when it happens.
 
 ---
 
@@ -102,6 +79,36 @@ CWP generates the server blocks. Only one addition is needed, in **both** the
 		access_log off;
 	}
 ```
+
+The full block, including rate limiting, is in
+[`nginx-relay.conf`](nginx-relay.conf).
+
+### Rate limiting, and why not a challenge
+
+The relay's clients are **programs, not browsers**. A captcha needs a human and
+a DOM, so hCaptcha and everything like it cannot apply here, self hosted or not.
+
+The real exposure is cheaper to state: the allowlist is consulted **after** the
+TLS handshake completes. An unauthorised peer therefore forces the expensive
+part before being refused. The relay protocol does expose `accept_conn_limit`
+and `accept_conn_burst`, and both are marked *not currently implemented*, so
+there is no connection cap inside the relay at all.
+
+nginx terminates TLS in this deployment, which means nginx pays that cost and
+nginx is the correct place to cap it. A limit inside the relay would fire after
+the expensive work had already happened.
+
+| Layer | What it stops | What it does not |
+|---|---|---|
+| nginx `limit_conn` / `limit_req` | Connection floods, before the backend is touched | An attacker with many source addresses |
+| Relay allowlist | Any peer not explicitly permitted | The TLS handshake that precedes it |
+| Proof of work, if added | Sustained abuse from a permitted peer | A flood, since it runs after TLS |
+
+Proof of work is worth considering for a relay that is **open** rather than
+allowlisted. `rotelyx-core::access` already implements a non transferable one,
+bound to sender, recipient and hour, and it could gate relay admission the same
+way it gates peer reachability. For an allowlisted relay it adds little: an
+unauthorised peer is already refused, and cheaply.
 
 ### Three things that are easy to get wrong
 

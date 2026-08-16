@@ -109,11 +109,8 @@ Requires a relay on a public address and two devices behind different NATs.
 Everything needed for this is built.
 
 - [x] DNS, nginx and TLS configured for `relay-rotelyx.ideoa.co`
-- [!] **Turn off the Cloudflare proxy for the relay record.** It terminates TLS
-      and therefore observes which endpoints connect, which is the metadata self
-      hosting exists to protect. Set the record to DNS only
-- [!] Deploy the `rotelyx-relay` binary to 192.168.68.46. Currently answering
-      502 because nothing is listening on 3340
+- [x] Relay running and verified end to end: `101 Switching Protocols` through
+      Cloudflare and nginx
 - [ ] Measure hole punch success rate across NAT types
 - [ ] Measure how often `PreferDirect` costs a connection that `Fastest` would
       have kept
@@ -141,14 +138,24 @@ Everything needed for this is built.
 - [ ] Encrypted MLS group state at rest
 - [ ] A backup format that does not create a state rollback vector
 
-### 4. Multi device
+### 4. Relay hardening
+
+- [x] nginx connection and request rate limits, applied before the backend is
+      reached
+- [ ] Implement `accept_conn_limit` and `accept_conn_burst`, which the vendored
+      relay declares and marks as having no effect
+- [?] Whether an open relay should require a proof of work for admission. The
+      construction already exists in `rotelyx-core::access`; the question is
+      whether an open relay is a configuration we want to support at all
+
+### 5. Multi device
 
 - [?] Which device authorises the next one, and what the user sees when it
       happens
 - [ ] MLS multi device as separate leaves rather than shared keys
 - [ ] Device revocation that is visible to every conversation partner
 
-### 5. Audio calls
+### 6. Audio calls
 
 Transport is settled: RTP over QUIC. The media stack is the long part, and by a
 wide margin the largest single task remaining in the project.
@@ -162,7 +169,7 @@ wide margin the largest single task remaining in the project.
 - [ ] Group calls above six participants, which needs SFrame and a forwarding
       unit that cannot decrypt
 
-### 6. Mobile clients
+### 7. Mobile clients
 
 - [ ] UniFFI bindings for Swift and Kotlin
 - [ ] Background lifecycle. iOS will not hold a socket, and every design

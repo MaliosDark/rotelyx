@@ -19,8 +19,6 @@
 //! - `<z32-endpoint-id>` is the [z-base-32] encoding of the [`EndpointId`].
 //!
 //! - `<origin-domain>` is the domain name of the publishing DNS server,
-//!   [`N0_DNS_ENDPOINT_ORIGIN_PROD`] is the server operated by number0 for production.
-//!   [`N0_DNS_ENDPOINT_ORIGIN_STAGING`] is the server operated by number0 for testing.
 //!
 //! - `TXT` is the DNS record type.
 //!
@@ -37,8 +35,6 @@
 //! [RFC1464]: https://www.rfc-editor.org/rfc/rfc1464
 //! [`RelayUrl`]: rotelyx_transport_base::RelayUrl
 //! [`IROH_TXT_NAME`]: crate::IROH_TXT_NAME
-//! [`N0_DNS_ENDPOINT_ORIGIN_PROD`]: crate::dns::N0_DNS_ENDPOINT_ORIGIN_PROD
-//! [`N0_DNS_ENDPOINT_ORIGIN_STAGING`]: crate::dns::N0_DNS_ENDPOINT_ORIGIN_STAGING
 
 use std::{
     borrow::Cow,

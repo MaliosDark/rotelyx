@@ -820,13 +820,6 @@ licence obligation and must not be removed.
 Hosts, nginx configuration, firewall rules and verification commands are in
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-> [!CAUTION]
-> **A relay must not sit behind a TLS terminating CDN.** The relay's entire
-> security position is that it learns who talks to whom and that this is
-> therefore visible to an operator you chose rather than to a stranger. A proxy
-> that terminates TLS observes exactly that. Content stays encrypted either way,
-> but the metadata is the thing being protected.
-
 ## Roadmap
 
 Full status in [`TODO.md`](TODO.md). The short version:

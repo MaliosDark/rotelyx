@@ -36,11 +36,9 @@ pub use crate::android::install_android_jni_context;
 
 /// Default DNS query timeout.
 pub const DNS_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// The n0 address lookup DNS origin, for production.
-pub const N0_DNS_ENDPOINT_ORIGIN_PROD: &str = "dns.rotelyx_transport.link.";
-/// The n0 address lookup DNS origin, for testing.
-pub const N0_DNS_ENDPOINT_ORIGIN_STAGING: &str = "staging-dns.rotelyx_transport.link.";
+// Rotelyx: the third-party DNS origin constants are deleted. They named a
+// zone operated by somebody else and survived the earlier cleanup only
+// because the rebrand renamed them out of the guard's reach.
 
 /// Percent of total delay to jitter. 20 means +/- 20% of delay.
 const MAX_JITTER_PERCENT: u64 = 20;

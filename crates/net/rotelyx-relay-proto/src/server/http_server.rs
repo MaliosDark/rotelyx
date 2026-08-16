@@ -1377,7 +1377,7 @@ mod tests {
                 .headers()
                 .get(SEC_WEBSOCKET_PROTOCOL)
                 .expect("Sec-WebSocket-Protocol response header is present");
-            assert_eq!(negotiated, "rotelyx_transport-relay-v2", "offered={offered}");
+            assert_eq!(negotiated, "rotelyx-relay-v2", "offered={offered}");
         }
 
         server.shutdown();
