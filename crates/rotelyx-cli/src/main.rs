@@ -9,6 +9,7 @@
 //!   terminal 2:  rotelyx connect <address printed by terminal 1>
 //! ```
 
+mod audio;
 mod handshake;
 mod keyfile;
 
@@ -23,7 +24,12 @@ use rotelyx_core::{
     RotelyxEndpoint, RotelyxId,
 };
 use rotelyx_crypto::{Conversation, Member};
-use rotelyx_net::{EndpointAddr, NetConfig};
+use rotelyx_net::{EndpointAddr, NetConfig, PathPolicy, RelayPolicy, RelayUrl};
+use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder, LayeredFrame};
+use rotelyx_codec::mdct::{FRAME, WINDOW};
+use rotelyx_media::transport::{MediaIn, MediaOut};
+use rotelyx_media::SenderKeys;
+use std::collections::HashMap;
 
 #[derive(Parser, Debug)]
 #[command(name = "rotelyx", about = "Rotelyx protocol harness")]
@@ -63,6 +69,15 @@ enum Command {
         /// free identities being free to spam from.
         #[arg(long)]
         open: bool,
+
+        /// Route through this relay, and never take a direct path.
+        ///
+        /// Without it the session is direct only, which is fine for text and
+        /// impossible for a call: audio over a direct path shows the other side
+        /// your address, and `MediaOut` refuses to exist on a connection that
+        /// permits one. So `/call` needs this and says so if it is missing.
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
     },
 
     /// Refuse a specific identity from now on. Persists across restarts.
@@ -88,6 +103,13 @@ enum Command {
         /// The invitation code the peer issued.
         #[arg(long)]
         invite: Option<String>,
+
+        /// Route through this relay, and never take a direct path.
+        ///
+        /// Must match what the listening side used, and is what a call needs.
+        /// See `Listen`.
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
     },
 }
 
@@ -114,18 +136,255 @@ fn print_safety_number(me: &Identity, peer: RotelyxId) {
 }
 
 /// Read lines from the terminal and send them; print what arrives.
-async fn chat(session: Session, mut conversation: Conversation, me: Member) -> Result<()> {
+/// Bytes of codec payload per 20 ms frame.
+///
+/// 60 is what the layered encoder is tuned around elsewhere in this repository,
+/// and at 50 frames a second it is 24 kbit/s before framing. Chosen to match the
+/// measurements rather than reopened here.
+const CALL_BYTES_PER_FRAME: usize = 60;
+
+/// This member's sender index, agreed without exchanging anything.
+///
+/// Every frame is keyed per sender, so the two sides must not pick the same
+/// index and must each know the other's. Sorting the roster by signature key and
+/// taking a position gives both sides the same answer from state they already
+/// share, which beats adding a negotiation that could disagree.
+fn sender_index(conversation: &Conversation, me: &Member) -> Result<u8> {
+    let mine = me.signature_key();
+    let mut keys: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.signature_key).collect();
+    keys.sort();
+    let position = keys
+        .iter()
+        .position(|k| *k == mine)
+        .context("this member is not in the roster it belongs to")?;
+    u8::try_from(position).context("more members than a sender index can hold")
+}
+
+
+/// A call in progress.
+///
+/// Everything a call needs lives here so that ending one is a `drop`: the
+/// devices close, the codec state goes, and the keys are zeroed by the types
+/// that hold them. A call that ends by setting a boolean tends to leave a
+/// microphone open.
+struct Call {
+    capture: audio::Capture,
+    playback: audio::Playback,
+    out: MediaOut,
+    encoder: LayeredEncoder,
+    decoder: LayeredDecoder,
+    /// One receiver per sender, because a frame is keyed per sender and a single
+    /// receiver keyed with the wrong index authenticates nothing. This was got
+    /// wrong once already and a loopback test did not catch it.
+    inbound: HashMap<u8, MediaIn>,
+    base: [u8; 32],
+    /// The encoder needs `WINDOW` samples and advances `FRAME`, so half of every
+    /// window is the tail of the last one and has to be kept.
+    window: Vec<f32>,
+    frames_out: u64,
+    frames_in: u64,
+    /// Microphone samples thrown away because the call could not keep up.
+    dropped_samples: u64,
+}
+
+impl Call {
+    fn start(conversation: &Conversation, me: &Member, paths: PathPolicy) -> Result<Self> {
+        // Refused before a device is opened, so a user on a direct session does
+        // not get a microphone light and then an error.
+        if paths.permits_direct() {
+            bail!(
+                "this session may take a direct path, and a direct path shows the \
+                 other side your address. Start both ends with --relay <url> to call"
+            );
+        }
+
+        let base = conversation
+            .media_base_key(me)
+            .context("deriving the call key from the group")?;
+        let index = sender_index(conversation, me)?;
+
+        let out = MediaOut::new(paths, SenderKeys::derive(&base, index))
+            .context("preparing to send audio")?;
+
+        // The devices last, so a configuration error costs nothing.
+        let capture = audio::Capture::open()?;
+        let playback = audio::Playback::open()?;
+
+        Ok(Self {
+            capture,
+            playback,
+            out,
+            encoder: LayeredEncoder::new(CALL_BYTES_PER_FRAME),
+            decoder: LayeredDecoder::new(CALL_BYTES_PER_FRAME),
+            inbound: HashMap::new(),
+            base,
+            window: Vec::with_capacity(WINDOW),
+            frames_out: 0,
+            frames_in: 0,
+            dropped_samples: 0,
+        })
+    }
+
+    /// Encode and send every whole frame the microphone has ready.
+    ///
+    /// # Why this drains rather than sending one
+    ///
+    /// A tick every 20 ms and one frame per tick is exactly the right rate on
+    /// paper and wrong in practice: a timer that fires late never fires twice to
+    /// make up for it, so every late tick leaves 20 ms in the buffer that nothing
+    /// removes. Measured on the first real call, that reached **360 ms of
+    /// microphone waiting** and stayed there, which is delay the person on the
+    /// other end hears for the rest of the conversation.
+    ///
+    /// Draining means a late tick catches up. The bound stops a pathological
+    /// case from turning catching up into a stall of its own: past it the
+    /// backlog is dropped rather than sent, because audio that late is worth
+    /// less than the delay of sending it.
+    fn send_all_ready(&mut self, conn: &rotelyx_net::Connection) -> Result<()> {
+        /// At most this many frames in one tick. Five is 100 ms, enough to
+        /// absorb an ordinary scheduling hiccup and not enough to spend a tick
+        /// encoding.
+        const MAX_PER_TICK: usize = 5;
+
+        for _ in 0..MAX_PER_TICK {
+            if !self.send_one(conn)? {
+                return Ok(());
+            }
+        }
+
+        // Still behind after draining what a tick allows: the excess is old
+        // audio and keeping it only moves the delay forward.
+        let keep = WINDOW + FRAME * MAX_PER_TICK;
+        if self.capture.backlog() > keep {
+            let dropped = self.capture.backlog() - keep;
+            self.capture.discard(dropped);
+            self.dropped_samples += dropped as u64;
+        }
+        Ok(())
+    }
+
+    /// One frame. `false` when the microphone has not produced a whole one.
+    fn send_one(&mut self, conn: &rotelyx_net::Connection) -> Result<bool> {
+        // Top the window up to a full one before encoding anything.
+        while self.window.len() < WINDOW {
+            let Some(more) = self.capture.take(FRAME) else {
+                return Ok(false);
+            };
+            self.window.extend_from_slice(&more);
+        }
+
+        let frame = self
+            .encoder
+            .encode(&self.window[..WINDOW])
+            .context("encoding")?;
+
+        // Half the window is the next window's history.
+        self.window.drain(..FRAME);
+
+        // What the network will carry, which the transport reports rather than
+        // this guessing. A frame trimmed to the budget still decodes; it just
+        // decodes rougher.
+        let budget = self
+            .out
+            .payload_budget(conn.max_datagram_size().unwrap_or(1200));
+        let datagram = self
+            .out
+            .frame(&frame.within(budget).to_bytes())
+            .context("protecting the frame")?;
+
+        // Dropped rather than queued when the connection is congested. A late
+        // voice frame is worth nothing, and waiting for it delays every frame
+        // behind it.
+        if conn.send_datagram(datagram.into()).is_ok() {
+            self.frames_out += 1;
+        }
+        Ok(true)
+    }
+
+    /// Authenticate, decode and play one datagram.
+    fn receive_one(&mut self, datagram: &[u8]) {
+        // Which sender, from the header, before any key is used.
+        let Ok(sender) = rotelyx_media::claimed_sender(datagram) else {
+            return;
+        };
+
+        let inbound = self.inbound.entry(sender).or_insert_with(|| {
+            MediaIn::new(PathPolicy::RelayOnly, SenderKeys::derive(&self.base, sender))
+                .expect("RelayOnly is the policy this call refused to start without")
+        });
+
+        // `None` is a frame that failed to authenticate, was replayed, or was
+        // too late. All three are the same answer: it is not played.
+        let Some(payload) = inbound.frame(datagram) else {
+            return;
+        };
+        let Ok(parsed) = LayeredFrame::from_bytes(&payload) else {
+            return;
+        };
+        let Ok(audio) = self.decoder.decode(&parsed) else {
+            return;
+        };
+
+        self.playback.queue(&audio);
+        self.frames_in += 1;
+    }
+}
+
+async fn chat(
+    session: Session,
+    mut conversation: Conversation,
+    me: Member,
+    paths: PathPolicy,
+) -> Result<()> {
     let (mut send, mut recv, conn) = session.split_for_chat();
 
     let reader = BufReader::new(tokio::io::stdin());
     let mut lines = reader.lines();
 
-    println!("connected: type to send, Ctrl-D to quit");
+    // A call, once one is running. `None` the rest of the time, so a session
+    // that never calls opens no device and allocates no codec.
+    let mut call: Option<Call> = None;
+
+    // Ticks whether or not a call is running. An interval that is created when a
+    // call starts would need the select to change shape, and one tick every 20 ms
+    // on an idle session costs nothing worth the complication.
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    println!("connected: type to send, /call to talk, Ctrl-D to quit");
 
     loop {
         tokio::select! {
             line = lines.next_line() => {
                 match line.context("reading stdin")? {
+                    Some(text) if text.trim() == "/call" => {
+                        match call {
+                            Some(_) => println!("[already on a call: /hang to stop]"),
+                            None => match Call::start(&conversation, &me, paths) {
+                                Ok(c) => {
+                                    println!(
+                                        "[call started: {} kbit/s, microphone is {}]",
+                                        CALL_BYTES_PER_FRAME * 50 * 8 / 1000,
+                                        if c.capture.channels() == 1 { "mono" } else { "stereo, averaged" }
+                                    );
+                                    call = Some(c);
+                                }
+                                Err(e) => println!("[cannot call: {e:#}]"),
+                            },
+                        }
+                    }
+                    Some(text) if text.trim() == "/hang" => {
+                        match call.take() {
+                            Some(c) => println!(
+                                "[call ended: {} sent, {} received, {} ms queued, {} ms of microphone dropped]",
+                                c.frames_out,
+                                c.frames_in,
+                                c.playback.backlog() * 1000 / rotelyx_codec::mdct::SAMPLE_RATE as usize,
+                                c.dropped_samples as usize * 1000 / rotelyx_codec::mdct::SAMPLE_RATE as usize
+                            ),
+                            None => println!("[not on a call]"),
+                        }
+                    }
                     Some(text) => {
                         let ciphertext = conversation
                             .send(&me, text.as_bytes())
@@ -136,6 +395,36 @@ async fn chat(session: Session, mut conversation: Conversation, me: Member) -> R
                             .context("sending")?;
                     }
                     None => break,
+                }
+            }
+
+            // One frame of microphone, encoded and sent. Nothing happens here
+            // when no call is running, and nothing happens when the microphone
+            // has not yet produced a whole window: a partial window padded with
+            // zeros is an audible click every 20 ms.
+            _ = tick.tick() => {
+                if let Some(c) = call.as_mut() {
+                    if let Err(e) = c.send_all_ready(&conn) {
+                        println!("[call ended: {e:#}]");
+                        call = None;
+                    }
+                }
+            }
+
+            // Audio in. Read even with no call running, because a datagram that
+            // is never read is a datagram the peer keeps retrying.
+            datagram = conn.read_datagram() => {
+                match datagram {
+                    Ok(bytes) => {
+                        if let Some(c) = call.as_mut() {
+                            c.receive_one(&bytes);
+                        }
+                    }
+                    Err(e) => {
+                        // The connection going away ends the chat too, and the
+                        // stream branch below will say so. Nothing to add here.
+                        let _ = e;
+                    }
                 }
             }
             frame = Frame::read(&mut recv) => {
@@ -248,7 +537,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        Command::Listen { open } => {
+        Command::Listen { open, relay } => {
             let epoch = now_epoch()?;
             let blocks = Blocklist::load(&paths.blocks)?;
 
@@ -284,7 +573,7 @@ async fn main() -> Result<()> {
 
             // Direct-only: no relay, no discovery. Both peers must be reachable
             // to each other, which on one machine or one LAN they are.
-            let endpoint = RotelyxEndpoint::bind(&identity, NetConfig::direct_only()).await?;
+            let endpoint = RotelyxEndpoint::bind(&identity, net_config(relay.as_deref())?).await?;
             let addr = endpoint.addr();
 
             println!("listening as {}", endpoint.id());
@@ -300,11 +589,11 @@ async fn main() -> Result<()> {
 
             let me = Member::new(identity.id().as_bytes()).context("creating member")?;
             let conversation = handshake::host(&mut session, &me).await?;
-            chat(session, conversation, me).await?;
+            chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
             endpoint.close().await;
         }
 
-        Command::Connect { addr, invite } => {
+        Command::Connect { addr, invite, relay } => {
             let addr = decode_addr(&addr)?;
             let epoch = now_epoch()?;
 
@@ -327,7 +616,7 @@ async fn main() -> Result<()> {
                 None => Admission::None,
             };
 
-            let endpoint = RotelyxEndpoint::bind(&identity, NetConfig::direct_only()).await?;
+            let endpoint = RotelyxEndpoint::bind(&identity, net_config(relay.as_deref())?).await?;
             let mut session = endpoint
                 .connect_with(addr, &evidence)
                 .await
@@ -336,7 +625,7 @@ async fn main() -> Result<()> {
 
             let me = Member::new(identity.id().as_bytes()).context("creating member")?;
             let conversation = handshake::join(&mut session, &me).await?;
-            chat(session, conversation, me).await?;
+            chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
             endpoint.close().await;
         }
     }
@@ -345,6 +634,32 @@ async fn main() -> Result<()> {
 }
 
 /// Addresses are exchanged out of band, so they need a form a person can paste.
+
+/// The network configuration for a session, and why it is one of two.
+///
+/// Without `--relay` this is direct only: no relay is contacted at all, which is
+/// the right default for text between two machines that can reach each other.
+///
+/// With `--relay` it is **relay only**, not "relay preferred". A call cannot run
+/// on a connection that permits a direct path, because a direct path is your
+/// address handed to whoever is on the other end, and `rotelyx_media` enforces
+/// that rather than trusting a caller to. Choosing `PreferDirect` here would
+/// produce a session that sometimes allows a call and sometimes does not,
+/// depending on whether hole punching happened to work, which is worse than
+/// either answer.
+fn net_config(relay: Option<&str>) -> Result<NetConfig> {
+    let Some(url) = relay else {
+        return Ok(NetConfig::direct_only());
+    };
+    let url: RelayUrl = url
+        .parse()
+        .with_context(|| format!("{url} is not a relay URL"))?;
+    Ok(NetConfig::new(
+        RelayPolicy::SelfHosted(vec![url]),
+        PathPolicy::RelayOnly,
+    ))
+}
+
 fn encode_addr(addr: &EndpointAddr) -> Result<String> {
     let json = serde_json::to_vec(addr).context("encoding address")?;
     Ok(data_encoding::BASE64URL_NOPAD.encode(&json))
