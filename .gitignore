@@ -58,3 +58,6 @@ target/listening/
 #
 # Cargo.lock is committed because this workspace produces binaries. It is what
 # pins the resolved graph so a clone gets the same dependencies.
+
+# The public site. Served from elsewhere; it is not part of the source tree.
+/site/
