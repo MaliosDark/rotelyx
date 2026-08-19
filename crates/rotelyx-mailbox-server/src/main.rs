@@ -753,6 +753,12 @@ async fn handle_request(
             let accepted = server.wake_registry.lock().await.register(device);
 
             if !accepted {
+                // One message for two different refusals: a token this server
+                // will not store, and a token already registered under a secret
+                // the caller could not produce. Naming which would tell whoever
+                // holds a token whether this mailbox has a row for it, and a
+                // token is not a secret. The refusal itself still reveals that
+                // much, which is recorded on `wake::Registry::register`.
                 return Some(Reply::Error {
                     message: "that is not a push token this server will accept".into(),
                 });
@@ -1731,6 +1737,92 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let json = serde_json::to_value(&stored[0]).expect("json");
         assert_eq!(json.as_object().expect("object").len(), 3);
         assert!(json.get("tag").is_none());
+    }
+
+    /// The takeover, attempted the way an attacker would: over the wire.
+    ///
+    /// Requiring a secret to revoke achieved nothing on its own, because
+    /// registration replaced any row with a matching token without asking for
+    /// anything. So the attack ran in two steps instead of one: register the
+    /// victim's token with a secret of your own, then revoke it. This is the
+    /// end to end check that the second step can no longer be reached, because
+    /// the first is refused.
+    #[tokio::test]
+    async fn a_stolen_token_cannot_take_over_a_registration_over_the_wire() {
+        let (url, server) = spawn_waking_server().await;
+        let token = "ab".repeat(32);
+
+        let mut owner = connect(&url).await;
+        owner
+            .send(WsMessage::text(
+                serde_json::json!({
+                    "op": "registerWake", "token": token, "kind": "apns",
+                    "secret": "the-owners-secret",
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("registerWake");
+        assert_eq!(recv_step(&mut owner, "wakeRegistered").await["op"], "wakeRegistered");
+
+        // An attacker who has learned the token, and nothing else.
+        let mut attacker = connect(&url).await;
+        attacker
+            .send(WsMessage::text(
+                serde_json::json!({
+                    "op": "registerWake", "token": token, "kind": "apns",
+                    "secret": "the-attackers-secret",
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("registerWake");
+        let reply = recv_step(&mut attacker, "registerWake").await;
+        assert_eq!(reply["op"], "error", "the takeover was accepted: {reply}");
+
+        attacker
+            .send(WsMessage::text(
+                serde_json::json!({"op": "revokeWake", "secret": "the-attackers-secret"})
+                    .to_string(),
+            ))
+            .await
+            .expect("revokeWake");
+        recv_step(&mut attacker, "wakeRegistered").await;
+
+        assert_eq!(
+            server.wake_registry.lock().await.len(),
+            1,
+            "the device was silenced by somebody who only had its token"
+        );
+    }
+
+    /// The owner can still revoke, which is the half a takeover also destroys.
+    #[tokio::test]
+    async fn the_owner_can_still_revoke_their_own_device() {
+        let (url, server) = spawn_waking_server().await;
+        let mut client = connect(&url).await;
+
+        client
+            .send(WsMessage::text(
+                serde_json::json!({
+                    "op": "registerWake", "token": "ef".repeat(32), "kind": "apns",
+                    "secret": "mine",
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("registerWake");
+        recv_step(&mut client, "wakeRegistered").await;
+
+        client
+            .send(WsMessage::text(
+                serde_json::json!({"op": "revokeWake", "secret": "mine"}).to_string(),
+            ))
+            .await
+            .expect("revokeWake");
+        recv_step(&mut client, "wakeRegistered").await;
+
+        assert_eq!(server.wake_registry.lock().await.len(), 0);
     }
 
     /// A server with no Apple key refuses rather than accepting quietly.

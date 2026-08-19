@@ -223,9 +223,23 @@ Everything needed for this is built.
       cached from the right one and decrypted. Caught before it ran. The cache
       is bound to a hash of the passphrase, compared in constant time, and there
       is a test that opens with a wrong passphrase against a warm cache
-- [ ] `registerWake` and `revokeWake` are unauthenticated, and `revokeWake`
-      accepts any token without proof of possession: anybody who learns a
-      device's push token can silence its notifications
+- [x] **`revokeWake` now needs a secret, and `registerWake` now needs the
+      current one to replace a row.** The first half alone achieved nothing:
+      registration replaced any row with a matching token without asking for
+      anything, so learning a device token still let an attacker claim it and
+      then revoke it, locking the owner out on the way. A push token is an
+      address, not a credential. Replacement now requires proving the secret the
+      row was registered with, and the reinstall case is unaffected because a
+      reinstalled app is issued a new token and the old row dies on Apple's 410.
+      Six tests, two of them end to end over the WebSocket
+- [ ] A refused registration still tells whoever holds a token that this server
+      has a row for it. Closing that would mean reporting success without
+      registering, which leaves a real device believing it will be woken
+- [x] **The published systemd units carried the operator's account name and
+      home directory.** `User=OPERATOR` and `/home/OPERATOR/rotelyx`, in
+      files meant to be read by other people. The same class of leak the build
+      scripts already refuse in binaries, which slipped through because these
+      are documentation. Placeholders now
 - [ ] Watch the refusal counters in production. Limits chosen from reasoning
       rather than from traffic, and the first real load will say whether they
       are in the right place

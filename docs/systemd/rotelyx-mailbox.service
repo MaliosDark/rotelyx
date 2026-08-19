@@ -10,6 +10,11 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now rotelyx-mailbox
 
+# OPERATOR is the account this runs as, and its checkout path. Substitute your
+# own. Written with a placeholder rather than a real account because these files
+# are published, and a service file naming a real user and directory hands an
+# attacker the layout of the machine before they have looked at it.
+
 [Unit]
 Description=Rotelyx blind mailbox
 Documentation=https://github.com/MaliosDark/rotelyx

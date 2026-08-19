@@ -76,6 +76,7 @@ use p256::ecdsa::{Signature, SigningKey};
 use p256::pkcs8::DecodePrivateKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use tracing::{debug, warn};
 
 /// How often a registered device is woken, when nothing says otherwise.
@@ -187,19 +188,65 @@ impl Registry {
         Self::default()
     }
 
-    /// Add one, replacing any earlier row for the same token.
+    /// Add one, replacing an earlier row for the same token **only when the
+    /// caller proves the secret that row was registered with.**
     ///
-    /// Replaced rather than added beside, because a device that registers again
-    /// with a fresh secret is the same phone: leaving the old row would mean
-    /// two wakes for one device and an old secret that still silences it.
+    /// # The hole this closes
+    ///
+    /// Revocation asks for a secret, which is correct, and on its own achieved
+    /// nothing: registration replaced any row with a matching token without
+    /// asking for anything. So the attack survived with one extra step. Learn a
+    /// device token, register it again with a secret of your own, and the row is
+    /// yours; revoke it and that phone stops being woken. The owner loses
+    /// control at the same moment, because their secret no longer matches
+    /// anything.
+    ///
+    /// **A push token is an address, not a credential.** It travels to Apple,
+    /// it sits in the app's storage, and it is not a secret. Anything that
+    /// treats holding one as authority to act is unauthenticated, however the
+    /// step after it is spelled.
+    ///
+    /// # Why replacing at all
+    ///
+    /// The reason the old code replaced is real: a phone that registers again
+    /// is the same phone, and two rows would mean two wakes and an old secret
+    /// that still silences it. That case is kept. What is refused is replacing
+    /// a row whose secret the caller cannot produce.
+    ///
+    /// # The reinstall case, which decided this
+    ///
+    /// Requiring the secret would be wrong if it stranded a user who
+    /// reinstalled and lost theirs. It does not: a reinstalled app is issued a
+    /// **new** token, registers cleanly as a new row, and the old row dies on
+    /// its own the next time Apple answers 410 for it. See [`Apns::is_gone`]
+    /// and [`sweep`].
+    ///
+    /// # What a refusal still reveals
+    ///
+    /// Refusing tells whoever holds a token that this server has a row for it.
+    /// That is a membership oracle and it is not closed here, because the
+    /// alternative is reporting success without registering, which would leave a
+    /// real device believing it will be woken when it will not. Stated rather
+    /// than hidden: someone who already holds a device token can learn that the
+    /// device uses this mailbox.
     pub fn register(&mut self, device: Device) -> bool {
         if !device.valid() {
             return false;
         }
-        let replacing = self.devices.iter().any(|d| d.token == device.token);
-        if !replacing && self.devices.len() >= MAX_DEVICES {
-            return false;
+
+        match self.devices.iter().find(|d| d.token == device.token) {
+            Some(existing) => {
+                if !secrets_match(&existing.revoke_hash, &device.revoke_hash) {
+                    return false;
+                }
+            }
+            None => {
+                if self.devices.len() >= MAX_DEVICES {
+                    return false;
+                }
+            }
         }
+
         self.devices.retain(|d| d.token != device.token);
         self.devices.insert(device);
         true
@@ -212,7 +259,7 @@ impl Registry {
     pub fn revoke(&mut self, secret: &str) -> bool {
         let wanted = hash(secret);
         let before = self.devices.len();
-        self.devices.retain(|d| d.revoke_hash != wanted);
+        self.devices.retain(|d| !secrets_match(&d.revoke_hash, &wanted));
         before != self.devices.len()
     }
 
@@ -385,6 +432,21 @@ impl Apns {
     }
 }
 
+/// Compare two stored secret hashes without leaking where they differ.
+///
+/// These are hex digests rather than the secrets themselves, so a timing leak
+/// here is worth less than it looks: an attacker who learned a digest still has
+/// to find a secret that produces it. Constant time anyway, because the cost is
+/// one comparison and the alternative is an argument every time somebody reads
+/// this.
+///
+/// An empty hash is a device registered without a secret. `hash()` never
+/// returns empty, so such a row matches no revocation and no takeover.
+fn secrets_match(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len() && bool::from(a.ct_eq(b))
+}
+
 /// The stored form of a revocation secret.
 fn hash(secret: &str) -> String {
     let digest = Sha256::digest(secret.as_bytes());
@@ -537,16 +599,75 @@ mod tests {
     }
 
     #[test]
-    fn registering_again_replaces_the_old_secret() {
-        // The same phone with a fresh secret is the same phone. Two rows would
-        // mean two wakes, and an old secret that still silences it.
+    fn registering_again_with_the_same_secret_is_one_row() {
+        // The legitimate case the replacement rule exists for: the same phone
+        // registering again after a restart. One row, not two, and the secret
+        // it already had still works.
         let mut r = Registry::new();
-        r.register(Device::registering("ab".repeat(32), "apns".into(), "first"));
-        r.register(Device::registering("ab".repeat(32), "apns".into(), "second"));
+        let token = "ab".repeat(32);
+        assert!(r.register(Device::registering(token.clone(), "apns".into(), "mine")));
+        assert!(r.register(Device::registering(token, "apns".into(), "mine")));
 
+        assert_eq!(r.len(), 1, "the same phone registered twice became two wakes");
+        assert!(r.revoke("mine"));
+    }
+
+    /// The attack this rule exists to stop.
+    ///
+    /// A push token is an address, not a credential. Somebody who learns one
+    /// must not be able to claim the row it belongs to, because claiming it
+    /// means being able to revoke it, and revoking it means that phone silently
+    /// stops being told it has messages waiting.
+    #[test]
+    fn a_token_alone_cannot_take_over_a_registration() {
+        let mut r = Registry::new();
+        let token = "cd".repeat(32);
+        assert!(r.register(Device::registering(token.clone(), "apns".into(), "owner")));
+
+        // The attacker has the token and nothing else.
+        assert!(
+            !r.register(Device::registering(token.clone(), "apns".into(), "attacker")),
+            "a registration with the wrong secret was accepted"
+        );
+
+        assert!(
+            !r.revoke("attacker"),
+            "the attacker's secret revoked a device it never registered"
+        );
+        assert_eq!(r.len(), 1, "the row was removed or duplicated");
+
+        // And the owner still has control, which is the other half of the
+        // failure: a takeover also locks the real owner out.
+        assert!(r.revoke("owner"), "the owner lost control of their own device");
+    }
+
+    /// A token nobody has claimed still registers freely. Requiring a secret to
+    /// replace must not mean requiring one to arrive.
+    #[test]
+    fn a_fresh_token_registers_without_proving_anything() {
+        let mut r = Registry::new();
+        assert!(r.register(Device::registering("ef".repeat(32), "apns".into(), "new")));
         assert_eq!(r.len(), 1);
-        assert!(!r.revoke("first"), "the replaced secret must not work");
-        assert!(r.revoke("second"));
+    }
+
+    /// A row registered without a secret can be neither revoked nor taken over.
+    ///
+    /// `hash()` never returns the empty string, so the empty stored hash of a
+    /// no-secret registration matches nothing. That makes such a row permanent
+    /// until Apple reports the token dead, which is the safe direction: the
+    /// alternative is a row anybody can claim by also sending no secret.
+    #[test]
+    fn a_registration_without_a_secret_cannot_be_claimed() {
+        let mut r = Registry::new();
+        let token = "12".repeat(32);
+        assert!(r.register(Device::registering(token.clone(), "apns".into(), "")));
+
+        assert!(!r.revoke(""), "an empty secret revoked something");
+        assert!(
+            !r.register(Device::registering(token, "apns".into(), "attacker")),
+            "a row with no secret was claimed by supplying one"
+        );
+        assert_eq!(r.len(), 1);
     }
 
     #[test]
