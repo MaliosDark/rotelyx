@@ -467,6 +467,66 @@ stops finding the relay. Pick it once.
 
 ---
 
+## 6a. The browser client needs its own Content-Security-Policy
+
+The static site lives outside this repository, and this section exists so that
+the one header it cannot do without is written down somewhere that is version
+controlled.
+
+Every page except one is static and can be served under a policy that permits
+nothing:
+
+```
+default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline';
+script-src 'unsafe-inline'; base-uri 'self'; form-action 'none';
+frame-ancestors 'none'
+```
+
+**`chat.html` is not one of those pages, and that policy stops it dead.** It
+loads a WebAssembly module from its own origin, instantiates it, and opens a
+WebSocket to the mailbox. Under `default-src 'none'` with no `connect-src`,
+all four of those are refused and the page renders and then does nothing, with
+the reason visible only in the browser console.
+
+That is not a hypothetical: it is how the site was served, and it is why nobody
+had seen the browser client work.
+
+Serve `chat.html` with this instead, and nothing wider:
+
+```
+default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline';
+script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; connect-src 'self';
+base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+```
+
+| Addition | Why |
+|---|---|
+| `script-src 'self'` | load `./rotelyx/rotelyx_wasm.js` as a module |
+| `script-src 'wasm-unsafe-eval'` | instantiate it. Chrome refuses without this whenever a policy is present at all |
+| `connect-src 'self'` | fetch the `.wasm`, and reach `wss://<host>/mailbox`, which is same origin behind the reverse proxy |
+
+Nothing else is widened: no third party origin, and no `unsafe-eval`.
+
+A mailbox address typed into the page by hand is a different origin and stays
+blocked. That is deliberate rather than an oversight: a page that can be
+pointed at any server is a page that can be told to send somewhere else.
+
+On Apache this belongs in a `<Files "chat.html">` block so the strict policy
+still covers everything else. On nginx it is a `location = /chat.html` with its
+own `add_header`, remembering that `add_header` in a `location` replaces the
+inherited one rather than adding to it.
+
+## What has actually been verified
+
+The module itself is sound, and that was checked rather than assumed: it parses
+as a valid module, the 61 symbols the JavaScript calls all exist as exports, the
+31 functions the module imports are all defined by the glue, and the cache stamp
+in `chat.html` matches the hash of the `.wasm` beside it.
+
+**Nobody has yet opened the page in a browser.** Everything above is static
+analysis. It rules out a broken module and it found the header, and it is not a
+substitute for loading the page and completing a handshake.
+
 ## 7. What is not deployed
 
 | Component | State |

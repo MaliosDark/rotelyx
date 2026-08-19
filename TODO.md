@@ -126,6 +126,20 @@ Everything needed for this is built.
 - [x] DNS, nginx and TLS configured for `relay-rotelyx.ideoa.co`
 - [x] Relay running and verified end to end: `101 Switching Protocols` through
       Cloudflare and nginx
+- [x] **The browser client could not have worked as served.** The site's
+      Content-Security-Policy was written for static pages and says so in a
+      comment beside it. `chat.html` is not static: it loads a WebAssembly
+      module, instantiates it, and opens a WebSocket. Under `default-src 'none'`
+      with no `connect-src`, all four are refused and the page renders and does
+      nothing. Its own policy now, in `docs/DEPLOYMENT.md` section 6a, which is
+      version controlled where the site is not
+- [x] **The module itself is sound, and that was checked.** Valid module, the 61
+      symbols the glue calls all exported, the 31 imports it needs all defined,
+      cache stamp matching the binary beside it
+- [ ] **Open the page in a browser and complete a handshake.** Everything above
+      is static analysis. It rules out a broken module and it found the header;
+      it is not the same as the page working
+
 - [ ] Measure hole punch success rate across NAT types
 - [ ] Measure how often `PreferDirect` costs a connection that `Fastest` would
       have kept
