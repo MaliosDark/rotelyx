@@ -39,10 +39,8 @@ cannot read it and does not know who sent it.
 Everything it runs on is in this repository. It contacts no infrastructure
 belonging to anyone else, and there is a test that fails if that ever changes.
 
-**What it is not.** It is not anonymity. Somebody watching the whole internet
-can still see that you are talking to someone, just not what you said or who
-they are. It does not protect a phone that has already been broken into. If you
-need those, you need Tor, not this.
+Two encryption layers, independent of each other, and post quantum key exchange
+from the first version rather than as a later migration.
 
 ## Try it
 
@@ -86,7 +84,7 @@ default and it is not a setting you have to find.
 
 ## What the people running a server can see
 
-Nothing you write, ever. But be clear about the rest:
+Nothing you write, ever. Here is the rest of it, in full:
 
 | | Can they see it |
 |---|---|
@@ -96,8 +94,14 @@ Nothing you write, ever. But be clear about the rest:
 | That two keys are talking | **Yes**, if your messages go through their relay |
 | Roughly when you were online | **Yes** |
 
-The last two are what relaying inherently costs. The way around them is to run
-your own, which is the point of the next section.
+The last two are what relaying costs anywhere it is used. The way around them
+is to run your own, which is the point of the next section.
+
+Two limits no messenger removes, and this one does not pretend otherwise: an
+adversary who can watch the entire internet at once still sees that traffic is
+moving, and nothing on any server protects a phone that has already been taken
+over. Both are written up in [the threat model](docs/THREAT-MODEL.md) instead
+of being left for you to find out.
 
 ## Run your own
 
@@ -111,8 +115,8 @@ cargo build -p rotelyx-relay -p rotelyx-mailbox-server
 ./target/debug/rotelyx-mailbox-server --bind 0.0.0.0:3341
 ```
 
-That is the whole thing. **The more people who do this, the less any one server
-sees**, which is the only real answer to the table above.
+Point your client at it and the table above describes a machine you own,
+instead of somebody else's.
 
 Details in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
