@@ -139,6 +139,27 @@ fn send_message(app: tauri::State<'_, Arc<App>>, text: String) -> Result<(), Str
     tx.send(Command::Send { text }).map_err(|_| "session ended".to_string())
 }
 
+/// Start talking.
+///
+/// Refused by the engine, with a reason, on a session that may take a direct
+/// path: audio over one is this machine's address handed to the other end. The
+/// window learns that through an error event rather than here, because by the
+/// time this returns the engine has not looked at it yet.
+#[tauri::command]
+fn start_call(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
+    let guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let tx = guard.as_ref().ok_or("no session is running")?;
+    tx.send(Command::StartCall).map_err(|_| "session ended".to_string())
+}
+
+/// Stop talking. The session stays up and text keeps working.
+#[tauri::command]
+fn end_call(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
+    let guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let tx = guard.as_ref().ok_or("no session is running")?;
+    tx.send(Command::EndCall).map_err(|_| "session ended".to_string())
+}
+
 #[tauri::command]
 fn hangup(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
     let mut guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
@@ -157,6 +178,10 @@ fn start(
     open: Option<bool>,
     addr: Option<String>,
     invite: Option<String>,
+    // A relay to route through, and what a call needs. Left out, the session is
+    // direct only: fine for text, and a call is refused because a direct path
+    // shows the other end this machine's address. Both sides need the same one.
+    relay: Option<String>,
 ) -> Result<(), String> {
     let epoch = now_epoch().map_err(|e| e.to_string())?;
 
@@ -184,7 +209,14 @@ fn start(
     let window_for_reset = window.clone();
 
     tauri::async_runtime::spawn(async move {
-        let engine = Engine::new(identity, paths, epoch, emit.clone());
+        let engine = match Engine::new(identity, paths, epoch, emit.clone(), relay.as_deref()) {
+            Ok(e) => e,
+            Err(e) => {
+                emit(Event::Error { text: format!("{e:#}") });
+                emit(Event::Disconnected { reason: "could not start".into() });
+                return;
+            }
+        };
 
         let outcome = match mode.as_str() {
             "listen" => engine.listen(open.unwrap_or(false), &mut rx).await,
@@ -256,6 +288,8 @@ fn main() {
             unblock,
             blocked,
             start,
+            start_call,
+            end_call,
             send_message,
             hangup,
         ])

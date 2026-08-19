@@ -12,6 +12,8 @@ authors.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Devices and calls, shared with the terminal client.
+rotelyx-audio = { path = "../rotelyx-audio" }
 rotelyx-core.workspace = true
 rotelyx-crypto.workspace = true
 rotelyx-net.workspace = true

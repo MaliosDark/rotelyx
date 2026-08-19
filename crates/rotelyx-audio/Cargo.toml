@@ -1,0 +1,19 @@
+[package]
+name = "rotelyx-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Devices and calls: the microphone, the speaker, and one call in progress."
+
+[dependencies]
+rotelyx-codec = { path = "../rotelyx-codec" }
+rotelyx-media = { path = "../rotelyx-media" }
+rotelyx-net = { path = "../rotelyx-net" }
+
+anyhow.workspace = true
+
+# Local hardware only. It opens no socket and reaches no network.
+cpal = "0.15"

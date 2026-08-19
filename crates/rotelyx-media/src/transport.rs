@@ -685,7 +685,6 @@ mod tests {
     /// it: the answer should be that quality degrades rather than that the call
     /// falls over.
     #[test]
-    #[test]
     fn the_loss_it_survives_is_measured() {
         for (drop_one_in, expect_perfect) in
             [(10u64, true), (5, true), (3, true), (2, true)]

@@ -11,6 +11,7 @@ members = [
     "crates/rotelyx-codec",
     "crates/rotelyx-mailbox",
     "crates/rotelyx-capability",
+    "crates/rotelyx-audio",
     "crates/rotelyx-cli",
     "crates/rotelyx-relay",
     "crates/rotelyx-web",

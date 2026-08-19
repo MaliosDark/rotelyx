@@ -28,7 +28,8 @@
 //! rediscover it.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -55,17 +56,47 @@ fn drain_lock(b: &Buffer) -> std::sync::MutexGuard<'_, VecDeque<f32>> {
     }
 }
 
+/// A device stream, kept alive on a thread of its own.
+///
+/// # Why a thread rather than a field
+///
+/// `cpal::Stream` is not `Send`. Holding one in a struct makes that struct not
+/// `Send` either, and everything containing it after that, until eventually a
+/// caller wants to run a call on a task and cannot. The desktop window hit
+/// exactly that: `tauri::async_runtime::spawn` needs a future it can move
+/// between threads, and one holding a microphone is not one.
+///
+/// So the stream never leaves the thread that built it. What crosses threads is
+/// the buffer, which is an `Arc<Mutex<..>>` and always was. The thread parks
+/// until it is told to stop, which is what dropping this does.
+struct DeviceThread {
+    stop: Arc<AtomicBool>,
+    joiner: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for DeviceThread {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(j) = self.joiner.take() {
+            // The device closes when the thread drops its stream. Joining rather
+            // than detaching means a call that ends has actually released the
+            // microphone by the time the next one starts.
+            let _ = j.join();
+        }
+    }
+}
+
 /// The microphone.
 pub struct Capture {
     buffer: Buffer,
-    _stream: cpal::Stream,
+    _thread: DeviceThread,
     channels: usize,
 }
 
 /// The speaker.
 pub struct Playback {
     buffer: Buffer,
-    _stream: cpal::Stream,
+    _thread: DeviceThread,
 }
 
 /// Ask a device for exactly what the codec wants.
@@ -120,32 +151,40 @@ impl Capture {
         let buffer: Buffer = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_BACKLOG)));
         let sink = Arc::clone(&buffer);
         let taps = channels as usize;
+        let config = config_for(channels);
 
-        let stream = device
-            .build_input_stream(
-                &config_for(channels),
-                move |data: &[f32], _| {
-                    let mut b = drain_lock(&sink);
-                    // Stereo is averaged rather than one channel taken: a laptop
-                    // with two microphones puts different noise in each, and
-                    // discarding one throws away half the signal.
-                    for chunk in data.chunks(taps) {
-                        let s: f32 = chunk.iter().sum::<f32>() / taps as f32;
-                        b.push_back(s);
-                    }
-                    while b.len() > MAX_BACKLOG {
-                        b.pop_front();
-                    }
-                },
-                |e| eprintln!("[microphone error: {e}]"),
-                None,
-            )
-            .context("opening the microphone")?;
+        let thread = run_on_thread("microphone", move || {
+            let host = cpal::default_host();
+            let device = host
+                .default_input_device()
+                .context("the microphone went away between asking and opening")?;
+            let stream = device
+                .build_input_stream(
+                    &config,
+                    move |data: &[f32], _| {
+                        let mut b = drain_lock(&sink);
+                        // Stereo is averaged rather than one channel taken: a
+                        // laptop with two microphones puts different noise in
+                        // each, and discarding one throws away half the signal.
+                        for chunk in data.chunks(taps) {
+                            let s: f32 = chunk.iter().sum::<f32>() / taps as f32;
+                            b.push_back(s);
+                        }
+                        while b.len() > MAX_BACKLOG {
+                            b.pop_front();
+                        }
+                    },
+                    |e| eprintln!("[microphone error: {e}]"),
+                    None,
+                )
+                .context("opening the microphone")?;
+            stream.play().context("starting the microphone")?;
+            Ok(stream)
+        })?;
 
-        stream.play().context("starting the microphone")?;
         Ok(Self {
             buffer,
-            _stream: stream,
+            _thread: thread,
             channels: taps,
         })
     }
@@ -193,31 +232,40 @@ impl Playback {
         let buffer: Buffer = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_BACKLOG)));
         let source = Arc::clone(&buffer);
         let taps = channels as usize;
+        let config = config_for(channels);
 
-        let stream = device
-            .build_output_stream(
-                &config_for(channels),
-                move |data: &mut [f32], _| {
-                    let mut b = drain_lock(&source);
-                    for chunk in data.chunks_mut(taps) {
-                        // Silence when there is nothing, which is what a gap in
-                        // the network sounds like and is better than repeating
-                        // the last buffer, which sounds like a machine.
-                        let s = b.pop_front().unwrap_or(0.0);
-                        for out in chunk.iter_mut() {
-                            *out = s;
+        let thread = run_on_thread("speaker", move || {
+            let host = cpal::default_host();
+            let device = host
+                .default_output_device()
+                .context("the speaker went away between asking and opening")?;
+            let stream = device
+                .build_output_stream(
+                    &config,
+                    move |data: &mut [f32], _| {
+                        let mut b = drain_lock(&source);
+                        for chunk in data.chunks_mut(taps) {
+                            // Silence when there is nothing, which is what a gap
+                            // in the network sounds like and is better than
+                            // repeating the last buffer, which sounds like a
+                            // machine.
+                            let s = b.pop_front().unwrap_or(0.0);
+                            for out in chunk.iter_mut() {
+                                *out = s;
+                            }
                         }
-                    }
-                },
-                |e| eprintln!("[speaker error: {e}]"),
-                None,
-            )
-            .context("opening the speaker")?;
+                    },
+                    |e| eprintln!("[speaker error: {e}]"),
+                    None,
+                )
+                .context("opening the speaker")?;
+            stream.play().context("starting the speaker")?;
+            Ok(stream)
+        })?;
 
-        stream.play().context("starting the speaker")?;
         Ok(Self {
             buffer,
-            _stream: stream,
+            _thread: thread,
         })
     }
 
@@ -270,5 +318,54 @@ impl Capture {
         let mut b = drain_lock(&self.buffer);
         let n = n.min(b.len());
         b.drain(..n);
+    }
+}
+
+/// Build a stream on its own thread and keep it there.
+///
+/// The closure runs on the new thread and returns the stream, which stays owned
+/// by that thread for its whole life. Failures come back over a channel so the
+/// caller still gets a real error rather than a thread that quietly died.
+fn run_on_thread<F>(what: &'static str, build: F) -> Result<DeviceThread>
+where
+    F: FnOnce() -> Result<cpal::Stream> + Send + 'static,
+{
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    let (tx, rx) = mpsc::channel::<Result<()>>();
+
+    let joiner = std::thread::Builder::new()
+        .name(format!("rotelyx-{what}"))
+        .spawn(move || {
+            let stream = match build() {
+                Ok(s) => {
+                    let _ = tx.send(Ok(()));
+                    s
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            };
+
+            // Held until told to stop. Polling a flag rather than blocking on a
+            // channel keeps this to one wakeup every 50 ms and needs nothing
+            // that has to be woken from a Drop.
+            while !flag.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            drop(stream);
+        })
+        .with_context(|| format!("starting the {what} thread"))?;
+
+    // Wait for the device to open before returning, so an error is an error here
+    // rather than silence later.
+    match rx.recv() {
+        Ok(Ok(())) => Ok(DeviceThread {
+            stop,
+            joiner: Some(joiner),
+        }),
+        Ok(Err(e)) => Err(e),
+        Err(_) => bail!("the {what} thread stopped before it opened anything"),
     }
 }

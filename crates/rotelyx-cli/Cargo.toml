@@ -12,12 +12,9 @@ authors.workspace = true
 rotelyx-core.workspace = true
 rotelyx-crypto.workspace = true
 rotelyx-mailbox = { path = "../rotelyx-mailbox" }
-rotelyx-media = { path = "../rotelyx-media" }
-rotelyx-codec = { path = "../rotelyx-codec" }
+# Devices and calls, shared with the desktop window.
+rotelyx-audio = { path = "../rotelyx-audio" }
 
-# The microphone and the speaker. See src/audio.rs for why 48 kHz and no
-# resampler. Local hardware only: it opens no socket and reaches no network.
-cpal = "0.15"
 rotelyx-net.workspace = true
 
 anyhow.workspace = true

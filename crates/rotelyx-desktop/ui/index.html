@@ -177,6 +177,15 @@
     </div>
 
     <div class="group">
+      <h2>Relay</h2>
+      <p class="hint">
+        Leave empty for a direct connection. A call needs a relay: over a direct
+        path the other side sees this machine's address.
+      </p>
+      <input id="relay" placeholder="http://relay.example:3340">
+    </div>
+
+    <div class="group">
       <h2>Wait for someone</h2>
       <p class="hint" style="display:flex;align-items:center;gap:.4rem">
         <input type="checkbox" id="open" style="width:auto">
@@ -226,6 +235,7 @@
     <form class="compose" id="compose">
       <input id="text" placeholder="Message" autocomplete="off" disabled>
       <button type="submit" id="send" disabled>Send</button>
+      <button type="button" id="call" disabled>Call</button>
       <button type="button" id="hangup" class="danger" disabled>End</button>
     </form>
   </main>
@@ -270,13 +280,25 @@
     $("state").className = "chip " + kind;
   };
 
+  // One button for both call states, because somebody on a call wants one thing
+  // to press and the state is unambiguous: either audio is flowing or it is not.
+  let onCall = false;
+
   const setLive = (on) => {
     live = on;
     $("text").disabled = !on;
     $("send").disabled = !on;
     $("hangup").disabled = !on;
+    $("call").disabled = !on;
     $("listen").disabled = on;
     $("connect").disabled = on;
+    if (!on) {
+      // A session that ends takes its call with it, so the button must not be
+      // left saying "Hang up" for a call that no longer exists.
+      onCall = false;
+      $("call").textContent = "Call";
+      $("call").className = "";
+    }
     if (on) $("text").focus();
   };
 
@@ -332,7 +354,11 @@
     $("log").innerHTML = "";
     setState("binding", "note");
     try {
-      await invoke("start", { mode: "listen", open: $("open").checked });
+      await invoke("start", {
+          mode: "listen",
+          open: $("open").checked,
+          relay: $("relay").value.trim() || null,
+        });
     } catch (e) { log(String(e), "sys bad"); setState("idle"); }
   };
 
@@ -346,6 +372,7 @@
         mode: "connect",
         addr,
         invite: $("peer-invite").value.trim() || null,
+        relay: $("relay").value.trim() || null,
       });
     } catch (e) { log(String(e), "sys bad"); setState("idle"); }
   };
@@ -359,6 +386,12 @@
       log(text, "msg me");
       $("text").value = "";
     } catch (err) { log(String(err), "sys bad"); }
+  };
+
+  $("call").onclick = async () => {
+    try {
+      await invoke(onCall ? "end_call" : "start_call");
+    } catch (e) { log(String(e), "sys bad"); }
   };
 
   $("hangup").onclick = async () => {
@@ -393,6 +426,28 @@
         $("safety").classList.add("on");
         $("digits").textContent = m.safety_number;
         setLive(true);
+        break;
+
+      case "call_started":
+        onCall = true;
+        $("call").textContent = "Hang up";
+        $("call").className = "danger";
+        log("call started, " + m.kbit + " kbit/s, microphone "
+            + (m.mono ? "mono" : "stereo"), "sys");
+        break;
+
+      case "call_level":
+        // Delay the listener is hearing right now, shown while it still
+        // matters rather than reported once the call is over.
+        $("call").textContent = "Hang up (" + m.queued_ms + " ms)";
+        break;
+
+      case "call_ended":
+        onCall = false;
+        $("call").textContent = "Call";
+        $("call").className = "";
+        log("call ended: " + m.sent + " sent, " + m.received + " received, "
+            + m.dropped_ms + " ms dropped", "sys");
         break;
 
       case "message":

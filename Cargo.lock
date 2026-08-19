@@ -5406,6 +5406,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rotelyx-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "rotelyx-codec",
+ "rotelyx-media",
+ "rotelyx-net",
+]
+
+[[package]]
 name = "rotelyx-capability"
 version = "0.1.0"
 dependencies = [
@@ -5425,13 +5436,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "cpal",
  "data-encoding",
- "rotelyx-codec",
+ "rotelyx-audio",
  "rotelyx-core",
  "rotelyx-crypto",
  "rotelyx-mailbox",
- "rotelyx-media",
  "rotelyx-net",
  "rpassword",
  "serde_json",
@@ -5502,6 +5511,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "data-encoding",
+ "rotelyx-audio",
  "rotelyx-core",
  "rotelyx-crypto",
  "rotelyx-net",
