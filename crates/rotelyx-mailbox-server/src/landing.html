@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Rotelyx blind mailbox</title>
+  <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: grid; place-items: center;
+    background: #06070a; color: #e6e8ef;
+    font: 15px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 2rem;
+  }
+  main { max-width: 34rem; }
+  h1 { font-size: 1.15rem; letter-spacing: .14em; text-transform: uppercase; margin: 0 0 .25rem; }
+  .sub { color: #6f7793; font-size: .8rem; letter-spacing: .1em; text-transform: uppercase; margin: 0 0 2rem; }
+  p { color: #a8afc4; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; font-size: .875rem; }
+  th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #171a24; }
+  th { color: #6f7793; font-weight: 500; }
+  .no  { color: #4ade80; }
+  .yes { color: #fbbf24; }
+  footer { margin-top: 2rem; color: #4b5266; font-size: .8rem; }
+  .mark {
+    width: 54px; height: 54px; margin: 0 0 18px;
+    background: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=") center/contain no-repeat;
+    filter: drop-shadow(0 0 18px rgba(106,49,238,.35));
+  }
+  .tiles {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+    gap: 8px; margin: 0 0 1.5rem;
+  }
+  .tile {
+    background: #0b0d13; border: 1px solid #171a24; border-radius: 4px;
+    padding: .7rem .8rem;
+  }
+  .tile b {
+    display: block; font: 600 1.45rem/1.1 ui-monospace, Menlo, monospace;
+    color: #e6e8ef; letter-spacing: -.02em;
+  }
+  .tile span {
+    display: block; margin-top: .3rem; font-size: .66rem; letter-spacing: .12em;
+    text-transform: uppercase; color: #6f7793;
+  }
+  /*STATUS-STYLE*/
+</style>
+<main>
+  <div class="mark"></div>
+  <h1>Rotelyx</h1>
+  <p class="sub">Blind mailbox</p>
+
+  <p>
+    This server stores sealed envelopes under rotating tags. It holds no key and
+    cannot read anything it stores.
+  </p>
+
+  <table>
+    <tr><th>Observable</th><th>Visible here</th></tr>
+    <tr><td>Message contents</td><td class="no">No</td></tr>
+    <tr><td>Message length</td><td class="no">No, padded to fixed buckets</td></tr>
+    <tr><td>Who sent it</td><td class="no">No</td></tr>
+    <tr><td>Who it is for</td><td class="no">No, only an unlinkable tag</td></tr>
+    <tr><td>Which tags are busy, and when</td><td class="yes">Yes</td></tr>
+    <tr><td>Connecting addresses</td><td class="yes">Yes</td></tr>
+  </table>
+
+  <!--STATUS-->
+
+  <!--COUNTERS-->
+
+  <footer>Ideoa Labs</footer>
+</main>

@@ -1,0 +1,11 @@
+[package]
+name = "rotelyx-status"
+description = "Rotelyx: availability recording and the strip that renders it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

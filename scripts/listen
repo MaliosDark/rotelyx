@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# A listening test for Telyx, small enough to actually get run.
+#
+# Every quality figure in this project is signal to noise, and signal to noise
+# cannot say whether something sounds right. This can. It plays the same speech
+# in eight versions, in a random order, with names that say nothing, and asks
+# for a number. The mapping is revealed only at the end.
+#
+#   scripts/listen              one clip, chosen at random
+#   scripts/listen <clip>       a specific clip
+#   scripts/listen --reveal     scores so far, with the mapping
+#
+# The rating scale is the MUSHRA one, so the numbers mean the same thing to
+# everyone who has run one of these:
+#
+#   100-80  excellent, cannot tell it from the original
+#    80-60  good, a difference you have to listen for
+#    60-40  fair, clearly different but not annoying
+#    40-20  poor, annoying
+#    20-0   bad
+#
+# Two of the eight are there to check the listener rather than the codec. One
+# is the untouched original: if it does not score near 100, the session is not
+# usable and that is worth knowing before drawing conclusions from the rest.
+# The other is the original low-passed at 3.5 kHz, which is what a telephone
+# sounds like and gives the bottom of the scale a fixed meaning.
+
+set -uo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/listening"
+RESULTS="$DIR/ratings.txt"
+
+if [ ! -d "$DIR" ]; then
+    echo "No files. Build them first:"
+    echo "  cargo run --release -p rotelyx-codec --example bake_listening_test"
+    exit 1
+fi
+
+# Whichever player exists. aplay is ALSA, paplay is PulseAudio, and a machine
+# usually has exactly one of them working.
+PLAYER=""
+for p in paplay aplay ffplay; do
+    if command -v "$p" >/dev/null 2>&1; then
+        case "$p" in
+            ffplay) PLAYER="ffplay -nodisp -autoexit -loglevel quiet" ;;
+            *)      PLAYER="$p" ;;
+        esac
+        break
+    fi
+done
+[ -z "$PLAYER" ] && { echo "No audio player found (tried paplay, aplay, ffplay)."; exit 1; }
+
+reveal() {
+    if [ ! -s "$RESULTS" ]; then
+        echo "No ratings yet."
+        exit 0
+    fi
+    echo
+    echo "  system                     n   mean   ratings"
+    echo "  ------------------------------------------------------"
+    # Join each rating to what the file actually was. The two files are split
+    # differently, so the separator is applied by hand rather than with -F:
+    # doing it globally silently made every rating unmatchable.
+    awk 'NR==FNR {
+            i = index($0, "  ->  ")
+            if (i > 0) {
+                name = substr($0, 1, i - 1); gsub(/^ +| +$/, "", name)
+                key[name] = substr($0, i + 6)
+            }
+            next
+         }
+         NF == 2 {
+            sys = key[$1]; if (sys == "") sys = "unknown"
+            sum[sys] += $2; n[sys]++; list[sys] = list[sys] " " $2
+         }
+         END { for (s in sum) printf "  %-24s %3d  %5.1f  %s\n", s, n[s], sum[s]/n[s], list[s] }' \
+        "$DIR/key.txt" "$RESULTS" | sort
+    echo
+    echo "  If 'reference (untouched)' is not near 100, the session is not usable."
+    exit 0
+}
+
+[ "${1:-}" = "--reveal" ] && reveal
+
+# Pick a clip.
+mapfile -t CLIPS < <(ls "$DIR"/*.wav 2>/dev/null | xargs -n1 basename | sed 's/_[a-z]\{6\}\.wav$//' | sort -u)
+[ ${#CLIPS[@]} -eq 0 ] && { echo "No clips in $DIR"; exit 1; }
+
+if [ -n "${1:-}" ]; then
+    CLIP="$1"
+else
+    CLIP="${CLIPS[$((RANDOM % ${#CLIPS[@]}))]}"
+fi
+
+mapfile -t FILES < <(ls "$DIR/${CLIP}"_*.wav 2>/dev/null | shuf)
+[ ${#FILES[@]} -eq 0 ] && { echo "No files for '$CLIP'. Available:"; printf '  %s\n' "${CLIPS[@]}"; exit 1; }
+
+echo
+echo "  Clip: $CLIP     ${#FILES[@]} versions, random order"
+echo "  Rate 0-100. Enter replays. 's' skips. 'q' quits and saves."
+echo
+
+for f in "${FILES[@]}"; do
+    name="$(basename "$f" .wav)"
+    while true; do
+        $PLAYER "$f" >/dev/null 2>&1
+        printf "  [%s] rating (0-100, enter to replay): " "$name"
+        read -r answer </dev/tty
+        case "$answer" in
+            "")   continue ;;
+            s|S)  break ;;
+            q|Q)  echo; echo "  Saved to $RESULTS"; echo "  scripts/listen --reveal"; exit 0 ;;
+            *)
+                if [[ "$answer" =~ ^[0-9]+$ ]] && [ "$answer" -le 100 ]; then
+                    echo "$name $answer" >> "$RESULTS"
+                    break
+                fi
+                echo "  A number from 0 to 100, or enter to replay." ;;
+        esac
+    done
+done
+
+echo
+echo "  Done. Ratings in $RESULTS"
+echo "  Run more clips, then: scripts/listen --reveal"

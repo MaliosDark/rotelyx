@@ -21,10 +21,10 @@ What Rotelyx is trying to protect, in priority order.
 | # | Asset | Why it ranks here |
 |---|-------|-------------------|
 | A1 | Message and call **content** | The obvious one, and the easiest to protect. |
-| A2 | **Social graph** — who talks to whom, when, how often | Harder than A1, more valuable to most real adversaries, and the thing almost every messenger leaks. |
-| A3 | **Identity linkability** — connecting an Rotelyx key to a legal person | No phone number is the design's main lever here. |
+| A2 | **Social graph**, who talks to whom, when, how often | Harder than A1, more valuable to most real adversaries, and the thing almost every messenger leaks. |
+| A3 | **Identity linkability**: connecting an Rotelyx key to a legal person | No phone number is the design's main lever here. |
 | A4 | Group **membership** | Who is in a conversation is often more sensitive than what was said. |
-| A5 | **Presence** — whether a given identity is online now | Leaks routine, location patterns, and sleep schedule. |
+| A5 | **Presence**: whether a given identity is online now | Leaks routine, location patterns, and sleep schedule. |
 | A6 | **Availability** of the service | Ranked last deliberately: a denial of service is recoverable, a disclosure is not. |
 
 ---
@@ -34,17 +34,17 @@ What Rotelyx is trying to protect, in priority order.
 Each adversary is listed with the capabilities we assume, and what Rotelyx claims
 against it. Claims are per-asset and use the asset IDs above.
 
-### ADV-1 — Passive network observer
+### ADV-1: Passive network observer
 *Capability:* reads all traffic on one or more links. Cannot modify.
 
 - **Defended:** A1 (QUIC/TLS 1.3 at L1, MLS at L2), A4.
-- **Partially defended:** A2 — the observer sees IP-level flow between two
+- **Partially defended:** A2: the observer sees IP-level flow between two
   addresses. Direct P2P paths reveal both peers' IPs to each other and to
   anyone on-path. Padding buckets hide message *length*; they do not hide that
   a flow exists.
 - **Not defended:** A5 for on-path observers.
 
-### ADV-2 — Active network attacker
+### ADV-2: Active network attacker
 *Capability:* modifies, injects, drops, replays, reorders. Controls DNS and
 routing.
 
@@ -52,11 +52,11 @@ routing.
   L1 and L2 independently. Replay is rejected by MLS epoch and generation
   tracking.
 - **Not defended:** A6. An active attacker can always drop packets.
-- **Residual:** downgrade is prevented structurally — a new wire format takes a
+- **Residual:** downgrade is prevented structurally: a new wire format takes a
   new ALPN rather than negotiating in band, so there is no version field to
   strip.
 
-### ADV-3 — Relay operator (including us)
+### ADV-3: Relay operator (including us)
 *Capability:* full control of an iroh relay carrying a session that failed to
 hole-punch.
 
@@ -66,17 +66,17 @@ hole-punch.
   is the single largest metadata exposure in the system and it is inherent to
   relayed transport. Mitigations: prefer direct paths and surface relay use in
   the UI; support self-hosted relays; rotate relay selection.
-- **Not defended:** A5 — connecting to a relay reveals presence to it.
+- **Not defended:** A5: connecting to a relay reveals presence to it.
 
-### ADV-4 — Mailbox operator
+### ADV-4: Mailbox operator
 *Capability:* full control of the blind mailbox node, including its disk. Can
 read all stored envelopes, retain them past TTL, and correlate timing.
 
-- **Defended:** A1 — envelopes are L2 ciphertext, sealed, and the mailbox has no
+- **Defended:** A1: envelopes are L2 ciphertext, sealed, and the mailbox has no
   keys.
-- **Defended:** sender identity — sealed sender means the envelope carries no
+- **Defended:** sender identity: sealed sender means the envelope carries no
   sender field.
-- **Partially defended:** A2 — the recipient is addressed by a rotating
+- **Partially defended:** A2: the recipient is addressed by a rotating
   pseudonymous tag rather than an identity key, and all envelopes are padded to
   fixed size buckets. A mailbox that logs everything can still perform timing
   correlation between a deposit and a collection.
@@ -85,7 +85,7 @@ read all stored envelopes, retain them past TTL, and correlate timing.
   mailbox must never be the only copy, and clients must not treat mailbox
   acknowledgement as proof of deletion.
 
-### ADV-5 — Server seizure / legal compulsion
+### ADV-5: Server seizure / legal compulsion
 *Capability:* obtains everything ADV-3 and ADV-4 hold, plus future traffic,
 plus the ability to compel silence.
 
@@ -96,7 +96,7 @@ plus the ability to compel silence.
 - **Design consequence:** the mailbox must be trivially self-hostable, so that
   seizing any one operator does not compromise a population.
 
-### ADV-6 — Compromised endpoint
+### ADV-6: Compromised endpoint
 *Capability:* code execution on a participant's device. Malicious OS,
 jailbroken/rooted device, malware, forensic extraction of an unlocked device.
 
@@ -108,18 +108,18 @@ jailbroken/rooted device, malware, forensic extraction of an unlocked device.
   attacker is present.
 - **Not mitigated:** screenshots, keyloggers, camera access, backup extraction.
 
-### ADV-7 — Malicious group member
+### ADV-7: Malicious group member
 *Capability:* a legitimate member of a conversation.
 
 - **Not defended, by definition.** A participant can record and republish
   anything. Rotelyx does not attempt deniability guarantees it cannot keep.
 - **Defended:** a member cannot add another member without producing an MLS
   commit that every other member sees. Silent addition is what "ghost user"
-  attacks rely on, and MLS makes it visible — **provided the client actually
+  attacks rely on, and MLS makes it visible: **provided the client actually
   surfaces membership changes.** That UI obligation is a security control, not
   a nicety.
 
-### ADV-8 — Global passive adversary
+### ADV-8: Global passive adversary
 *Capability:* observes traffic at many points simultaneously, correlates by
 timing and volume across the whole network.
 
@@ -129,10 +129,10 @@ timing and volume across the whole network.
   Rotelyx for a tool that protects them. Such users need Tor, a mixnet, or not to
   use a phone.
 
-### ADV-9 — Push notification provider (Apple, Google)
+### ADV-9: Push notification provider (Apple, Google)
 *Capability:* sees that a device received a wake signal, and when.
 
-- **Defended:** A1 — pushes carry no content.
+- **Defended:** A1: pushes carry no content.
 - **Not defended:** A5, and partially A2 by timing correlation with a mailbox.
 - **Mitigations:** content-free silent wakes, jittered delivery windows, decoy
   pushes. None of these is a solution and all cost battery.
@@ -140,7 +140,7 @@ timing and volume across the whole network.
   rather than hidden because a threat model that only lists solved problems is
   marketing.
 
-### ADV-10 — Spam / abuse actor
+### ADV-10: Spam / abuse actor
 *Capability:* generates unlimited identities at zero cost, because identities
 are just keypairs.
 
@@ -149,8 +149,8 @@ are just keypairs.
 - **Implemented** in `rotelyx-core::access`:
   - **`InvitationOnly` is the default.** An identity is unreachable without a
     capability it issued out of band. Unsolicited contact is impossible rather
-    than merely expensive. The proof commits to the caller's identity — the one
-    the QUIC handshake already authenticated — so an observed proof cannot be
+    than merely expensive. The proof commits to the caller's identity: the one
+    the QUIC handshake already authenticated, so an observed proof cannot be
     replayed by anyone else.
   - **`ProofOfWork`** for identities that must be publicly reachable. The work
     binds to *both* identities and to the hour, so it is non-transferable: a
@@ -182,7 +182,7 @@ If any of these fails, the corresponding claims fail with it.
 |---|---|---|
 | Ed25519 signatures are unforgeable | identity, MLS credentials | Full impersonation. |
 | X25519 CDH is hard | L1 transport, L2 key agreement | Retroactive decryption of anything recorded. |
-| ML-KEM-768 is IND-CCA2 secure | PQ half of the hybrid combiner | Falls back to X25519-only security — which is why it is a *hybrid*, not a replacement. |
+| ML-KEM-768 is IND-CCA2 secure | PQ half of the hybrid combiner | Falls back to X25519-only security, which is why it is a *hybrid*, not a replacement. |
 | The hybrid combiner is secure if **either** component is | L2 key agreement | The reason a novel PQ construction is acceptable risk here at all. |
 | BLAKE3 / SHA-256 are collision resistant | safety numbers, key schedule | Safety number confusion; identity binding attacks. |
 | ChaCha20-Poly1305 is a secure AEAD | message encryption | Content disclosure. |
@@ -231,12 +231,107 @@ No public security claim is made before all of these are met.
 
 ---
 
-## 6. Open questions
+## 6. Side channels: what was checked
+
+Reviewed once, in full, and recorded so it does not have to be re-derived. Every
+comparison in the first-party crates that touches key material, a tag, a token,
+a proof or a passphrase was located and classified.
+
+**Already constant time, and correct to be:**
+
+| Site | What it compares |
+|---|---|
+| `PqSecret::ct_eq` | Two post-quantum shared secrets |
+| `access.rs` contact proof | An arriving proof against the expected one |
+| `access.rs` invitation revocation | An invitation secret against the revoked list |
+
+**Variable time and correct to be, because the values are public:**
+
+The sender identity and counter in a media header, an MLS epoch number, a
+signature key (a public key by definition), a connection identity in the
+mailbox server, and every `.len()` check in every parser.
+
+**Variable time on a secret-derived value, now fixed:** `Tag`.
+
+A tag derives from a conversation secret. It is not secret from the operator,
+who routes with it, and it is secret from everybody else, for whom knowing one
+buys the ability to deposit into that mailbox and correlate its traffic. Its
+`PartialEq` was derived, so it short-circuited on the first differing byte.
+
+**It was not exploitable**, and saying so matters as much as the fix. The
+comparison that matters is on the client, checking an arriving envelope against
+the tag it expected, and to reach it an attacker must get an envelope delivered.
+The mailbox only delivers to subscribers of the tag the envelope names, so
+putting bytes in front of that comparison already requires knowing the answer.
+The server compares tags where the attacker does choose them, but its reply
+already says whether anybody was subscribed, so timing reveals nothing the
+protocol does not.
+
+It is constant time now anyway. That argument is four paragraphs long and rests
+on details of delivery that one commit could change, by somebody who never read
+it. A variable-time comparison on secret-derived material is a standing
+obligation to keep re-deriving the argument; `ct_eq` costs one pass over 32
+bytes and discharges it permanently.
+
+`Tag`'s `Ord` and `Hash` stay variable time deliberately: they exist so a tag
+can key the map the server routes with, and making that constant time would mean
+scanning every subscriber on every deposit.
+
+**Not covered by this review**, and worth stating rather than leaving implied:
+the timing of the underlying primitives is the libraries' responsibility, not
+ours. Whether `chacha20poly1305`, `ed25519-dalek`, `ml-kem` and the RSA blind
+signature implementation are constant time is their claim; we have not measured
+it, and a review that said otherwise would be claiming work nobody did.
+
+## 7. What the artifacts leaked, and what can now be verified
+
+Two properties of the shipped files, both found by measuring rather than by
+reasoning, and both fixed.
+
+**The build machine's username was in every artifact.** Rust embeds `file!()` in
+panic messages, and for a dependency that is the full path into the build
+machine's cargo registry. Counted:
+
+| Artifact | Paths containing the build user's home |
+|---|---|
+| `rotelyx_wasm_bg.wasm` | 173 |
+| `rotelyx-relay` | 387 |
+| `rotelyx-mailbox-server` | 269 |
+
+The wasm is the one that matters most: it is downloaded by every visitor, so
+every visitor received the build machine's username. `--remap-path-prefix` in
+`scripts/build-wasm` and `scripts/build-release` removes them, and both scripts
+**refuse to finish** if any remain, so this cannot come back quietly.
+
+**The builds were not reproducible.** Two clean builds of identical source
+produced different binaries. They now produce byte-identical ones.
+
+That is the more valuable half. A user who is told "here is the source" cannot
+check that the module their browser just ran corresponds to it unless building
+that source gives the same bytes. Without reproducibility, publishing source is
+a gesture; with it, it is a claim anybody can test.
+
+### What this does not solve, and cannot
+
+Subresource integrity was considered and rejected as security theatre here. SRI
+protects a page served from a trusted origin against a subresource from an
+untrusted one. Our page and our module come from the same origin: an attacker
+who can serve a modified `rotelyx_wasm.js` can serve a modified `chat.html`
+carrying the matching hash. The check would verify the attacker's work.
+
+**A web client cannot defend against its own server.** That is inherent to
+shipping code over the same channel that serves the page, not a gap in this
+implementation, and no amount of hashing inside the page changes it. What
+reproducibility buys is the ability for somebody *outside* the page, a user with
+the published hash, a third party watching, to notice that what is being served
+is not what was published. That is a real defence and it is a different one.
+
+## 8. Open questions
 
 - How does a client detect that a mailbox is withholding messages rather than
   none having been sent? Suppression is currently invisible.
 - Rotating recipient tags must be unlinkable to an observer but derivable by the
-  recipient. The rotation schedule leaks something regardless — what, exactly?
+  recipient. The rotation schedule leaks something regardless: what, exactly?
 - Multi-device without a server-held key bundle: which device authorises the
   next one, and what does the user see when it happens?
 - Does surfacing "this call is relayed, not direct" help users or train them to

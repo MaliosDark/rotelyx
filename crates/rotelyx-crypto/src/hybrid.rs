@@ -10,8 +10,8 @@
 //! ## Why this module is so thin
 //!
 //! Everything cryptographic here is delegated. What Rotelyx adds is one
-//! composition decision — how the resulting secret reaches the MLS key
-//! schedule — and that lives in [`PqSecret::to_psk_bytes`]. Keeping the surface
+//! composition decision: how the resulting secret reaches the MLS key
+//! schedule, and that lives in [`PqSecret::to_psk_bytes`]. Keeping the surface
 //! this small is deliberate: it is the only novel construction in the system,
 //! so it must be small enough to review in an afternoon.
 
@@ -113,15 +113,15 @@ impl PqSecret {
     /// secure as long as the KEM output is, because MLS's own key schedule
     /// mixes the PSK into every epoch.
     ///
-    /// `binding` must commit to the context this secret is used in — the group
-    /// id and epoch — so that a PSK captured from one epoch cannot be replayed
+    /// `binding` must commit to the context this secret is used in: the group
+    /// id and epoch, so that a PSK captured from one epoch cannot be replayed
     /// into another.
     pub fn to_psk_bytes(&self, binding: &[u8]) -> Zeroizing<[u8; 32]> {
         derive_psk(&self.0, binding)
     }
 
     /// Constant-time equality. Only for tests and for verifying that two peers
-    /// agreed — never branch on secret material with `==`.
+    /// agreed: never branch on secret material with `==`.
     pub fn ct_eq(&self, other: &Self) -> bool {
         use subtle::ConstantTimeEq;
         self.0[..].ct_eq(&other.0[..]).into()
@@ -147,7 +147,7 @@ impl Drop for PqSecret {
 
 /// A peer's hybrid public key, published so others can encapsulate to it.
 ///
-/// Distributed inside a signed key package, never on its own — an unauthenticated
+/// Distributed inside a signed key package, never on its own: an unauthenticated
 /// encapsulation key is an invitation to a machine-in-the-middle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HybridPublicKey(EncapsulationKey);
@@ -185,7 +185,7 @@ pub struct HybridSecretKey(DecapsulationKey);
 impl HybridSecretKey {
     /// Recover the shared secret a peer encapsulated to us.
     ///
-    /// X-Wing decapsulation is infallible by construction — a malformed or
+    /// X-Wing decapsulation is infallible by construction: a malformed or
     /// attacker-chosen ciphertext yields an unrelated secret rather than an
     /// error. That is the implicit-rejection design ML-KEM inherits, and it is
     /// deliberate: an error would be an oracle. The mismatch surfaces later,
@@ -234,6 +234,138 @@ impl HybridCiphertext {
             return Err(HybridError::BadCiphertext);
         }
         Ok(Self(Ciphertext::try_from(bytes).map_err(|_| HybridError::BadCiphertext)?))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Distributing one secret to a whole group
+// ---------------------------------------------------------------------------
+
+/// Context for the key that wraps a group secret. Distinct from every other
+/// context in this crate so a wrapping key can never be mistaken for a PSK.
+const WRAP_CONTEXT: &str = "rotelyx pq group secret wrap v1";
+
+/// A post-quantum group secret, sealed to exactly one member.
+///
+/// # Why encapsulation alone is not enough
+///
+/// [`HybridPublicKey::encapsulate`] *derives* a secret, it does not carry a
+/// chosen one. That is exactly right for two parties and useless for a group:
+/// every member has to end up with the **same** value, because MLS looks a
+/// pre-shared key up by a single id and a commit carrying different material
+/// for different members would simply fail for all but one of them.
+///
+/// So the committer picks one group secret and, for each member, encapsulates
+/// to that member and uses the result as a key-encryption key. The KEM protects
+/// the wrapping key; the AEAD protects the group secret. Both halves of X-Wing
+/// still have to break for this to leak.
+#[derive(Clone, Debug)]
+pub struct WrappedPqSecret {
+    kem: HybridCiphertext,
+    nonce: [u8; 24],
+    sealed: Vec<u8>,
+}
+
+/// Bytes on the wire: the KEM ciphertext, a nonce, and the sealed secret with
+/// its tag.
+pub const WRAPPED_SECRET_LEN: usize = CIPHERTEXT_LEN + 24 + 32 + 16;
+
+impl WrappedPqSecret {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(WRAPPED_SECRET_LEN);
+        out.extend_from_slice(&self.kem.to_bytes());
+        out.extend_from_slice(&self.nonce);
+        out.extend_from_slice(&self.sealed);
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, HybridError> {
+        if bytes.len() != WRAPPED_SECRET_LEN {
+            return Err(HybridError::BadCiphertext);
+        }
+        let (kem, rest) = bytes.split_at(CIPHERTEXT_LEN);
+        let (nonce, sealed) = rest.split_at(24);
+
+        Ok(Self {
+            kem: HybridCiphertext::from_bytes(kem)?,
+            nonce: nonce.try_into().map_err(|_| HybridError::BadCiphertext)?,
+            sealed: sealed.to_vec(),
+        })
+    }
+}
+
+/// Derive the key that wraps a group secret from a KEM output.
+///
+/// Separated from the PSK derivation by its own context string: the same KEM
+/// output must never produce both a wrapping key and key-schedule material.
+fn wrapping_key(kem_secret: &PqSecret) -> Zeroizing<[u8; 32]> {
+    let mut hasher = blake3::Hasher::new_derive_key(WRAP_CONTEXT);
+    hasher.update(&kem_secret.0[..]);
+
+    let mut out = Zeroizing::new([0u8; 32]);
+    hasher.finalize_xof().fill(&mut out[..]);
+    out
+}
+
+impl PqSecret {
+    /// A fresh group secret, straight from the OS CSPRNG.
+    ///
+    /// Used by the member committing a post-quantum rotation, who then wraps it
+    /// to every other member.
+    pub fn generate() -> Self {
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        getrandom::fill(&mut bytes[..]).expect("the OS CSPRNG must be available");
+        Self(bytes)
+    }
+
+    /// Seal this secret to one member's hybrid public key.
+    pub fn wrap_for(&self, recipient: &HybridPublicKey) -> Result<WrappedPqSecret, HybridError> {
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+
+        let (kem, kem_secret) = recipient.encapsulate();
+        let key = wrapping_key(&kem_secret);
+
+        let mut nonce = [0u8; 24];
+        getrandom::fill(&mut nonce).map_err(|_| HybridError::Entropy)?;
+
+        let cipher = XChaCha20Poly1305::new_from_slice(&key[..])
+            .map_err(|_| HybridError::BadCiphertext)?;
+
+        let sealed = cipher
+            .encrypt(&XNonce::from(nonce), &self.0[..])
+            .map_err(|_| HybridError::BadCiphertext)?;
+
+        Ok(WrappedPqSecret { kem, nonce, sealed })
+    }
+}
+
+impl HybridSecretKey {
+    /// Recover a group secret sealed to us.
+    ///
+    /// Fails rather than returning something usable if the wrapping is wrong.
+    /// A group secret that silently differs between members would produce a
+    /// commit nobody else can process, and the cause would be invisible.
+    pub fn unwrap_pq(&self, wrapped: &WrappedPqSecret) -> Result<PqSecret, HybridError> {
+        use chacha20poly1305::aead::{Aead, KeyInit};
+        use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+
+        let kem_secret = self.decapsulate(&wrapped.kem);
+        let key = wrapping_key(&kem_secret);
+
+        let cipher = XChaCha20Poly1305::new_from_slice(&key[..])
+            .map_err(|_| HybridError::BadCiphertext)?;
+
+        let plain = cipher
+            .decrypt(&XNonce::from(wrapped.nonce), &wrapped.sealed[..])
+            .map_err(|_| HybridError::BadCiphertext)?;
+
+        let mut out = Zeroizing::new([0u8; 32]);
+        if plain.len() != 32 {
+            return Err(HybridError::BadCiphertext);
+        }
+        out.copy_from_slice(&plain);
+        Ok(PqSecret(out))
     }
 }
 

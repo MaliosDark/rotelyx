@@ -29,9 +29,9 @@ impl NetEndpoint {
     /// Bind an endpoint.
     ///
     /// Uses `presets::Minimal`, which sets the TLS crypto provider and nothing
-    /// else. The n0 preset — which registers a pkarr publisher, a pkarr
+    /// else. The n0 preset, which registers a pkarr publisher, a pkarr
     /// resolver and a DNS lookup against `dns.iroh.link`, and loads Number 0's
-    /// production relay map — is never constructed. Relays and lookup come from
+    /// production relay map: is never constructed. Relays and lookup come from
     /// [`NetConfig`] alone.
     pub async fn bind(secret: SecretKey, config: NetConfig, alpn: &[u8]) -> Result<Self> {
         let relay_mode = match config.relays() {
@@ -149,7 +149,7 @@ impl NetEndpoint {
 ///
 /// The peer identity is established by the QUIC handshake before this value
 /// exists, so [`NetSession::peer`] is trustworthy at the transport level. It
-/// says nothing about whether the human behind that key is who you think —
+/// says nothing about whether the human behind that key is who you think,
 /// that is what safety numbers are for.
 #[derive(Debug)]
 pub struct NetSession {
@@ -182,7 +182,7 @@ impl NetSession {
     /// to be delivered.
     ///
     /// **Not optional.** Dropping a QUIC send stream without finishing it
-    /// resets the stream, and anything still in flight is discarded — the write
+    /// resets the stream, and anything still in flight is discarded: the write
     /// appears to have succeeded and the peer never receives it. Call this
     /// before dropping a session whose last write matters.
     pub async fn finish(&mut self) -> Result<()> {

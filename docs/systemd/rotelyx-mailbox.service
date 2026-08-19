@@ -1,0 +1,52 @@
+# The blind mailbox, as a service that comes back.
+#
+# Written after an outage on 18 August 2026 in which all three WebSocket
+# endpoints returned 502 for an unknown length of time while the static site
+# kept returning 200. Nothing had crashed loudly and nothing was watching: the
+# processes had simply stopped and were started by hand in the first place.
+#
+# Install:
+#   sudo cp docs/systemd/rotelyx-mailbox.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rotelyx-mailbox
+
+[Unit]
+Description=Rotelyx blind mailbox
+Documentation=https://github.com/MaliosDark/rotelyx
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=OPERATOR
+WorkingDirectory=/home/OPERATOR/rotelyx
+ExecStart=/home/OPERATOR/rotelyx/target/release/rotelyx-mailbox-server --bind 0.0.0.0:3341
+
+# Come back from anything, including a clean exit: a mailbox that decided to
+# stop is still a mailbox nobody can reach.
+Restart=always
+RestartSec=2
+
+# The mailbox holds no key and reads nothing it stores, so it needs almost
+# nothing from the system. Everything below is what it does not need.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+# A restart drops uncollected envelopes, which is by design: the mailbox is
+# store-and-forward with a TTL, not a database. Pass --mailbox-state to keep
+# them, and give it a writable path here if you do.
+# ReadWritePaths=/var/lib/rotelyx
+
+[Install]
+WantedBy=multi-user.target

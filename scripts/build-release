@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Build the server binaries the way they should be shipped.
+#
+# Same reason as `scripts/build-wasm`, for the artifacts that run on a machine
+# rather than in a browser. Rust embeds `file!()` in panic messages, and for a
+# dependency that is the full path into the build machine's cargo registry.
+# Measured before this script existed:
+#
+#   rotelyx-relay            387 paths containing the build user's home
+#   rotelyx-mailbox-server   269
+#
+# A relay binary is less exposed than a browser module: it sits on the
+# operator's own machine rather than being downloaded by every visitor. It is
+# still the build machine's username, in a file that gets copied to servers,
+# attached to issues and handed to whoever is deploying today.
+#
+# Remapping also makes the build reproducible, which matters more. An operator
+# running a relay somebody else built has no way to check it corresponds to the
+# published source unless building that source twice gives the same bytes.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+export RUSTFLAGS="${RUSTFLAGS:-} \
+    --remap-path-prefix=$HOME/.cargo/registry/src=/cargo \
+    --remap-path-prefix=$HOME/.rustup=/rustup \
+    --remap-path-prefix=$PWD=/src"
+
+BINS=(rotelyx-relay rotelyx-mailbox-server)
+
+echo "Building ${BINS[*]}..."
+for b in "${BINS[@]}"; do
+    cargo build --release -p "$b"
+done
+
+echo
+FAILED=0
+for b in "${BINS[@]}"; do
+    f="target/release/$b"
+    [ -f "$f" ] || { echo "  $b: not built"; FAILED=1; continue; }
+
+    leaked=$(strings -n 12 "$f" 2>/dev/null | grep -c "$HOME" || true)
+    size=$(stat -c%s "$f")
+    printf "  %-24s %10d bytes  " "$b" "$size"
+
+    if [ "$leaked" != "0" ]; then
+        echo "REFUSING: $leaked build paths from this machine"
+        FAILED=1
+    else
+        echo "sha256 $(sha256sum "$f" | cut -c1-16)"
+    fi
+done
+
+if [ "$FAILED" != "0" ]; then
+    echo
+    echo "  A binary carrying build paths ships this machine's username."
+    exit 1
+fi
+
+echo
+echo "  No build paths, and the same source gives the same hashes. An operator"
+echo "  can check a binary against the source it claims to come from."

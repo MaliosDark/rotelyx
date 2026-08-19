@@ -1,7 +1,7 @@
 //! MLS conversations with a hybrid post-quantum key schedule.
 //!
 //! A conversation is an MLS group (RFC 9420) via OpenMLS. A 1:1 chat is simply
-//! a group of two — there is no separate pairwise protocol, which removes an
+//! a group of two: there is no separate pairwise protocol, which removes an
 //! entire class of "works in 1:1, subtly broken in groups" bugs.
 //!
 //! ## The post-quantum layer
@@ -34,7 +34,7 @@ use crate::hybrid::{HybridCiphertext, HybridKem, HybridPublicKey, HybridSecretKe
 /// ChaCha20-Poly1305 rather than AES-GCM: most phones without AES hardware run
 /// it faster, and it sidesteps the cache-timing surface of software AES.
 ///
-/// Note the `128` — the OpenMLS RustCrypto provider offers no 256-bit suite, so
+/// Note the `128`: the OpenMLS RustCrypto provider offers no 256-bit suite, so
 /// the classical security level is fixed here. The long-term margin comes from
 /// the hybrid post-quantum PSK below, not from this line.
 pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
@@ -57,6 +57,10 @@ const PSK_LABEL: &[u8] = b"rotelyx-pq-psk-v1";
 /// MLS exporter label for the mailbox tag key. Distinct from every other label
 /// in the system so the addressing key can never coincide with a message key.
 const MAILBOX_TAG_KEY_LABEL: &str = "rotelyx mailbox tag key v1";
+
+/// Media keys are exported under their own label, so a media key and a mailbox
+/// tag key can never be the same bytes even at the same epoch.
+const MEDIA_KEY_LABEL: &str = "rotelyx media base key v1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum GroupError {
@@ -105,7 +109,7 @@ impl Member {
     /// Create a participant.
     ///
     /// `identity` is the MLS credential identity. In Rotelyx this is the device's
-    /// public key bytes, not a name — there is no name registry to consult, and
+    /// public key bytes, not a name: there is no name registry to consult, and
     /// a self-asserted display name in a credential is a phishing surface.
     pub fn new(identity: &[u8]) -> Result<Self, GroupError> {
         let provider = OpenMlsRustCrypto::default();
@@ -127,6 +131,81 @@ impl Member {
         })
     }
 
+    /// Everything needed to rebuild this member and its groups.
+    ///
+    /// # What is in here
+    ///
+    /// The signing key, the hybrid decapsulation key, the credential identity,
+    /// and the whole MLS storage, which is where OpenMLS keeps the group state
+    /// itself. Holding it is equivalent to being this member: it decrypts every
+    /// message the group's current epochs can decrypt.
+    ///
+    /// It is deliberately raw. Sealing it is the caller's job, because the
+    /// right way to protect it differs between a file on a disk and a browser's
+    /// local storage, and a crate that guessed would guess wrong for one of
+    /// them.
+    pub fn export(&self) -> Result<MemberState, GroupError> {
+        let values = self
+            .provider
+            .storage()
+            .values
+            .read()
+            .map_err(|_| GroupError::Mls("storage lock poisoned".into()))?;
+
+        Ok(MemberState {
+            identity: self.credential.credential.serialized_content().to_vec(),
+            signature_public: self.signer.public().to_vec(),
+            // The whole key pair, serialised: the private half is only exposed
+            // by an accessor gated behind the crate's test feature, and turning
+            // that on in a shipping build to read our own key would be worse
+            // than going through serde.
+            signer: postcard::to_allocvec(&self.signer)
+                .map_err(|e| GroupError::Mls(format!("serialising the signer: {e}")))?,
+            hybrid_secret: *self.hybrid_sk.to_storage_bytes(),
+            storage: values.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        })
+    }
+
+    /// Rebuild a member from an export.
+    pub fn restore(state: MemberState) -> Result<Self, GroupError> {
+        let provider = OpenMlsRustCrypto::default();
+
+        {
+            let mut values = provider
+                .storage()
+                .values
+                .write()
+                .map_err(|_| GroupError::Mls("storage lock poisoned".into()))?;
+            values.clear();
+            values.extend(state.storage);
+        }
+
+        let signer: SignatureKeyPair = postcard::from_bytes(&state.signer)
+            .map_err(|e| GroupError::Mls(format!("reading the signer: {e}")))?;
+
+        let credential = CredentialWithKey {
+            credential: BasicCredential::new(state.identity).into(),
+            signature_key: state.signature_public.into(),
+        };
+
+        Ok(Self {
+            provider,
+            signer,
+            credential,
+            hybrid_sk: HybridSecretKey::from_storage_bytes(state.hybrid_secret),
+        })
+    }
+
+    /// This member's signature public key.
+    ///
+    /// Unique per member and stable for as long as they are in the group, which
+    /// is what makes it the right thing to derive a per-recipient mailbox tag
+    /// from. A leaf index is neither: MLS reuses a slot after a removal, and the
+    /// new occupant would inherit the old one's tag.
+    pub fn signature_key(&self) -> Vec<u8> {
+        self.signer.public().to_vec()
+    }
+
     /// This member's hybrid public key, to be published alongside its key
     /// package so peers can encapsulate post-quantum material to it.
     pub fn hybrid_public_key(&self) -> HybridPublicKey {
@@ -138,9 +217,22 @@ impl Member {
         self.hybrid_sk.decapsulate(ct)
     }
 
+    /// Recover a post-quantum group secret that was sealed to us.
+    ///
+    /// The group counterpart of [`Member::open_pq`]. With two members the
+    /// encapsulation itself carries the secret; with more, one chosen secret is
+    /// wrapped to each member, because MLS looks a pre-shared key up by a
+    /// single id and every member has to arrive at the same value.
+    pub fn unwrap_group_pq(
+        &self,
+        wrapped: &crate::WrappedPqSecret,
+    ) -> Result<PqSecret, crate::hybrid::HybridError> {
+        self.hybrid_sk.unwrap_pq(wrapped)
+    }
+
     /// Produce a key package so others can add this member to a group.
     ///
-    /// Published through the blind mailbox, never a directory — a key package
+    /// Published through the blind mailbox, never a directory: a key package
     /// server that maps identities to packages is a social-graph oracle.
     pub fn key_package(&self) -> Result<KeyPackageBundle, GroupError> {
         KeyPackage::builder()
@@ -156,7 +248,7 @@ impl Member {
 
 /// Encode a key package for publication.
 ///
-/// Key packages are public and signed, so this is not secret material — but it
+/// Key packages are public and signed, so this is not secret material, but it
 /// is an authorisation to add the holder to a group, so it must be delivered
 /// through a channel that binds it to the identity it claims. The blind mailbox
 /// does that; a public directory would not.
@@ -185,6 +277,38 @@ pub fn deserialize_key_package(bytes: &[u8]) -> Result<KeyPackage, GroupError> {
 }
 
 /// An MLS conversation. A 1:1 chat is a conversation with two members.
+/// A member's complete state, ready to be sealed by the caller.
+///
+/// Every field is secret. This is not a public profile: it is the material that
+/// makes someone *be* a participant, and anyone holding it can read what the
+/// group can read.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct MemberState {
+    pub identity: Vec<u8>,
+    pub signature_public: Vec<u8>,
+    pub signer: Vec<u8>,
+    pub hybrid_secret: [u8; 32],
+    /// OpenMLS's own storage, which is where the group state lives.
+    pub storage: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl std::fmt::Debug for MemberState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MemberState(<redacted>)")
+    }
+}
+
+/// One member as seen from inside the group.
+///
+/// Both fields are public by construction. The identity is self-asserted and
+/// says who someone claims to be; the signature key is what MLS actually
+/// authenticates and what a safety number covers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Participant {
+    pub identity: Vec<u8>,
+    pub signature_key: Vec<u8>,
+}
+
 pub struct Conversation {
     group: MlsGroup,
 }
@@ -203,7 +327,7 @@ impl Conversation {
     /// The ciphersuite is set explicitly. `MlsGroupCreateConfig::default()`
     /// selects OpenMLS's default suite (AES-GCM), not ours, so a group built
     /// from the default would negotiate a different suite than the one every
-    /// key package advertises — and the mismatch only surfaces when the first
+    /// key package advertises, and the mismatch only surfaces when the first
     /// member is added.
     pub fn create(founder: &Member) -> Result<Self, GroupError> {
         let config = MlsGroupCreateConfig::builder()
@@ -252,7 +376,7 @@ impl Conversation {
     /// message key: a leaked tag key must reveal *where* to look in a mailbox,
     /// never what is there.
     ///
-    /// # This value is epoch-bound — pin it
+    /// # This value is epoch-bound: pin it
     ///
     /// The MLS exporter changes with every epoch, which is the whole point of
     /// forward secrecy and exactly wrong for addressing. If each side derived a
@@ -260,7 +384,7 @@ impl Conversation {
     /// would deposit under a tag the recipient cannot compute, and the message
     /// would be silently undeliverable.
     ///
-    /// So: derive this **once**, at a mutually known epoch — join time — and
+    /// So derive this **once**, at a mutually known epoch (join time), and
     /// persist it. Unlinkability over time does not depend on rotating this
     /// key; it comes from [`TagKey::tag_for_epoch`], which already derives a
     /// fresh tag per coarse time bucket from a fixed key.
@@ -282,12 +406,39 @@ impl Conversation {
             .map_err(|_| GroupError::Mls("exporter returned the wrong length".into()))
     }
 
+    /// Export the base key that media frames are encrypted under.
+    ///
+    /// # Why this is not pinned like the mailbox tag key
+    ///
+    /// [`Conversation::mailbox_tag_key`] must be derived once and held, because
+    /// it is an **address**: a sender one commit ahead would otherwise deposit
+    /// where the recipient cannot look.
+    ///
+    /// A media key is the opposite. It should change with every epoch, so that
+    /// a member removed from the group stops being able to decrypt the call
+    /// immediately rather than at the end of it. A call therefore rekeys when
+    /// the group does, which is exactly the behaviour a removal has to have to
+    /// mean anything.
+    ///
+    /// Every member derives the same value at the same epoch;
+    /// `rotelyx_media::SenderKeys::derive` splits it per speaker.
+    pub fn media_base_key(&self, member: &Member) -> Result<[u8; 32], GroupError> {
+        let bytes = self
+            .group
+            .export_secret(member.provider.crypto(), MEDIA_KEY_LABEL, &[], 32)
+            .map_err(mls)?;
+
+        bytes
+            .try_into()
+            .map_err(|_| GroupError::Mls("exporter returned the wrong length".into()))
+    }
+
     /// Stage a post-quantum secret locally so an incoming PSK commit can be
     /// processed.
     ///
     /// The receiving side of [`Conversation::commit_pq_secret`]. A member who
     /// has decapsulated the sender's hybrid ciphertext calls this *before*
-    /// handling the commit — MLS looks the PSK up by id in local storage and
+    /// handling the commit: MLS looks the PSK up by id in local storage and
     /// the commit fails if it is missing.
     ///
     /// Must be called while still at the pre-commit epoch, since the binding
@@ -317,6 +468,22 @@ impl Conversation {
     /// in the commit; that guarantee is worth nothing if the UI stays silent.
     pub fn member_count(&self) -> usize {
         self.group.members().count()
+    }
+
+    /// Everyone currently in the conversation.
+    ///
+    /// Clients need this to address a message: with more than two members a
+    /// sender deposits one copy per recipient, each under that recipient's own
+    /// tag, because mailbox collection removes and a single shared tag would
+    /// hand each message to whichever member collected first.
+    pub fn roster(&self) -> Vec<Participant> {
+        self.group
+            .members()
+            .map(|m| Participant {
+                identity: m.credential.serialized_content().to_vec(),
+                signature_key: m.signature_key.as_slice().to_vec(),
+            })
+            .collect()
     }
 
     /// Invite a member, returning the commit to broadcast and the welcome to
@@ -351,6 +518,17 @@ impl Conversation {
             .export_ratchet_tree()
             .tls_serialize_detached()
             .map_err(codec)
+    }
+
+    /// Reopen a conversation a restored member already holds state for.
+    ///
+    /// Returns `None` when the storage has no such group, which is how a caller
+    /// tells "this export predates the conversation" from a real failure.
+    pub fn reopen(member: &Member, group_id: &[u8]) -> Result<Option<Self>, GroupError> {
+        let id = GroupId::from_slice(group_id);
+        MlsGroup::load(member.provider.storage(), &id)
+            .map_err(|e| GroupError::Mls(format!("{e:?}")))
+            .map(|maybe| maybe.map(|group| Self { group }))
     }
 
     /// Join a conversation from a welcome message.
@@ -400,7 +578,7 @@ impl Conversation {
         let psk_bytes = secret.to_psk_bytes(&binding);
 
         // The nonce must be fresh each time the PSK is applied. It is *not*
-        // stored — OpenMLS keys the secret by the PSK id alone — which is why
+        // stored: OpenMLS keys the secret by the PSK id alone , which is why
         // a receiver can stage the same secret without knowing our nonce.
         let mut nonce = [0u8; 32];
         getrandom::fill(&mut nonce).map_err(|_| GroupError::Mls("entropy".into()))?;
@@ -450,7 +628,7 @@ impl Conversation {
     /// Process an incoming message.
     ///
     /// Application messages return their plaintext. Commits are applied and
-    /// return `None` — the caller must treat that as "the group changed" and
+    /// return `None`: the caller must treat that as "the group changed" and
     /// re-read [`Conversation::member_count`].
     pub fn receive(
         &mut self,

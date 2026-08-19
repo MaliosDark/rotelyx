@@ -5,10 +5,10 @@
 //!
 //! Two independent checks, because they fail differently:
 //!
-//! 1. **Live endpoint** — bind a real endpoint and read back the relay map it
+//! 1. **Live endpoint**: bind a real endpoint and read back the relay map it
 //!    actually holds. Catches a policy or preset regression, including one
 //!    introduced by an upstream version bump that changes a default.
-//! 2. **Source scan** — grep the workspace for third-party hostnames. Catches
+//! 2. **Source scan**: grep the workspace for third-party hostnames. Catches
 //!    a hardcoded URL, which the first check would miss until that code path
 //!    happened to run.
 //!

@@ -21,6 +21,27 @@ rotelyx-identity.*
 # Swap files created for local testing
 /swapfile*
 
+# --- The operator's own addresses --------------------------------------------
+#
+# The committed deployment notes use RELAY_HOST and NGINX_HOST as placeholders.
+# The real LAN addresses go in a `.local.md` beside them, which stays here.
+# A public hostname is in DNS and reveals nothing; a private address reveals the
+# shape of somebody's network.
+
+docs/*.local.md
+docs/*.local.conf
+
+# --- Test audio ---------------------------------------------------------------
+#
+# The speech clips the codec is measured on are 2.3 MB of binary that git would
+# carry in its history for ever, and they are regenerable: `scripts/make-speech`
+# rebuilds them from a text-to-speech model. The measurements skip themselves
+# when the clips are absent rather than failing, so a fresh clone still builds
+# and still passes.
+
+crates/rotelyx-codec/tests/speech/
+target/listening/
+
 # --- Editor and OS -----------------------------------------------------------
 .DS_Store
 *.swp

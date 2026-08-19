@@ -38,7 +38,7 @@ pub enum WireError {
 }
 
 /// What a frame carries. The transport never inspects the payload beyond this
-/// tag — routing decisions are made here, decryption happens at L2.
+/// tag: routing decisions are made here, decryption happens at L2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FrameKind {
@@ -48,7 +48,7 @@ pub enum FrameKind {
     Handshake = 0x02,
     /// Call setup and teardown. Media itself does not use this stream.
     CallControl = 0x03,
-    /// Liveness probe. Also carries cover traffic — see L3 padding.
+    /// Liveness probe. Also carries cover traffic: see L3 padding.
     Ping = 0x04,
     /// Response to [`FrameKind::Ping`].
     Pong = 0x05,

@@ -1,0 +1,66 @@
+[package]
+name = "rotelyx-mailbox-server"
+description = "Blind mailbox server: stores sealed envelopes under rotating tags"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rotelyx-mailbox-server"
+path = "src/main.rs"
+
+[dependencies]
+rotelyx-status.workspace = true
+rotelyx-mailbox = { path = "../rotelyx-mailbox" }
+rotelyx-capability = { path = "../rotelyx-capability" }
+
+axum = { version = "0.8", features = ["ws"] }
+tokio.workspace = true
+futures-lite.workspace = true
+serde.workspace = true
+serde_json = "1"
+data-encoding.workspace = true
+ed25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+argon2.workspace = true
+# For the vault cache binding: a hash of the passphrase, never the passphrase.
+blake3.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+postcard.workspace = true
+getrandom.workspace = true
+thiserror.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+blind-rsa-signatures = "0.17"
+
+# Waking an iPhone, and only that. See src/wake.rs.
+#
+# `p256` signs the ES256 token Apple asks for. Not `ed25519-dalek`, which is
+# already here: Apple accepts one algorithm and it is not that one.
+#
+# `reqwest` speaks HTTP/2, which APNs requires and negotiates at the TLS
+# handshake, so a client that only knows HTTP/1.1 is refused rather than
+# downgraded. rustls rather than the system OpenSSL, so the binary depends on
+# nothing the host happens to have installed.
+#
+# Both are server-side only. The client application contacts no third party at
+# all, and this is what keeps it that way: the phone talks to this mailbox, and
+# this mailbox talks to Apple.
+sha2.workspace = true
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls"] }
+
+[dev-dependencies]
+# The minter, for the paid-tier tests. Test-only: see rotelyx-capability/src/testing.rs.
+rotelyx-capability = { path = "../rotelyx-capability", features = ["testing"] }
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "net"] }
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
+rotelyx-crypto = { path = "../rotelyx-crypto" }
+rotelyx-wasm = { path = "../rotelyx-wasm" }

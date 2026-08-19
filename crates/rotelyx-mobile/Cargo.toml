@@ -1,0 +1,28 @@
+[package]
+name = "rotelyx-mobile"
+description = "Rotelyx for Android, iOS and desktop: the same engine the browser gets, behind a C ABI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "rotelyx_mobile"
+# cdylib for Android and for a Flutter desktop plugin, staticlib for iOS, rlib
+# so the tests in this crate can exercise the dispatcher without going through
+# the C boundary.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# The engine, not a copy of it. `rotelyx-wasm` is an rlib as well as a cdylib
+# and its browser-only dependencies are gated to wasm32, so the same code that
+# runs in the browser runs here. Nothing in this crate reimplements protocol
+# logic, and if anything ever does, that is the bug.
+rotelyx-wasm = { path = "../rotelyx-wasm" }
+rotelyx-codec = { workspace = true }
+rotelyx-media = { path = "../rotelyx-media" }
+rotelyx-net = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"

@@ -112,6 +112,36 @@ pub fn load_or_create(path: &Path) -> Result<Identity> {
 mod tests {
     use super::*;
 
+    /// Serialises the tests that touch the passphrase variable.
+    ///
+    /// The environment is process wide and cargo runs these tests as threads
+    /// of one process, so without this each test clears the variable the other
+    /// one is relying on. The result was a failure roughly one run in three,
+    /// in whichever test lost the race, which is the worst kind: it looked
+    /// like flakiness in the code under test rather than in the harness.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Set the passphrase for the duration of a test and clear it afterwards,
+    /// holding the lock across both.
+    struct Passphrase(std::sync::MutexGuard<'static, ()>);
+
+    impl Passphrase {
+        fn set() -> Self {
+            let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // SAFETY: the lock is held for as long as this value lives, and
+            // it is the only thing in this crate that touches the variable.
+            unsafe { std::env::set_var(PASSPHRASE_ENV, "test-passphrase") };
+            Self(guard)
+        }
+    }
+
+    impl Drop for Passphrase {
+        fn drop(&mut self) {
+            // SAFETY: still under the lock, since the guard is a field here.
+            unsafe { std::env::remove_var(PASSPHRASE_ENV) };
+        }
+    }
+
     fn tmp(name: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!("rotelyx-keyfile-{}-{}", name, std::process::id()));
@@ -121,9 +151,8 @@ mod tests {
 
     #[test]
     fn a_new_identity_is_sealed_on_disk() {
+        let _passphrase = Passphrase::set();
         let path = tmp("new");
-        // SAFETY-adjacent: single threaded test, no other test reads this var.
-        unsafe { std::env::set_var(PASSPHRASE_ENV, "test-passphrase") };
 
         let identity = load_or_create(&path).expect("create");
         let bytes = std::fs::read(&path).expect("read");
@@ -135,19 +164,18 @@ mod tests {
         let again = load_or_create(&path).expect("reopen");
         assert_eq!(identity.id(), again.id());
 
-        unsafe { std::env::remove_var(PASSPHRASE_ENV) };
         let _ = std::fs::remove_file(&path);
     }
 
     /// A key file from an older build must be upgraded rather than rejected.
     #[test]
     fn a_plaintext_key_is_migrated_in_place() {
+        let _passphrase = Passphrase::set();
         let path = tmp("migrate");
         let original = Identity::generate();
         std::fs::write(&path, &*original.to_storage_bytes()).expect("write raw");
         assert_eq!(std::fs::read(&path).unwrap().len(), 32);
 
-        unsafe { std::env::set_var(PASSPHRASE_ENV, "test-passphrase") };
         let loaded = load_or_create(&path).expect("migrate");
 
         assert_eq!(loaded.id(), original.id(), "migration changed the identity");
@@ -156,7 +184,6 @@ mod tests {
             "the file is still plaintext after migration"
         );
 
-        unsafe { std::env::remove_var(PASSPHRASE_ENV) };
         let _ = std::fs::remove_file(&path);
     }
 }

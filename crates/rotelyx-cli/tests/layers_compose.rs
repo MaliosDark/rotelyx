@@ -1,8 +1,8 @@
 //! End-to-end: do the layers actually compose?
 //!
 //! Every crate is tested in isolation. Nothing until now checked that a message
-//! survives the whole path — MLS encryption, envelope padding, a blind mailbox
-//! round trip, and decryption on the far side — or that the guarantees each
+//! survives the whole path: MLS encryption, envelope padding, a blind mailbox
+//! round trip, and decryption on the far side, or that the guarantees each
 //! layer claims still hold once they are stacked.
 //!
 //! These tests deliberately assert *properties*, not just that the code runs.
@@ -16,7 +16,7 @@ use rotelyx_mailbox::{Envelope, Mailbox, TagKey};
 ///
 /// The tag key is pinned here, at the epoch both members share right after the
 /// join, and reused for the rest of the test. Deriving it lazily per message
-/// would break the moment either side committed — see
+/// would break the moment either side committed: see
 /// `the_tag_key_changes_with_the_epoch_so_it_must_be_pinned` in rotelyx-crypto.
 fn conversation_of_two() -> (Member, Member, Conversation, Conversation, TagKey, TagKey) {
     let alice = Member::new(b"alice-device").expect("alice");
@@ -50,12 +50,12 @@ fn a_message_survives_the_offline_path() {
     mailbox.deposit(envelope, 0).expect("deposit");
 
     // Bob comes online later and polls his window, using the tag key he derived
-    // independently from the group — nothing about addressing was transmitted.
+    // independently from the group: nothing about addressing was transmitted.
     let collected = mailbox.collect_many(&recipient_tags.polling_tags(100, 3), 60);
     assert_eq!(collected.len(), 1, "Bob must find exactly his envelope");
 
     // Decrypt. The MLS message is self-delimiting, so the zero padding is
-    // simply ignored — this is what makes a cleartext length field unnecessary.
+    // simply ignored: this is what makes a cleartext length field unnecessary.
     let recovered = b
         .receive(&bob, collected[0].payload())
         .expect("receive")
@@ -70,7 +70,7 @@ fn a_message_survives_the_offline_path() {
 fn the_operator_learns_nothing_it_should_not() {
     let (alice, _bob, mut a, _b, tags, _kb) = conversation_of_two();
 
-    let plaintext = b"marcador-secreto-inconfundible";
+    let plaintext = b"unmistakable-secret-marker";
     let ciphertext = a.send(&alice, plaintext).expect("send");
     let envelope = Envelope::seal(tags.tag_for_epoch(7), &ciphertext).expect("seal");
 
@@ -158,9 +158,9 @@ fn the_post_quantum_commit_survives_the_mailbox() {
     assert_eq!(a.epoch(), b.epoch(), "both sides land on the same epoch");
 
     // And the conversation continues, now post-quantum protected.
-    let msg = a.send(&alice, b"despues del commit").expect("send");
+    let msg = a.send(&alice, b"after the commit").expect("send");
     let got = b.receive(&bob, &msg).expect("receive").expect("application");
-    assert_eq!(got, b"despues del commit");
+    assert_eq!(got, b"after the commit");
 }
 
 /// Somebody holding the mailbox contents but not the tag key cannot even tell

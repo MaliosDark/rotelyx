@@ -4,7 +4,7 @@
 //!
 //! When both peers are online, messages and calls go directly over the
 //! transport and touch no server. This crate exists only for the case where the
-//! recipient is not there — which, on phones, is most of the time.
+//! recipient is not there, which, on phones, is most of the time.
 //!
 //! ## The design constraint
 //!
@@ -26,7 +26,7 @@
 //!
 //! Timing correlation between a deposit and a collection, and an operator that
 //! simply retains everything. Deletion is enforced by this code, not by the
-//! protocol — a hostile operator can keep copies and no client can tell.
+//! protocol: a hostile operator can keep copies and no client can tell.
 //!
 //! The mitigation is not technical: the mailbox is a single self-hostable
 //! binary, so seizing any one operator compromises one community rather than a

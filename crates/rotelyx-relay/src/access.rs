@@ -57,7 +57,7 @@ impl AccessControl for Allowlist {
         } else {
             // The reason is deliberately vague. Telling a caller *why* it was
             // refused turns the relay into an oracle for which identities the
-            // operator serves — which is the membership of a community.
+            // operator serves, which is the membership of a community.
             Access::Deny {
                 reason: Some("not permitted".into()),
             }

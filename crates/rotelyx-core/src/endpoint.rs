@@ -1,6 +1,6 @@
 //! The Rotelyx protocol session (L1 framing over the transport).
 //!
-//! Transport policy — relays, path selection, address lookup — lives in
+//! Transport policy: relays, path selection, address lookup , lives in
 //! `rotelyx-net` and is not configurable from here. This module is only
 //! concerned with turning a transport session into a stream of Rotelyx frames.
 
@@ -28,7 +28,7 @@ pub struct RotelyxEndpoint {
 impl RotelyxEndpoint {
     /// Bind an endpoint for this identity.
     ///
-    /// The [`NetConfig`] must be stated explicitly — there is no default that
+    /// The [`NetConfig`] must be stated explicitly: there is no default that
     /// could reach infrastructure we do not operate. Use
     /// [`NetConfig::direct_only`] for the maximum-privacy posture.
     pub async fn bind(identity: &Identity, config: NetConfig) -> Result<Self> {
@@ -80,8 +80,8 @@ impl RotelyxEndpoint {
     /// handshake, so it cannot make us do group-crypto work it was never
     /// entitled to ask for.
     ///
-    /// `current_epoch` comes from the caller — see
-    /// [`crate::access::epoch_at`] — so this stays testable and clock skew is
+    /// `current_epoch` comes from the caller: see
+    /// [`crate::access::epoch_at`], so this stays testable and clock skew is
     /// an explicit concern.
     pub async fn accept_with(&self, gate: &Gate, current_epoch: u64) -> Result<Session> {
         let net = self.net.accept().await?;
@@ -90,7 +90,7 @@ impl RotelyxEndpoint {
         let frame = session.recv().await?;
         if frame.kind != FrameKind::Admission {
             // Anything before admission is a protocol violation. Say nothing
-            // useful about why — a detailed refusal is an oracle for what this
+            // useful about why: a detailed refusal is an oracle for what this
             // identity's policy is.
             session.close().await;
             bail!("peer sent {:?} before admission", frame.kind);
@@ -157,7 +157,7 @@ impl Session {
 
     /// Split into owned halves so reading and writing can run concurrently.
     ///
-    /// The caller becomes responsible for finishing the send half — see
+    /// The caller becomes responsible for finishing the send half: see
     /// [`rotelyx_net::NetSession::finish`]. Dropping it instead resets the stream
     /// and discards anything still in flight.
     pub fn split_for_chat(

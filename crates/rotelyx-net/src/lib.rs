@@ -7,7 +7,7 @@
 //!
 //! **No code path here contacts infrastructure Rotelyx does not operate.**
 //!
-//! That is not a configuration default — it is structural. [`RelayPolicy`] has
+//! That is not a configuration default: it is structural. [`RelayPolicy`] has
 //! no variant meaning "the library's defaults", [`AddressLookup`] has no
 //! variant that publishes anywhere, and [`NetConfig`] has no `Default` impl.
 //! The upstream transport ships defaults that register a pkarr publisher and
@@ -27,7 +27,7 @@
 //!
 //! ## Provenance
 //!
-//! The transport stack is vendored into this repository under `crates/net/` —
+//! The transport stack is vendored into this repository under `crates/net/`,
 //! Rotelyx downloads no upstream transport package. That code is derived from
 //! iroh (MIT/Apache-2.0), whose socket layer is in turn derived from Tailscale
 //! (BSD-3) and whose QUIC layer is a fork of quinn. See `VENDORING.md` for the

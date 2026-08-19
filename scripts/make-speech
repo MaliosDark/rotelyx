@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#
+# Rebuild the speech clips the codec is measured on.
+#
+# They are not in git. They are 2.3 MB of binary that a repository would carry
+# in its history for ever, and they are regenerable from this script, so the
+# measurements that use them skip themselves when they are absent rather than
+# failing. A fresh clone builds and passes without ever running this.
+#
+# What it produces: six sentences of neural text-to-speech, chosen between them
+# to contain sibilants, plosives, nasals, digits and a hard transient, because
+# those are the sounds a 40 ms window handles worst and a sustained vowel does
+# not contain. Synthesised at the model's native 22.05 kHz and resampled to the
+# 48 kHz the codec runs at.
+#
+# What it is not: a recording of a person. Nothing here has been near a
+# microphone or a room, so it says nothing about how the codec handles noise,
+# reverberation, or a voice that is not a model's idea of one. It is a step up
+# from a signal built out of twelve harmonics and it is not a substitute for a
+# corpus.
+#
+# Requirements: piper (https://github.com/rhasspy/piper) with medium voices, and
+# ffmpeg for the resample. Set PIPER and PIPER_MODELS if they are not on PATH.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT="$ROOT/crates/rotelyx-codec/tests/speech"
+
+PIPER="${PIPER:-$(command -v piper || true)}"
+MODELS="${PIPER_MODELS:-}"
+
+if [ -z "$PIPER" ] || [ ! -x "$PIPER" ]; then
+    echo "piper not found. Set PIPER to its path, or install it:"
+    echo "  https://github.com/rhasspy/piper"
+    exit 1
+fi
+if [ -z "$MODELS" ] || [ ! -d "$MODELS" ]; then
+    echo "Set PIPER_MODELS to the directory holding the .onnx voices."
+    exit 1
+fi
+command -v ffmpeg >/dev/null || { echo "ffmpeg not found."; exit 1; }
+
+mkdir -p "$OUT"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# Sentence, voice, and what it is there to stress. No radio filter, no
+# compression, no band limiting: the point is speech the codec has to handle in
+# full, and anything applied here would be measured as though the codec had
+# done it.
+gen() {
+    local model="$1" text="$2" name="$3"
+    if [ ! -f "$MODELS/$model.onnx" ]; then
+        echo "  skipping $name: $model not in $MODELS"
+        return
+    fi
+    echo "$text" | "$PIPER" --model "$MODELS/$model.onnx" --output_file "$TMP/$name.wav" >/dev/null 2>&1
+    ffmpeg -y -i "$TMP/$name.wav" -ar 48000 -ac 1 -sample_fmt s16 "$OUT/$name.wav" -loglevel error
+    echo "  $name"
+}
+
+echo "Writing to $OUT"
+gen en_US-lessac-medium \
+    "She sells seashells by the seashore, and the shells she sells are surely seashells." \
+    sibilants_lessac
+gen en_US-ryan-medium \
+    "Please take a picture of that big black cat before it jumps off the tall brick wall." \
+    plosives_ryan
+gen en_GB-jenny_dioco-medium \
+    "The six sisters shared a fresh peach pie, whispering softly through the thick fog." \
+    fricatives_jenny
+gen en_US-amy-medium \
+    "Bright lights flashed and the truck stopped abruptly at the crossing." \
+    transients_amy
+gen en_GB-alan-medium \
+    "Zero, one, two, three, four, five, six, seven, eight, nine." \
+    digits_alan
+gen en_US-libritts_r-medium \
+    "How much wood would a woodchuck chuck if a woodchuck could chuck wood." \
+    nasals_libritts
+
+echo
+echo "Done. Now:"
+echo "  cargo test --release -p rotelyx-codec --test real_speech -- --nocapture"

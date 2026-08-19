@@ -1,0 +1,26 @@
+[package]
+name = "rotelyx-capability"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Capability tokens: the format, and the verifying half of it."
+
+[features]
+# A minter for tests. See src/testing.rs. Never enable this in a binary.
+testing = []
+
+[dependencies]
+data-encoding.workspace = true
+ed25519-dalek.workspace = true
+serde.workspace = true
+postcard.workspace = true
+thiserror.workspace = true
+blind-rsa-signatures = "0.17"
+getrandom.workspace = true
+
+[dev-dependencies]
+# One test checks that no tier promises more than the store can hold.
+rotelyx-mailbox = { path = "../rotelyx-mailbox" }

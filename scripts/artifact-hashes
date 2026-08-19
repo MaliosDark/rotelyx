@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# Write, or check, the hashes of everything that ships.
+#
+#   scripts/artifact-hashes          write docs/ARTIFACTS.md from what is built
+#   scripts/artifact-hashes --check  rebuild nothing, compare what is built
+#
+# # Why a file in the repository rather than a header on the server
+#
+# The builds are reproducible, which means a served artifact can be checked
+# against the source it claims to come from. That check is only worth anything
+# if the expected hash reaches the checker by a route the server cannot forge.
+#
+# A hash served by the same origin as the file proves nothing: whoever can
+# replace the file can replace the hash. This file travels with the source, in
+# git, signed by whatever signs the commits, and read by anybody who clones. It
+# is a different channel, which is the entire point.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+ARTIFACTS=(
+    "site/rotelyx/rotelyx_wasm_bg.wasm"
+    "site/rotelyx/rotelyx_wasm.js"
+    "target/release/rotelyx-relay"
+    "target/release/rotelyx-mailbox-server"
+)
+
+MANIFEST="docs/ARTIFACTS.md"
+CHECK=0
+[ "${1:-}" = "--check" ] && CHECK=1
+
+if [ "$CHECK" = "1" ]; then
+    missing=0
+    for a in "${ARTIFACTS[@]}"; do
+        [ -f "$a" ] || { echo "  not built: $a"; missing=1; continue; }
+        want=$(grep -F "| \`$(basename "$a")\` |" "$MANIFEST" 2>/dev/null | awk -F'|' '{gsub(/[ `]/,"",$3); print $3}')
+        got=$(sha256sum "$a" | cut -d' ' -f1)
+        if [ -z "$want" ]; then
+            echo "  no recorded hash: $a"
+            missing=1
+        elif [ "$want" != "$got" ]; then
+            echo "  MISMATCH  $a"
+            echo "    recorded $want"
+            echo "    built    $got"
+            missing=1
+        else
+            printf "  ok  %s\n" "$a"
+        fi
+    done
+    exit $missing
+fi
+
+{
+    echo "# Artifact hashes"
+    echo
+    echo "The SHA-256 of everything that ships, so that what a server hands you can"
+    echo "be checked against the source it claims to come from."
+    echo
+    echo "The builds are reproducible: \`scripts/build-wasm\` and"
+    echo "\`scripts/build-release\` on this source produce these bytes exactly. That"
+    echo "was not true until the build paths were remapped, and it is the property"
+    echo "that makes this file mean something rather than decorate."
+    echo
+    echo "**Read this from git, not from a web page.** A hash served by the same"
+    echo "origin as the file it describes proves nothing: whoever can replace one"
+    echo "can replace the other. This travels with the source, which is a channel"
+    echo "the server does not control."
+    echo
+    echo "| Artifact | SHA-256 | Bytes |"
+    echo "|---|---|---|"
+    for a in "${ARTIFACTS[@]}"; do
+        if [ -f "$a" ]; then
+            printf "| \`%s\` | \`%s\` | %s |\n" \
+                "$(basename "$a")" "$(sha256sum "$a" | cut -d' ' -f1)" "$(stat -c%s "$a")"
+        else
+            printf "| \`%s\` | not built | |\n" "$(basename "$a")"
+        fi
+    done
+    echo
+    echo "To check a running deployment:"
+    echo
+    echo '```sh'
+    echo "curl -s https://rotelyx.ideoa.co/rotelyx/rotelyx_wasm_bg.wasm | sha256sum"
+    echo '```'
+    echo
+    echo "To check that this file is honest, build it yourself:"
+    echo
+    echo '```sh'
+    echo "scripts/build-wasm && scripts/build-release && scripts/artifact-hashes --check"
+    echo '```'
+} > "$MANIFEST"
+
+echo "wrote $MANIFEST"
+grep -c '^| `' "$MANIFEST" | xargs -I{} echo "  {} artifacts recorded"

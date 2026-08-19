@@ -3,7 +3,7 @@
 //! MLS needs three things moved between two devices before anyone can speak: a
 //! key package from the joiner, a welcome from the inviter, and the public
 //! ratchet tree. This module carries them over the framed session and nothing
-//! else — no negotiation, no options, no fallbacks.
+//! else: no negotiation, no options, no fallbacks.
 //!
 //! ## Roles are fixed by who dialled
 //!
@@ -24,7 +24,7 @@ use rotelyx_crypto::{Conversation, Member};
 
 /// Wire form of the inviter's reply: welcome and ratchet tree, length-prefixed.
 ///
-/// Two variable-length blobs in one frame, so the length prefix is mandatory —
+/// Two variable-length blobs in one frame, so the length prefix is mandatory,
 /// without it the boundary is guesswork.
 fn encode_welcome(welcome: &[u8], tree: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + welcome.len() + tree.len());

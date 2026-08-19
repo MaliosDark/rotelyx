@@ -1,7 +1,7 @@
-# rotelyx-net — provenance and replacement plan
+# rotelyx-net: provenance and replacement plan
 
 `rotelyx-net` is Rotelyx's transport layer. The entire stack is **vendored into this
-repository** under `crates/net/` — Rotelyx downloads no upstream transport
+repository** under `crates/net/`: Rotelyx downloads no upstream transport
 package, and `cargo tree` shows no `iroh`, no `noq`, no `n0-*`. From here it is
 being built by **owning the policy layer outright and replacing the machinery
 underneath it subsystem by subsystem**, rather than by rewriting a QUIC stack
@@ -75,19 +75,19 @@ cleaner. A licence violation is a worse look than a derived dependency.
 These are Rotelyx's design decisions, not upstream's, and they are the reason
 this crate exists rather than a direct dependency:
 
-- **`RelayPolicy`** — no variant meaning "the library's defaults". Upstream's
+- **`RelayPolicy`**: no variant meaning "the library's defaults". Upstream's
   `RelayMode::Default` and `RelayMode::Staging` point at Number 0's servers and
   are unreachable through this API.
-- **`AddressLookup::Disabled` as the only variant** — upstream's default preset
+- **`AddressLookup::Disabled` as the only variant**: upstream's default preset
   registers a pkarr publisher, a pkarr resolver and a DNS lookup against
   `dns.iroh.link`, announcing the endpoint's public key to a third party on
   every startup. Rotelyx does rendezvous at L3, sealed. This is deleted, not
   configured off.
-- **`PathPolicy`** — the genuine divergence. Upstream selects paths by latency.
+- **`PathPolicy`**: the genuine divergence. Upstream selects paths by latency.
   Rotelyx selects by metadata resistance, and the two conflict: given a fast
   relayed path and a slow direct one, latency-first hands the social graph to a
   relay operator to save milliseconds.
-- **`tests/no_foreign_infrastructure.rs`** — the guarantee, enforced. Binds live
+- **`tests/no_foreign_infrastructure.rs`**: the guarantee, enforced. Binds live
   endpoints, reads back their relay maps, scans workspace source for
   third-party hostnames, and asserts upstream environment overrides have no
   effect. Fails the build otherwise.
@@ -111,8 +111,8 @@ Ordered by value, which is not the same as ordered by size.
 ## 5. The honest summary
 
 After the roadmap above completes, Rotelyx will have written its own discovery,
-its own relay, and its own path selection — the parts where privacy is actually
-decided — and will still be running a QUIC implementation and a NAT traversal
+its own relay, and its own path selection: the parts where privacy is actually
+decided, and will still be running a QUIC implementation and a NAT traversal
 implementation derived from other people's work.
 
 That is the same position Signal is in with respect to TCP and TLS, and the same

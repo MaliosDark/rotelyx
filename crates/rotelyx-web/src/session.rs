@@ -2,7 +2,7 @@
 //!
 //! The browser is a terminal, not a participant. Plaintext travels from the
 //! page to this process over a loopback WebSocket, and encryption happens
-//! **here** — so the encryption boundary starts at this process, not at the
+//! **here**, so the encryption boundary starts at this process, not at the
 //! browser tab.
 //!
 //! That is fine for a local test UI and would be wrong for a product. A real
@@ -49,7 +49,7 @@ pub enum Event {
     },
     /// A message arrived from the peer.
     Message { text: String },
-    /// The group changed — membership must never change silently.
+    /// The group changed: membership must never change silently.
     GroupChanged { members: usize },
     /// Something failed. Shown to the user as-is.
     Error { text: String },
@@ -88,7 +88,7 @@ impl Driver {
     pub async fn listen(&mut self, open: bool, rx: &mut mpsc::UnboundedReceiver<Command>) -> Result<()> {
         let gate = if open {
             self.emit(Event::Status {
-                text: "Accepting anyone — no invitation required".into(),
+                text: "Accepting anyone: no invitation required".into(),
             });
             Gate::new(ReachabilityPolicy::Open)
         } else {

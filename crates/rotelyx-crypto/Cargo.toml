@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# OpenMLS needs the browser's clock and CSPRNG to build for wasm; without this
+# it refuses to compile for the target rather than falling back to something
+# weaker, which is the right behaviour for a crate that generates keys.
+js = ["openmls/js"]
+
 [dependencies]
 # --- group crypto: adopted wholesale, never reimplemented ---
 openmls.workspace = true
@@ -18,7 +24,7 @@ openmls_memory_storage.workspace = true
 
 # --- hybrid post-quantum KEM ---
 # X-Wing (draft-connolly-cfrg-xwing-kem): ML-KEM-768 + X25519, secure if SHA3 is
-# secure AND either component is. Published, peer-reviewed, and deployed — this
+# secure AND either component is. Published, peer-reviewed, and deployed: this
 # is the whole point of not writing our own combiner.
 # `getrandom` routes key generation and encapsulation through the OS CSPRNG
 # without us plumbing an RNG trait across crate-version boundaries; `zeroize`
@@ -27,6 +33,7 @@ openmls_memory_storage.workspace = true
 x-wing = { version = "0.1.0", features = ["getrandom", "zeroize"] }
 
 blake3.workspace = true
+chacha20poly1305.workspace = true
 hkdf.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
@@ -40,4 +47,7 @@ tracing.workspace = true
 getrandom.workspace = true
 
 [dev-dependencies]
+# The measurement must report the real ladder, not a copy of it that can drift.
+rotelyx-mailbox = { path = "../rotelyx-mailbox" }
 data-encoding.workspace = true
+rotelyx-media = { path = "../rotelyx-media" }

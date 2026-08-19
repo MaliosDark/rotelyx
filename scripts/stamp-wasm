@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Stamp chat.html with a build id derived from the wasm itself.
+#
+# Why this exists: CWP serves .js and .wasm with `expires max`, and Cloudflare
+# caches that for ten years. Uploading a new build does nothing, because nobody
+# ever asks for it again. A stamp in the URL makes each build a different
+# resource, so a stale cache cannot serve the old half of a pair that must
+# match.
+#
+# The stamp comes from the wasm's own hash rather than a date, so an unchanged
+# build does not needlessly invalidate a cache that is correct.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+STAMP=$(sha256sum site/rotelyx/rotelyx_wasm_bg.wasm | cut -c1-12)
+
+python3 - "$STAMP" <<'PY'
+import re, sys
+stamp = sys.argv[1]
+p = 'site/chat.html'
+s = open(p).read()
+s = re.sub(r"from '\./rotelyx/rotelyx_wasm\.js(\?v=[0-9a-f]+)?'",
+           f"from './rotelyx/rotelyx_wasm.js?v={stamp}'", s)
+s = re.sub(r"rotelyx_wasm_bg\.wasm(\?v=[0-9a-f]+)?", f"rotelyx_wasm_bg.wasm?v={stamp}", s)
+open(p, 'w').write(s)
+print(f"  stamped {stamp}")
+PY

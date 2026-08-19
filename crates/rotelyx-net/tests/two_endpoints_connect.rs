@@ -7,7 +7,7 @@
 //!
 //! Proves: the endpoint binds, a peer is authenticated by its public key during
 //! the QUIC handshake, streams open in both directions, and framed data
-//! survives the round trip — all with relays disabled and address lookup
+//! survives the round trip: all with relays disabled and address lookup
 //! removed, so nothing but the two processes is involved.
 //!
 //! Does **not** prove NAT traversal. Both endpoints are on loopback, which

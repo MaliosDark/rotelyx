@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# Build the native engine for Android, iOS and this desktop.
+#
+#   scripts/build-mobile              this machine only, for tests and desktop
+#   scripts/build-mobile android      arm64, armv7 and x86_64
+#   scripts/build-mobile ios          device and simulator, then an xcframework
+#
+# The consuming project takes the artifacts and writes the binding. This
+# repository does not know what a Flutter plugin is and should not learn.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Same reasoning as build-wasm: a binary users install must not carry the build
+# machine's paths, and a reproducible build is the only thing that lets somebody
+# check an artifact against its source.
+export RUSTFLAGS="${RUSTFLAGS:-} \
+    --remap-path-prefix=$HOME/.cargo/registry/src=/cargo \
+    --remap-path-prefix=$HOME/.rustup=/rustup \
+    --remap-path-prefix=$PWD=/src"
+
+TARGET="${1:-host}"
+OUT="target/mobile"
+mkdir -p "$OUT"
+
+report() {
+    local f="$1" label="$2"
+    [ -f "$f" ] || { echo "  $label: not built"; return; }
+    local leaked
+    leaked=$(strings -n 12 "$f" 2>/dev/null | grep -c "$HOME" || true)
+    printf "  %-32s %10d bytes  " "$label" "$(stat -c%s "$f")"
+    if [ "$leaked" != "0" ]; then
+        echo "REFUSING: $leaked build paths"
+        return 1
+    fi
+    echo "sha256 $(sha256sum "$f" | cut -c1-16)"
+}
+
+case "$TARGET" in
+host)
+    cargo build --release -p rotelyx-mobile
+    report target/release/librotelyx_mobile.so "librotelyx_mobile.so"
+    ;;
+
+android)
+    # cargo-ndk sets the linker and sysroot for each ABI. Without it every
+    # target needs its own linker in .cargo/config.toml, which is the same work
+    # done worse.
+    command -v cargo-ndk >/dev/null || {
+        echo "cargo-ndk not found:"
+        echo "  cargo install cargo-ndk"
+        echo "and set ANDROID_NDK_HOME to an installed NDK."
+        exit 1
+    }
+    [ -n "${ANDROID_NDK_HOME:-}" ] || { echo "set ANDROID_NDK_HOME"; exit 1; }
+
+    # The three ABIs Play requires for a modern app. x86_64 is for emulators
+    # and is not optional: without it nobody can run the app on a laptop.
+    cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
+        -o "$OUT/jniLibs" build --release -p rotelyx-mobile
+    echo
+    for abi in arm64-v8a armeabi-v7a x86_64; do
+        report "$OUT/jniLibs/$abi/librotelyx_mobile.so" "$abi"
+    done
+    echo
+    echo "  Copy $OUT/jniLibs into android/app/src/main/jniLibs of the app."
+    ;;
+
+ios)
+    for t in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+        cargo build --release -p rotelyx-mobile --target "$t"
+        report "target/$t/release/librotelyx_mobile.a" "$t"
+    done
+    # A simulator slice for Intel and Apple silicon has to be one fat archive
+    # before it can be an xcframework, which Xcode will not tell you.
+    if command -v lipo >/dev/null && command -v xcodebuild >/dev/null; then
+        mkdir -p "$OUT/sim"
+        lipo -create \
+            target/aarch64-apple-ios-sim/release/librotelyx_mobile.a \
+            target/x86_64-apple-ios/release/librotelyx_mobile.a \
+            -output "$OUT/sim/librotelyx_mobile.a"
+        rm -rf "$OUT/RotelyxMobile.xcframework"
+        xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/librotelyx_mobile.a \
+            -library "$OUT/sim/librotelyx_mobile.a" \
+            -output "$OUT/RotelyxMobile.xcframework"
+        echo "  $OUT/RotelyxMobile.xcframework"
+    else
+        echo
+        echo "  lipo and xcodebuild are macOS only, so the slices are built and"
+        echo "  the xcframework is not. Run this part on a Mac."
+    fi
+    ;;
+
+*)
+    echo "usage: build-mobile [host|android|ios]"
+    exit 2
+    ;;
+esac

@@ -115,6 +115,26 @@ p strong{color:var(--ink);font-weight:600}
 .card{background:var(--panel);border:1px solid var(--rule);
       border-radius:5px;padding:16px 18px;margin:26px 0}
 .card p{margin:0;font-size:.92rem}
+.status{display:flex;align-items:center;gap:10px;margin:30px 0 14px}
+.dot{width:9px;height:9px;border-radius:50%;background:#2ea043;
+     box-shadow:0 0 0 4px rgba(46,160,67,.16)}
+.status b{font-size:.95rem;font-weight:650}
+.status span{margin-left:auto;font:600 .64rem ui-monospace,SFMono-Regular,Menlo,monospace;
+             letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.bars{display:flex;gap:2px;height:34px;align-items:flex-end;margin:0 0 8px}
+.bars i{flex:1;border-radius:1px;min-width:2px}
+.up{background:#2ea043;height:100%}
+.part{background:#d29922;height:78%}
+.down{background:#cf3b3b;height:88%}
+.unknown{background:#2a2721;height:60%}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 24px;
+        font-size:.78rem;color:var(--dim)}
+.legend span{display:flex;align-items:center;gap:6px}
+.legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+.scale{display:flex;justify-content:space-between;
+       font:600 .6rem ui-monospace,SFMono-Regular,Menlo,monospace;
+       letter-spacing:.1em;text-transform:uppercase;color:#6b6459;margin-bottom:26px}
+.note{font-size:.8rem;color:#6b6459;margin:0}
 footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--rule);
        font:600 .64rem ui-monospace,SFMono-Regular,Menlo,monospace;
        letter-spacing:.14em;text-transform:uppercase;color:#6b6459}
@@ -127,16 +147,10 @@ footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--rule);
   other directly. It <strong>holds no keys</strong> and cannot read what passes
   through it.
 </p>
-<div class="card"><p>
-  It does observe <strong>which endpoints connect, and when</strong>. That is
-  inherent to relayed transport and no configuration removes it, which is why
-  Rotelyx prefers any direct path over any relayed one, at any latency.
-</p></div>
-<p>
-  Access is restricted to an allowlist. If you are not on it, connections are
-  refused without explanation: a detailed reason would turn this host into an
-  oracle for who it serves.
-</p>
+"#;
+
+/// The rest of the page, after the status block is inserted.
+const INDEX_TAIL: &[u8] = br#"
 <footer>Rotelyx &middot; pre-release &middot; unaudited</footer>
 </main></body></html>
 "#;
@@ -814,6 +828,21 @@ impl Server {
                 let key_cache_capacity = relay_config
                     .key_cache_capacity
                     .unwrap_or(DEFAULT_KEY_CACHE_CAPACITY);
+                // Set here rather than on the first page view, or a relay
+                // nobody visits for a day reports one minute of uptime.
+                STATUS.started_now();
+
+                // The heartbeat. Every minute rather than every half hour, so
+                // a relay that dies four minutes into a bucket has still
+                // recorded that bucket: the alternative loses up to thirty
+                // minutes of history on every restart.
+                tokio::spawn(async move {
+                    loop {
+                        STATUS.heartbeat();
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    }
+                });
+
                 let mut builder = http_server::ServerBuilder::new(relay_bind_addr)
                     .metrics(metrics.server.clone())
                     .headers(headers)
@@ -1100,14 +1129,62 @@ async fn relay_supervisor(
     ret
 }
 
+/// This relay's availability, shared with the mailbox rather than reimplemented.
+///
+/// Two copies of a status strip drift, and two strips whose colours mean subtly
+/// different things are worse than one. See `rotelyx-status`.
+static STATUS: rotelyx_status::Status = rotelyx_status::Status::new();
+
+/// Record availability to `path`. Called by the binary before serving.
+pub fn record_status_at(path: std::path::PathBuf) {
+    STATUS.record_at(path);
+}
+
+/// The landing page, with a status block rendered on each request.
+///
+/// # Why the server renders this and no script does
+///
+/// The obvious way to build a live status page is to poll an endpoint from the
+/// browser. That needs `script-src` and `connect-src` in a policy that
+/// currently says `default-src 'none'`, and loosening a relay's CSP for a
+/// status widget is a poor trade. Rendered here it needs no script, so the
+/// policy stays shut.
 fn root_handler(
     _r: Request<Incoming>,
     response: ResponseBuilder,
 ) -> HyperResult<Response<BytesBody>> {
-    let body: BytesBody = Box::new(Full::from(INDEX));
+    let recorded = STATUS.recorded_count();
+    let history = if recorded > 0 {
+        format!(
+            "{recorded} half {} recorded",
+            if recorded == 1 { "hour" } else { "hours" }
+        )
+    } else {
+        "no history before this process".into()
+    };
+
+    let status = format!(
+        "<div class=\"status\"><span class=\"dot\"></span><b>Operational</b>\
+         <span>up {}</span></div>{}\
+         <div class=\"scale\"><span>48h</span><span>now</span></div>{}\
+         <p class=\"note\">{}.</p>",
+        STATUS.uptime_text(),
+        STATUS.strip(),
+        rotelyx_status::LEGEND,
+        history,
+    );
+
+    let mut page = Vec::with_capacity(INDEX.len() + status.len() + INDEX_TAIL.len());
+    page.extend_from_slice(INDEX);
+    page.extend_from_slice(status.as_bytes());
+    page.extend_from_slice(INDEX_TAIL);
+
+    let body: BytesBody = Box::new(Full::from(page));
     response
         .status(StatusCode::OK)
         .header("Content-Type", "text/html; charset=utf-8")
+        // A status page a proxy caches is a status page that lies.
+        .header("Cache-Control", "no-store")
         .body(body)
         .map_err(|err| Box::new(err) as HyperError)
 }

@@ -1,6 +1,6 @@
 [package]
 name = "rotelyx-mailbox"
-description = "Rotelyx L3: blind store-and-forward — sealed envelopes, padding buckets, rotating tags"
+description = "Rotelyx L3: blind store-and-forward: sealed envelopes, padding buckets, rotating tags"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

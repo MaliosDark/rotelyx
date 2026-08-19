@@ -5,7 +5,7 @@
 //!
 //! ## What this crate is *not*
 //!
-//! This crate provides **transport** security only — QUIC + TLS 1.3, terminated
+//! This crate provides **transport** security only: QUIC + TLS 1.3, terminated
 //! at the two endpoints. That protects against the network and against relay
 //! operators. It does not provide forward secrecy across sessions, post-compromise
 //! security, group keys, or asynchronous delivery.
@@ -20,6 +20,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod access;
+#[cfg(feature = "transport")]
 pub mod endpoint;
 pub mod identity;
 pub mod sealed;
@@ -30,6 +31,7 @@ pub use access::{
     epoch_at, Admission, Gate, estimated_cost, solve, verify_proof, AccessError, ContactProof, Invitation,
     ReachabilityPolicy, EPOCH_SECONDS,
 };
+#[cfg(feature = "transport")]
 pub use endpoint::{Session, RotelyxEndpoint, ALPN};
 pub use identity::{safety_number, Identity, RotelyxId};
 pub use sealed::{is_sealed, SealError};

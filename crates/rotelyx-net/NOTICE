@@ -1,8 +1,12 @@
 rotelyx-net
-Copyright (c) 2026 Malios Dark
+Copyright (c) 2026 Andryu Schittone
 
-This product includes software developed by third parties, as required by
-Apache License 2.0 §4(b) and the BSD 3-Clause License.
+This crate is licensed under the GNU Affero General Public License v3. See
+LICENSE and LICENSING.md at the root of the repository.
+
+It includes software developed by third parties, which stays under the licences
+those parties granted. The notices below are required by Apache License 2.0
+§4(b) and the BSD 3-Clause License.
 
 ================================================================================
 1. iroh and sibling crates

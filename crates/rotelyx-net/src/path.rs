@@ -5,7 +5,7 @@
 //! algorithm.
 //!
 //! The upstream selector sorts paths by `(tier, biased RTT)`. It treats relayed
-//! paths as a backup tier, which is close to what we want — but "close" is not
+//! paths as a backup tier, which is close to what we want, but "close" is not
 //! a guarantee, and the tie-breaking underneath it is latency. Given a relayed
 //! path that is 20ms faster, latency-first hands the social graph to a relay
 //! operator to save 20ms.
@@ -105,6 +105,16 @@ pub fn decide(
             (None, None) => Choice::KeepCurrent,
         },
 
+        // Never direct, whatever is on offer. A call must not become an
+        // address disclosure the moment hole punching succeeds.
+        PathPolicy::RelayOnly => match best_relayed {
+            Some(_) => Choice::Relayed,
+            // No relay and no direct path allowed means no path. Failing is
+            // the honest outcome for a policy that promises never to go
+            // direct: falling back would break the only thing it guarantees.
+            None => Choice::KeepCurrent,
+        },
+
         // As above, but never move back onto a relay once direct.
         PathPolicy::DirectOnceAvailable => match (best_direct, best_relayed) {
             (Some(_), _) => Choice::Direct,
@@ -140,7 +150,7 @@ impl PathSelector for MetadataResistantSelector {
         // Whether the path currently carrying traffic is already direct. This
         // is what makes `DirectOnceAvailable` stateless: the context reports
         // the current path *for this remote*, so no per-peer bookkeeping is
-        // needed — and per-peer state would be wrong anyway, since one selector
+        // needed, and per-peer state would be wrong anyway, since one selector
         // serves every peer on the endpoint.
         let currently_direct = ctx.current().is_some_and(is_direct);
 
@@ -177,6 +187,48 @@ mod tests {
 
     /// The headline property. A relay that is a thousand times faster still
     /// loses, because latency is not what this policy optimises.
+    /// The policy media uses. A direct path must never be chosen, however good
+    /// it is, because on a call it is the other participants who learn your
+    /// address rather than an operator.
+    #[test]
+    fn relay_only_never_goes_direct() {
+        const FAST: u128 = 5;
+        const SLOW: u128 = 500;
+
+        for (direct, relayed, expected, why) in [
+            (Some(FAST), Some(SLOW), Choice::Relayed, "a fast direct path on offer"),
+            (Some(FAST), None, Choice::KeepCurrent, "only a direct path on offer"),
+            (None, Some(SLOW), Choice::Relayed, "only a relay"),
+            (None, None, Choice::KeepCurrent, "nothing"),
+        ] {
+            assert_eq!(
+                decide(PathPolicy::RelayOnly, direct, relayed, false),
+                expected,
+                "{why}"
+            );
+        }
+
+        // And it does not change its mind once it is somehow on a direct path.
+        assert_eq!(
+            decide(PathPolicy::RelayOnly, Some(FAST), Some(SLOW), true),
+            Choice::Relayed,
+            "already direct is not a reason to stay direct"
+        );
+    }
+
+    /// The single question media asks of a policy.
+    #[test]
+    fn only_relay_only_forbids_a_direct_path() {
+        assert!(!PathPolicy::RelayOnly.permits_direct());
+        for policy in [
+            PathPolicy::Fastest,
+            PathPolicy::PreferDirect,
+            PathPolicy::DirectOnceAvailable,
+        ] {
+            assert!(policy.permits_direct(), "{policy:?} must allow a direct path");
+        }
+    }
+
     #[test]
     fn prefer_direct_takes_a_slow_direct_path_over_a_fast_relay() {
         assert_eq!(

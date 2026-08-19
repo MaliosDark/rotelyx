@@ -1,0 +1,23 @@
+[package]
+name = "rotelyx-media"
+description = "Rotelyx L2 media: per sender frame encryption for calls, keyed from MLS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+rotelyx-net.workspace = true
+
+[dev-dependencies]
+# Only the tests know about the codec. The crate itself carries opaque bytes,
+# which is what keeps a media transport from having opinions about audio.
+rotelyx-codec.workspace = true

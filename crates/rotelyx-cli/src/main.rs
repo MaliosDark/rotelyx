@@ -59,7 +59,7 @@ enum Command {
         /// Accept anyone who connects, with no invitation.
         ///
         /// Explicit on purpose. Rotelyx's default is that an identity is
-        /// unreachable without a capability it issued — the whole answer to
+        /// unreachable without a capability it issued: the whole answer to
         /// free identities being free to spam from.
         #[arg(long)]
         open: bool,
@@ -108,7 +108,7 @@ fn print_safety_number(me: &Identity, peer: RotelyxId) {
     println!("  safety number {}", me.safety_number(&peer));
     println!();
     println!("  Read those digits to your peer over a channel Rotelyx does not");
-    println!("  control. If they differ, someone is in the middle — the");
+    println!("  control. If they differ, someone is in the middle: the");
     println!("  transport authenticated a key, not a person.");
     println!();
 }
@@ -120,7 +120,7 @@ async fn chat(session: Session, mut conversation: Conversation, me: Member) -> R
     let reader = BufReader::new(tokio::io::stdin());
     let mut lines = reader.lines();
 
-    println!("connected — type to send, Ctrl-D to quit");
+    println!("connected: type to send, Ctrl-D to quit");
 
     loop {
         tokio::select! {
@@ -155,7 +155,7 @@ async fn chat(session: Session, mut conversation: Conversation, me: Member) -> R
                                 println!("peer: {}", String::from_utf8_lossy(&plaintext));
                             }
                             // A commit: the group changed. A real client must
-                            // surface this — silent membership changes are how
+                            // surface this: silent membership changes are how
                             // ghost-member attacks stay invisible.
                             None => println!("[the group changed: {} members]", conversation.member_count()),
                         }
@@ -167,7 +167,7 @@ async fn chat(session: Session, mut conversation: Conversation, me: Member) -> R
     }
 
     // Finish before closing: a dropped QUIC send stream resets, discarding
-    // anything still in flight — the last message would vanish silently.
+    // anything still in flight: the last message would vanish silently.
     let _ = send.finish();
     let _ = send.stopped().await;
     conn.close(0u32.into(), b"bye");

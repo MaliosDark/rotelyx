@@ -8,8 +8,19 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# The transport is not available in a browser: it needs UDP sockets for QUIC,
+# and mio does not build for wasm at all. Identity, admission control, framing
+# and storage do not need it, so they stay behind this feature and a wasm build
+# takes `default-features = false`.
+default = ["transport"]
+transport = ["dep:rotelyx-net", "tokio/rt-multi-thread", "tokio/signal"]
+
 [dependencies]
-rotelyx-net.workspace = true
+# Key and address types only. This is the small crate at the bottom of the
+# transport, with no async runtime, so it builds anywhere.
+rotelyx-transport-base = { path = "../net/rotelyx-transport-base", features = ["key"] }
+rotelyx-net = { workspace = true, optional = true }
 
 blake3.workspace = true
 data-encoding.workspace = true
@@ -21,7 +32,7 @@ argon2.workspace = true
 postcard.workspace = true
 serde.workspace = true
 
-tokio.workspace = true
+tokio = { version = "1", default-features = false, features = ["macros", "sync", "time", "io-util"] }
 futures-lite.workspace = true
 
 anyhow.workspace = true

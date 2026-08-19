@@ -7,11 +7,14 @@
 use std::fmt;
 use std::str::FromStr;
 
-use rotelyx_net::{EndpointId, SecretKey};
+// Taken from the transport's key crate rather than from the transport
+// itself, so that identity works in a browser build where the transport
+// cannot be compiled.
+use rotelyx_transport_base::{EndpointId, SecretKey};
 use zeroize::Zeroizing;
 
 /// A public Rotelyx identity. Thin newtype over the iroh endpoint id so that the
-/// rest of the codebase never depends on iroh's naming directly — if the
+/// rest of the codebase never depends on iroh's naming directly, if the
 /// transport is ever swapped, this is the only type that has to change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RotelyxId(EndpointId);
@@ -25,7 +28,7 @@ impl RotelyxId {
         self.0
     }
 
-    /// Short human-comparable form for UI. **Not** a security check — use
+    /// Short human-comparable form for UI. **Not** a security check: use
     /// [`Identity::safety_number`] for out-of-band verification.
     pub fn short(&self) -> String {
         let hex = self.0.to_string();
@@ -55,7 +58,7 @@ impl FromStr for RotelyxId {
 /// A local identity, including secret key material.
 ///
 /// The secret is held in a [`Zeroizing`] buffer and only handed to iroh at
-/// endpoint construction. Never log, serialise, or `Debug`-print this type —
+/// endpoint construction. Never log, serialise, or `Debug`-print this type,
 /// the `Debug` impl below deliberately redacts.
 pub struct Identity {
     secret: Zeroizing<[u8; 32]>,
@@ -94,6 +97,8 @@ impl Identity {
 
     /// Hand the secret to the transport. Kept crate-visible so no application
     /// code can pull raw key material out of an `Identity`.
+    // Only the transport needs the raw key; a browser build has no transport.
+    #[cfg(feature = "transport")]
     pub(crate) fn secret_key(&self) -> SecretKey {
         SecretKey::from_bytes(&self.secret)
     }
@@ -108,7 +113,7 @@ impl Identity {
     ///
     /// Order-independent so both sides display the same digits, and derived
     /// from a domain-separated BLAKE3 of both public keys. Users compare this
-    /// over a channel Rotelyx does not control — that comparison is the only
+    /// over a channel Rotelyx does not control: that comparison is the only
     /// thing that rules out a machine-in-the-middle at first contact.
     pub fn safety_number(&self, other: &RotelyxId) -> String {
         safety_number(&self.public, other)

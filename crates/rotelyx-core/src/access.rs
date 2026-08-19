@@ -2,7 +2,7 @@
 //!
 //! Rotelyx identities are keypairs, so they are free and unlimited. That is the
 //! property that removes phone numbers from the design, and it is the same
-//! property that made Kik a haven for unsolicited contact — an identity that
+//! property that made Kik a haven for unsolicited contact: an identity that
 //! costs nothing can be discarded and replaced the moment it is blocked.
 //!
 //! Cryptography does not fix this. Scarcity does, and there are only two kinds
@@ -11,8 +11,8 @@
 //! - **Authorisation.** You are reachable only by someone holding an invitation
 //!   you issued. This is the default, and it makes unsolicited contact
 //!   impossible rather than merely expensive.
-//! - **Cost.** For identities that *do* want to be reachable by strangers — a
-//!   support account, a public figure — a proof of work makes first contact
+//! - **Cost.** For identities that *do* want to be reachable by strangers: a
+//!   support account, a public figure: a proof of work makes first contact
 //!   cost the sender real time while costing the recipient microseconds.
 //!
 //! Neither stops a determined individual attacker. Both destroy the economics
@@ -112,7 +112,7 @@ fn leading_zero_bits(digest: &[u8; 32]) -> u32 {
 /// - Binding the target means work done to reach one person cannot be spent on
 ///   another, so a bulk sender pays per recipient.
 /// - Binding the sender means a spammer cannot solve once and reuse it across a
-///   fleet of throwaway identities — each identity pays again.
+///   fleet of throwaway identities: each identity pays again.
 /// - Binding the epoch means proofs cannot be stockpiled years in advance, and
 ///   expire on their own.
 ///
@@ -173,7 +173,7 @@ pub fn estimated_cost(difficulty: u8) -> Duration {
 
 /// A capability issued by one identity so another can reach it.
 ///
-/// Shared out of band — a QR code, a link, a spoken string. Possession is the
+/// Shared out of band: a QR code, a link, a spoken string. Possession is the
 /// authorisation; the secret itself never travels over the wire, only a MAC
 /// derived from it.
 pub struct Invitation {
@@ -275,8 +275,8 @@ pub enum ReachabilityPolicy {
 
     /// Anyone may connect.
     ///
-    /// Provided because some deployments genuinely want it — a public relay
-    /// endpoint, a test rig — and because pretending it does not exist would
+    /// Provided because some deployments genuinely want it: a public relay
+    /// endpoint, a test rig, and because pretending it does not exist would
     /// just mean people reimplement it worse. Never a sensible default for a
     /// human's device.
     Open,
@@ -482,7 +482,7 @@ mod tests {
         ));
     }
 
-    /// A blocked identity must be refused before any verification runs — a
+    /// A blocked identity must be refused before any verification runs: a
     /// block that still costs us CPU is a block the blocked party can abuse.
     #[test]
     fn a_blocked_identity_is_refused_even_with_a_valid_invitation() {
@@ -625,7 +625,7 @@ mod tests {
         }
     }
 
-    /// Every malformed input must be an error, never a panic — this parser runs
+    /// Every malformed input must be an error, never a panic: this parser runs
     /// on the first bytes an unauthenticated stranger sends.
     #[test]
     fn malformed_admission_is_rejected_rather_than_panicking() {
@@ -696,7 +696,7 @@ impl Gate {
     /// Retire every invitation whose secret matches.
     ///
     /// Revocation, for the case that matters: an invitation shared more widely
-    /// than intended. Expiry alone is not enough — it is a promise about the
+    /// than intended. Expiry alone is not enough: it is a promise about the
     /// future, and a leak is a problem right now.
     pub fn revoke(&mut self, secret: &[u8; 32]) -> usize {
         let before = self.invitations.len();
@@ -732,7 +732,7 @@ impl Gate {
     /// Decide whether `caller` may open a session.
     ///
     /// The blocklist is checked **first**, before any verification work. A
-    /// blocked identity must cost us nothing — otherwise blocking someone hands
+    /// blocked identity must cost us nothing: otherwise blocking someone hands
     /// them a way to keep spending our CPU.
     pub fn admit(
         &self,
@@ -785,7 +785,7 @@ pub enum Admission {
 }
 
 impl Admission {
-    /// Encode for the wire. Fixed layout, no length fields — every variant has
+    /// Encode for the wire. Fixed layout, no length fields: every variant has
     /// a known size, so there is nothing for a parser to get wrong.
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {

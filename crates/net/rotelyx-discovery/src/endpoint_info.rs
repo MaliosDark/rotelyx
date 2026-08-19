@@ -1,45 +1,19 @@
-//! Support for handling DNS resource records for dialing by [`EndpointId`].
+//! Address data for an endpoint.
 //!
-//! Dialing by [`EndpointId`] is supported by iroh endpoints publishing [Pkarr] records to DNS
-//! servers or the Mainline DHT.  This module supports creating and parsing these records.
+//! **Rotelyx modification.** This module used to encode and decode these types
+//! as DNS TXT records, so that an endpoint could publish `identity X is at
+//! address Y` to a DNS zone or the Mainline DHT and strangers could look it up.
+//! Every one of those conversions is deleted, along with the `_iroh` record
+//! name and the parser for it.
 //!
-//! [`EndpointInfo`] combines an [`rotelyx_transport_base::EndpointId`] with [`EndpointData`]:
-//! the addressing and metadata that discovery services publish and resolve.
-//! Discovery services use [`AddrFilter`] to control which addresses are published.
-//!
-//! This module also provides serialization to and from pkarr signed packets and
-//! DNS TXT records.
-//!
-//! DNS records are published under the following names:
-//!
-//! `_iroh.<z32-endpoint-id>.<origin-domain> TXT`
-//!
-//! - `_iroh` is the record name as defined by [`IROH_TXT_NAME`].
-//!
-//! - `<z32-endpoint-id>` is the [z-base-32] encoding of the [`EndpointId`].
-//!
-//! - `<origin-domain>` is the domain name of the publishing DNS server,
-//!
-//! - `TXT` is the DNS record type.
-//!
-//! The returned TXT records must contain a string value of the form `key=value` as defined
-//! in [RFC1464].  The following attributes are defined:
-//!
-//! - `relay=<url>`: The home [`RelayUrl`] of this endpoint.
-//!
-//! - `addr=<addr> <addr>`: A space-separated list of sockets addresses for this iroh endpoint.
-//!   Each address is an IPv4 or IPv6 address with a port.
-//!
-//! [Pkarr]: https://app.pkarr.org
-//! [z-base-32]: https://philzimmermann.com/docs/human-oriented-base-32-encoding.txt
-//! [RFC1464]: https://www.rfc-editor.org/rfc/rfc1464
-//! [`RelayUrl`]: rotelyx_transport_base::RelayUrl
-//! [`IROH_TXT_NAME`]: crate::IROH_TXT_NAME
+//! What remains is the address types themselves, which the transport uses for
+//! its own in-process address book. They describe an address; nothing here
+//! publishes one anywhere.
 
 use std::{
     borrow::Cow,
     collections::{BTreeSet, HashSet},
-    fmt::{self, Display},
+    fmt,
     hash::Hash,
     net::SocketAddr,
     str::FromStr,
@@ -48,9 +22,7 @@ use std::{
 
 use rotelyx_transport_base::{EndpointAddr, EndpointId, RelayUrl, TransportAddr};
 use rotelyx_error::{ensure, stack_error};
-use url::Url;
 
-use crate::attrs::{IrohAttr, ParseError, TxtAttrs};
 
 /// Data about an endpoint that may be published to and resolved from discovery services.
 ///
@@ -415,10 +387,7 @@ impl EndpointInfo {
         }
     }
 
-    /// Converts to TXT attributes.
-    pub(crate) fn to_attrs(&self) -> TxtAttrs<IrohAttr> {
-        endpoint_info_to_attrs(self)
-    }
+
 
     /// Returns the transport addr information.
     pub fn addrs(&self) -> impl Iterator<Item = &TransportAddr> {
@@ -440,86 +409,15 @@ impl EndpointInfo {
         self.data.ip_addrs()
     }
 
-    /// Parses a [`EndpointInfo`] from DNS TXT lookup results.
-    ///
-    /// The `domain_name` is the queried DNS name (e.g. `_iroh.<z32>.<origin>`).
-    /// The `lookup` iterator yields TXT record values that implement [`Display`].
-    pub fn from_txt_lookup(
-        domain_name: String,
-        lookup: impl Iterator<Item = impl Display>,
-    ) -> Result<Self, ParseError> {
-        let attrs: TxtAttrs<IrohAttr> = TxtAttrs::from_txt_lookup(domain_name, lookup)?;
-        Ok(endpoint_info_from_attrs(&attrs))
-    }
 
-    // Rotelyx: the pkarr signed-packet conversions are deleted. They are the
-    // publication format for announcing an endpoint's reachability to a third
-    // party zone, which this project does not do. The attribute types below
-    // remain because the local, in-process address lookup uses them and reaches
-    // nothing off host.
 
-    /// Converts into a list of `{key}={value}` strings.
-    pub fn to_txt_strings(&self) -> Vec<String> {
-        self.to_attrs().to_txt_strings().collect()
-    }
+
+
 }
 
-/// Convert [`EndpointInfo`] to [`TxtAttrs`].
-fn endpoint_info_to_attrs(info: &EndpointInfo) -> TxtAttrs<IrohAttr> {
-    let mut attrs = vec![];
-    for addr in &info.data.addrs {
-        match addr {
-            TransportAddr::Relay(url) => attrs.push((IrohAttr::Relay, url.to_string())),
-            TransportAddr::Ip(addr) => attrs.push((IrohAttr::Addr, addr.to_string())),
-            TransportAddr::Custom(addr) => attrs.push((IrohAttr::Addr, addr.to_string())),
-            _ => {}
-        }
-    }
 
-    if let Some(user_data) = &info.data.user_data {
-        attrs.push((IrohAttr::UserData, user_data.to_string()));
-    }
-    TxtAttrs::from_parts(info.endpoint_id, attrs.into_iter())
-}
 
-/// Parse [`EndpointInfo`] from [`TxtAttrs`].
-fn endpoint_info_from_attrs(attrs: &TxtAttrs<IrohAttr>) -> EndpointInfo {
-    use rotelyx_transport_base::CustomAddr;
 
-    let endpoint_id = attrs.endpoint_id();
-    let a = attrs.attrs();
-    let relay_urls = a
-        .get(&IrohAttr::Relay)
-        .into_iter()
-        .flatten()
-        .filter_map(|s| Url::parse(s).ok())
-        .map(|url| TransportAddr::Relay(url.into()));
-    let addrs = a
-        .get(&IrohAttr::Addr)
-        .into_iter()
-        .flatten()
-        .filter_map(|s| {
-            if let Ok(addr) = SocketAddr::from_str(s) {
-                Some(TransportAddr::Ip(addr))
-            } else if let Ok(addr) = CustomAddr::from_str(s) {
-                Some(TransportAddr::Custom(addr))
-            } else {
-                None
-            }
-        });
-
-    let user_data = a
-        .get(&IrohAttr::UserData)
-        .into_iter()
-        .flatten()
-        .next()
-        .and_then(|s| UserData::from_str(s).ok());
-    let mut data = EndpointData::default();
-    data.set_user_data(user_data);
-    data.add_addrs(relay_urls.chain(addrs));
-
-    EndpointInfo { endpoint_id, data }
-}
 
 #[cfg(test)]
 mod tests {

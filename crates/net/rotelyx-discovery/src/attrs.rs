@@ -1,22 +1,19 @@
-//! Support for handling DNS resource records for dialing by [`EndpointId`].
+//! Errors for endpoint address parsing.
 //!
-//! DNS records are published under the following names:
+//! **Rotelyx modification.** This module used to hold the DNS TXT record
+//! machinery: the `_iroh` record name and the parser that pulled an endpoint id
+//! out of a name like `_iroh.<z32-endpoint-id>.<origin-domain>`. That is how
+//! iroh publishes an identity's address to a DNS zone or the Mainline DHT so
+//! that strangers can look it up, and it is the one thing Rotelyx exists not to
+//! do: a message being encrypted is worth little if `identity X is at address
+//! Y` sits in a public directory anybody can query.
 //!
-//! `_iroh.<z32-endpoint-id>.<origin-domain> TXT`
-//!
-//! The returned TXT records must contain a string value of the form `key=value` as defined
-//! in [RFC1464].
-//!
-//! [RFC1464]: https://www.rfc-editor.org/rfc/rfc1464
+//! It was already unreachable, and now it is absent. What remains is the two
+//! error types, which the transport still uses for addresses that arrive out of
+//! band.
 
-use std::{collections::BTreeMap, fmt::Display, hash::Hash, str::FromStr};
+use rotelyx_error::stack_error;
 
-use rotelyx_transport_base::{EndpointId};
-use rotelyx_error::{e, stack_error};
-
-
-/// The DNS name for the iroh TXT record.
-pub const IROH_TXT_NAME: &str = "_iroh";
 
 /// Errors encoding endpoint attributes.
 #[allow(missing_docs)]
@@ -46,124 +43,4 @@ pub enum ParseError {
     NotAnIrohRecord { label: String },
     #[error(transparent)]
     DecodingError { source: rotelyx_transport_base::KeyParsingError },
-}
-
-/// Parses a [`EndpointId`] from iroh DNS name.
-///
-/// Takes a DNS name and expects the first label to be [`IROH_TXT_NAME`] and the second
-/// label to be a z32 encoded [`EndpointId`]. Ignores subsequent labels.
-pub(crate) fn endpoint_id_from_txt_name(name: &str) -> Result<EndpointId, ParseError> {
-    let num_labels = name.split(".").count();
-    if num_labels < 2 {
-        return Err(e!(ParseError::NumLabels { num_labels }));
-    }
-    let mut labels = name.split(".");
-    let label = labels.next().expect("checked above");
-    if label != IROH_TXT_NAME {
-        return Err(e!(ParseError::NotAnIrohRecord {
-            label: label.to_string()
-        }));
-    }
-    let label = labels.next().expect("checked above");
-    let endpoint_id = EndpointId::from_z32(label)?;
-    Ok(endpoint_id)
-}
-
-/// The attributes supported by iroh for [`IROH_TXT_NAME`] DNS resource records.
-///
-/// The resource record uses the lower-case names.
-#[derive(
-    Debug, strum::Display, strum::AsRefStr, strum::EnumString, Hash, Eq, PartialEq, Ord, PartialOrd,
-)]
-#[strum(serialize_all = "kebab-case")]
-pub(crate) enum IrohAttr {
-    /// URL of home relay.
-    Relay,
-    /// Address (IP or custom transport).
-    Addr,
-    /// User-defined data
-    UserData,
-}
-
-/// Attributes parsed from [`IROH_TXT_NAME`] TXT records.
-///
-/// This struct is generic over the key type. When using with [`String`], this will parse
-/// all attributes. Can also be used with an enum, if it implements [`FromStr`] and
-/// [`Display`].
-#[derive(Debug)]
-pub(crate) struct TxtAttrs<T> {
-    endpoint_id: EndpointId,
-    attrs: BTreeMap<T, Vec<String>>,
-}
-
-impl<T: FromStr + Display + Hash + Ord> TxtAttrs<T> {
-    /// Creates [`TxtAttrs`] from an endpoint id and an iterator of key-value pairs.
-    pub(crate) fn from_parts(
-        endpoint_id: EndpointId,
-        pairs: impl Iterator<Item = (T, String)>,
-    ) -> Self {
-        let mut attrs: BTreeMap<T, Vec<String>> = BTreeMap::new();
-        for (k, v) in pairs {
-            attrs.entry(k).or_default().push(v);
-        }
-        Self { attrs, endpoint_id }
-    }
-
-    /// Creates [`TxtAttrs`] from an endpoint id and an iterator of "{key}={value}" strings.
-    pub(crate) fn from_strings(
-        endpoint_id: EndpointId,
-        strings: impl Iterator<Item = String>,
-    ) -> Result<Self, ParseError> {
-        let mut attrs: BTreeMap<T, Vec<String>> = BTreeMap::new();
-        for s in strings {
-            let mut parts = s.split('=');
-            let (Some(key), Some(value)) = (parts.next(), parts.next()) else {
-                return Err(e!(ParseError::UnexpectedFormat { s }));
-            };
-            let attr = T::from_str(key).map_err(|_| {
-                e!(ParseError::AttrFromString {
-                    key: key.to_string()
-                })
-            })?;
-            attrs.entry(attr).or_default().push(value.to_string());
-        }
-        Ok(Self { attrs, endpoint_id })
-    }
-
-    /// Returns the parsed attributes.
-    pub(crate) fn attrs(&self) -> &BTreeMap<T, Vec<String>> {
-        &self.attrs
-    }
-
-    /// Returns the endpoint id.
-    pub(crate) fn endpoint_id(&self) -> EndpointId {
-        self.endpoint_id
-    }
-
-    /// Parses TXT record lookup results.
-    ///
-    /// The `name` is the queried DNS name. The `lookup` iterator yields TXT record
-    /// values that implement [`Display`].
-    pub(crate) fn from_txt_lookup(
-        name: String,
-        lookup: impl Iterator<Item = impl Display>,
-    ) -> Result<Self, ParseError> {
-        let queried_endpoint_id = endpoint_id_from_txt_name(&name)?;
-        let strings = lookup.map(|record| record.to_string());
-        Self::from_strings(queried_endpoint_id, strings)
-    }
-
-    // Rotelyx: the pkarr signed-packet conversions are deleted. They are the
-    // publication format for announcing an endpoint's reachability to a third
-    // party zone, which this project does not do. The attribute types below
-    // remain because the local, in-process address lookup uses them and reaches
-    // nothing off host.
-
-    /// Converts to `{key}={value}` strings.
-    pub(crate) fn to_txt_strings(&self) -> impl Iterator<Item = String> + '_ {
-        self.attrs
-            .iter()
-            .flat_map(move |(k, vs)| vs.iter().map(move |v| format!("{k}={v}")))
-    }
-
 }

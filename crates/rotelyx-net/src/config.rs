@@ -22,16 +22,16 @@ use rotelyx_transport::RelayUrl;
 pub enum RelayPolicy {
     /// No relay, ever. Direct hole-punched paths only.
     ///
-    /// The strongest metadata posture available: no third party — including us —
+    /// The strongest metadata posture available. No third party, including us,
     /// observes that two identities are in contact. The cost is real, and it is
-    /// connection failure, not degradation. Roughly 10–20% of NAT pairs on the
+    /// connection failure, not degradation. Roughly 10-20% of NAT pairs on the
     /// public internet cannot be punched through, and for those peers this
     /// policy means the session simply does not happen.
     DirectOnly,
 
     /// Fall back to these relays, all of which the deployment operates.
     ///
-    /// A relay in this list still sees which endpoint id talks to which — it
+    /// A relay in this list still sees which endpoint id talks to which: it
     /// cannot read content, but it observes the social graph. That is ADV-3 in
     /// the threat model and it is why this list must never contain a host
     /// somebody else runs.
@@ -79,12 +79,41 @@ pub enum PathPolicy {
     /// Costs a visible reconnect. Buys a bounded window of relay exposure
     /// rather than an open-ended one.
     DirectOnceAvailable,
+
+    /// Never take a direct path. Relay or nothing.
+    ///
+    /// # Why a policy exists whose whole purpose is to be slower
+    ///
+    /// The other three trade latency for keeping a relay operator out of your
+    /// social graph, because for a message the alternative exposure is to an
+    /// operator. **A call inverts that.** On a direct path the other party
+    /// learns your address, and in a group call every participant does, so the
+    /// exposure that matters is to whoever is on the call rather than to a
+    /// server.
+    ///
+    /// A messenger whose call feature hands your address to whoever rings you
+    /// cannot claim to protect anybody, so this is what media uses and there is
+    /// no switch to turn it off.
+    ///
+    /// If no relay is reachable the connection fails, which is the honest
+    /// outcome for a policy whose entire promise is that a direct path is never
+    /// taken.
+    RelayOnly,
 }
 
 impl PathPolicy {
     /// Whether a relayed path is acceptable when a direct one exists.
     pub fn tolerates_relay_alongside_direct(&self) -> bool {
-        matches!(self, Self::Fastest)
+        matches!(self, Self::Fastest | Self::RelayOnly)
+    }
+
+    /// Whether a direct path may ever be used.
+    ///
+    /// The one question media asks. A `false` here is what stops a call from
+    /// silently becoming an address disclosure the moment hole punching
+    /// succeeds.
+    pub fn permits_direct(&self) -> bool {
+        !matches!(self, Self::RelayOnly)
     }
 }
 
@@ -96,7 +125,7 @@ impl PathPolicy {
 /// the only variants here are "nothing" and "our own rendezvous".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddressLookup {
-    /// Publish nothing, resolve nothing. Peer addresses arrive out of band —
+    /// Publish nothing, resolve nothing. Peer addresses arrive out of band,
     /// from an invitation, or through the blind mailbox.
     ///
     /// This is the correct setting for Rotelyx: rendezvous belongs at L3 where it

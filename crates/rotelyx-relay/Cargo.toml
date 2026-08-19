@@ -21,3 +21,7 @@ clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# Only the tests build a `ClientRequest`, which needs request parts.
+http = "1"

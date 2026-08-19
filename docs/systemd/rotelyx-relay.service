@@ -1,0 +1,65 @@
+# The relay, as a service that comes back.
+#
+# Same reason as the mailbox unit beside this one. Read that first.
+#
+# # The one line you have to decide
+#
+# `ExecStart` below says `--open`, which serves any endpoint that connects. That
+# is what this deployment was running before the outage, because no allowlist
+# file has ever existed on the machine, and the relay refuses to start without
+# one of the two flags precisely so that nobody arrives at open by forgetting.
+#
+# What an open relay costs is capacity and logs, not confidentiality: a relay
+# forwards ciphertext it cannot read either way, so admitting a stranger does
+# not expose anybody's messages. It does mean your bandwidth is available to
+# whoever finds the hostname, and your connection log covers people you have no
+# relationship with.
+#
+# To close it, create the file and swap the flag:
+#
+#   sudo install -d -m 755 /etc/rotelyx
+#   printf '%s\n' <endpoint-id> | sudo tee /etc/rotelyx/community.allow
+#   ExecStart=... --bind 0.0.0.0:3340 --allow /etc/rotelyx/community.allow
+#
+# An empty allowlist admits nobody rather than everybody. That is deliberate and
+# it is the opposite of how most software fails.
+#
+# Install:
+#   sudo cp docs/systemd/rotelyx-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now rotelyx-relay
+
+[Unit]
+Description=Rotelyx relay
+Documentation=https://github.com/MaliosDark/rotelyx
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=OPERATOR
+WorkingDirectory=/home/OPERATOR/rotelyx
+ExecStart=/home/OPERATOR/rotelyx/target/release/rotelyx-relay --bind 0.0.0.0:3340 --open
+
+Restart=always
+RestartSec=2
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+# Uncomment with --allow above.
+# ReadOnlyPaths=/etc/rotelyx
+
+[Install]
+WantedBy=multi-user.target

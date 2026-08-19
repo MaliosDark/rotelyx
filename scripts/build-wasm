@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+#
+# Build the browser module, the way it should be built.
+#
+# This existed as four commands in a document, which meant it was run four
+# different ways and two of the size optimisations were never run at all. The
+# module was 2.3 MB when it could be 1.5.
+#
+# What the flags buy, measured on this crate:
+#
+#   default release                  2,352,899 bytes   749,195 gzipped
+#   size profile + name section gone 1,510,029 bytes   531,303 gzipped
+#                                       -35.8%            -29.1%
+#
+# Two separate savings. The `wasm` profile trades speed for size, which is the
+# right trade here and the wrong one natively: this module is downloaded before
+# anything can happen, often on a phone on a cellular connection, and what it
+# does there is seal and open messages a person typed. Nobody perceives how fast
+# a ChaCha20 runs; everybody perceives a blank screen.
+#
+# `--remove-name-section` drops 397 KB of debugging symbol names, 17 percent of
+# the binary, whose only use is making stack traces readable. Production stack
+# traces become numeric, which for a client that handles keys is arguably the
+# better default anyway.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Absolute build paths must not reach a binary that users download.
+#
+# Rust embeds `file!()` in panic messages, and for a dependency that is the full
+# path into the build machine's cargo registry. Measured before this line
+# existed: **173 paths containing the build user's home directory** were in the
+# module served to every visitor. That is the build machine's username, shipped.
+#
+# Remapping also makes the build reproducible, which is the more valuable half.
+# Two clean builds of identical source produced different binaries before, and
+# produce byte-identical ones now, so the artifact being served can be checked
+# against the source it claims to come from. Without that, "here is the source"
+# is a statement nobody can verify.
+#
+# Set here rather than in `.cargo/config.toml` on purpose: a local debug build
+# should keep its real paths so a backtrace stays clickable. This is for the
+# thing that ships.
+export RUSTFLAGS="${RUSTFLAGS:-} \
+    --remap-path-prefix=$HOME/.cargo/registry/src=/cargo \
+    --remap-path-prefix=$HOME/.rustup=/rustup \
+    --remap-path-prefix=$PWD=/src"
+
+OUT="site/rotelyx"
+BEFORE=0
+[ -f "$OUT/rotelyx_wasm_bg.wasm" ] && BEFORE=$(stat -c%s "$OUT/rotelyx_wasm_bg.wasm")
+
+command -v wasm-bindgen >/dev/null || {
+    echo "wasm-bindgen not found. Install the CLI at the version the crate pins:"
+    echo "  cargo install wasm-bindgen-cli --version 0.2.127"
+    echo "The versions must match exactly or the generated glue will not load."
+    exit 1
+}
+rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown || {
+    echo "rustup target add wasm32-unknown-unknown"
+    exit 1
+}
+
+echo "Building (size profile, this is slower than release)..."
+cargo build -p rotelyx-wasm --target wasm32-unknown-unknown --profile wasm
+
+echo "Generating the glue..."
+wasm-bindgen target/wasm32-unknown-unknown/wasm/rotelyx_wasm.wasm \
+    --out-dir "$OUT" --target web --no-typescript --remove-name-section
+
+AFTER=$(stat -c%s "$OUT/rotelyx_wasm_bg.wasm")
+GZ=$(gzip -9 -c "$OUT/rotelyx_wasm_bg.wasm" | wc -c)
+
+# The stamp has to happen here rather than being a step somebody remembers.
+# CWP serves .js and .wasm with `expires max` and Cloudflare honours it for ten
+# years, so an upload without a new stamp changes nothing: the page keeps
+# running old code, and a page paired with a stale module dies completely.
+echo "Stamping..."
+scripts/stamp-wasm
+
+echo
+printf "  %-12s %10d bytes\n" "wasm" "$AFTER"
+printf "  %-12s %10d bytes  (this is what travels; serve it compressed)\n" "gzipped" "$GZ"
+if [ "$BEFORE" -gt 0 ] && [ "$BEFORE" -ne "$AFTER" ]; then
+    python3 -c "print('  %-12s %9.1f%%' % ('change', 100*($AFTER/$BEFORE-1)))"
+fi
+# The point of a reproducible build is that somebody checks. Doing it here
+# means the claim is tested on every build rather than asserted in a document.
+LEAKED=$(strings -n 12 "$OUT/rotelyx_wasm_bg.wasm" 2>/dev/null | grep -c "$HOME" || true)
+if [ "$LEAKED" != "0" ]; then
+    echo
+    echo "  REFUSING: $LEAKED build paths from this machine are in the binary."
+    echo "  Users would download the build machine's username. Check RUSTFLAGS."
+    exit 1
+fi
+printf "  %-12s %10s\n" "build paths" "none"
+echo
+echo "  sha256  $(sha256sum "$OUT/rotelyx_wasm_bg.wasm" | cut -d" " -f1)"
+echo
+echo "  The build is reproducible: the same source gives this same hash. Publish"
+echo "  it, so that what is served can be checked against what is claimed."
+echo
+echo "Not yet verified in a browser. The native tests cover the logic, not the"
+echo "build: open site/chat.html and complete a handshake before deploying."

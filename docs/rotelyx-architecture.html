@@ -375,7 +375,7 @@
     <h1>Rotelyx<br><em>Protocol</em></h1>
     <p class="deck">Peer-to-peer messaging and calling on iroh, with message crypto that survives a compromised server, a compromised relay, and a future quantum adversary.</p>
     <div class="meta">
-      <span>Author <b>Malios Dark</b></span>
+      <span>Author <b>Andryu Schittone</b> (Malios Dark)</span>
       <span>Date <b>15 Aug 2026</b></span>
       <span>Status <b>L0 to L3 running, clients shipped</b></span>
       <span>Transport <b>vendored, no upstream package</b></span>
@@ -436,17 +436,17 @@
       <div class="card verdict">
         <span class="chip yes">Own it</span>
         <h3>Derive the transport, own the policy</h3>
-        <p>QUIC + TLS 1.3 with stateless relays replaces the whole ICE / STUN / TURN / DTLS / SCTP stack, and identity becomes an Ed25519 key rather than a phone number. Rotelyx ships that as <code>rotelyx-net</code>: our relay policy, our path selection, our discovery — on machinery derived from iroh, which is itself derived from Tailscale and quinn. Nobody in this lineage wrote NAT traversal from zero.</p>
+        <p>QUIC + TLS 1.3 with stateless relays replaces the whole ICE / STUN / TURN / DTLS / SCTP stack, and identity becomes an Ed25519 key rather than a phone number. Rotelyx ships that as <code>rotelyx-net</code>: our relay policy, our path selection, our discovery: on machinery derived from iroh, which is itself derived from Tailscale and quinn. Nobody in this lineage wrote NAT traversal from zero.</p>
       </div>
       <div class="card verdict">
         <span class="chip no">Reject</span>
         <h3>A custom Double Ratchet</h3>
-        <p>A ratchet you write will be weaker than one you adopt — not because your algorithm is worse, but because the bugs live in state handling, not in the math. Use <code>OpenMLS</code>. Spend the saved months on the layer nobody has finished yet.</p>
+        <p>A ratchet you write will be weaker than one you adopt, not because your algorithm is worse, but because the bugs live in state handling, not in the math. Use <code>OpenMLS</code>. Spend the saved months on the layer nobody has finished yet.</p>
       </div>
       <div class="card verdict">
         <span class="chip care">Reframe</span>
         <h3>"Impossible to access"</h3>
-        <p>No system is. Claiming it costs you every serious reviewer in the first five minutes. Ship a written threat model that says what Rotelyx defends against and what it does not — that is what earns trust.</p>
+        <p>No system is. Claiming it costs you every serious reviewer in the first five minutes. Ship a written threat model that says what Rotelyx defends against and what it does not: that is what earns trust.</p>
       </div>
     </div>
   </section>
@@ -456,7 +456,7 @@
     <div class="sec-head col">
       <p class="eyebrow">Foundation</p>
       <h2>What iroh hands you, and what it leaves entirely to you</h2>
-      <p>iroh reached 1.0 on 15 June 2026 and is at 1.0.3. It is a Rust library with bindings for Swift, Kotlin, C, C++, Python and JavaScript — which matters, because your clients are phones. Multipath landed in February 2026; NAT-traversal hardening ran through March and April.</p>
+      <p>iroh reached 1.0 on 15 June 2026 and is at 1.0.3. It is a Rust library with bindings for Swift, Kotlin, C, C++, Python and JavaScript, which matters, because your clients are phones. Multipath landed in February 2026; NAT-traversal hardening ran through March and April.</p>
     </div>
     <div class="cards">
       <div class="card">
@@ -464,9 +464,9 @@
         <ul>
           <li><strong>NAT traversal on any network.</strong> Direct hole-punched paths first, relay fallback when the path is impossible.</li>
           <li><strong>Stateless relays.</strong> Unlike TURN, an iroh relay forwards ciphertext without holding session state. Cheap to run, and it cannot read the stream.</li>
-          <li><strong>Dial by public key.</strong> Identity is location-independent — the same node ID across Wi-Fi, cellular and home.</li>
+          <li><strong>Dial by public key.</strong> Identity is location-independent: the same node ID across Wi-Fi, cellular and home.</li>
           <li><strong>Authenticated transport encryption.</strong> QUIC + TLS 1.3, terminated at the two endpoints.</li>
-          <li><strong>Datagrams and multiplexed streams</strong> in one connection — the media path and the chat path share a socket.</li>
+          <li><strong>Datagrams and multiplexed streams</strong> in one connection: the media path and the chat path share a socket.</li>
         </ul>
       </div>
       <div class="card">
@@ -476,7 +476,7 @@
           <li><strong>Message-level crypto.</strong> No ratcheting, no post-compromise security, no group keys, no multi-device.</li>
           <li><strong>Metadata.</strong> A relay sees which node ID talks to which node ID. That is the social graph, in the clear, at the one place you were trying to make blind.</li>
           <li><strong>Prekeys and rendezvous.</strong> Something must publish "here is how to reach and encrypt to this identity" before the first connection exists.</li>
-          <li><strong>The media stack.</strong> Transport ≠ jitter buffer, echo cancellation, congestion control. See below — this is the real cost.</li>
+          <li><strong>The media stack.</strong> Transport ≠ jitter buffer, echo cancellation, congestion control. See below: this is the real cost.</li>
         </ul>
       </div>
     </div>
@@ -511,7 +511,7 @@
       <div class="layer ours">
         <div class="lid"><b>L2</b><span>message</span></div>
         <div>
-          <div class="lname">Group &amp; message crypto — MLS</div>
+          <div class="lname">Group &amp; message crypto: MLS</div>
           <div class="ldesc">RFC 9420 via OpenMLS. Forward secrecy, post-compromise security, O(log n) group rekeying, multi-device as a first-class concept. Wrapped in a hybrid PQ combiner.</div>
         </div>
         <div class="lowner"><span>adopt</span><br>openmls + ML-KEM</div>
@@ -528,7 +528,7 @@
         <div class="lid"><b>L0</b><span>path</span></div>
         <div>
           <div class="lname">Hole punching, relays, path policy</div>
-          <div class="ldesc">Direct-path upgrade and relay fallback are derived from upstream. Path <em>selection</em> is not: upstream optimises for latency, Rotelyx optimises for metadata resistance. Discovery is deleted outright — rendezvous moves to the sealed L3 mailbox.</div>
+          <div class="ldesc">Direct-path upgrade and relay fallback are derived from upstream. Path <em>selection</em> is not: upstream optimises for latency, Rotelyx optimises for metadata resistance. Discovery is deleted outright: rendezvous moves to the sealed L3 mailbox.</div>
         </div>
         <div class="lowner"><span>rotelyx-net</span><br>own relays only</div>
       </div>
@@ -539,7 +539,7 @@
       <span>media branches at L1 into RTP over QUIC, keyed from L2</span>
     </div>
     <div class="col">
-      <p><strong>What "own" honestly means at L0 and L1.</strong> The derived machinery under <code>rotelyx-net</code> measures 122,786 lines — and half of that is a QUIC state machine (a fork of quinn) that upstream did not write either, while the hole-punching core is BSD-3 code derived from Tailscale. Rotelyx owns the parts where privacy is actually decided: relay policy, path selection, and discovery. Discovery is deleted rather than configured off, because upstream's default publishes your public key to a third-party DNS zone on every startup. The defensible claim is "our own transport, derived and substantially rewritten for metadata resistance" — not "written from scratch", which would be false and checkable.</p>
+      <p><strong>What "own" honestly means at L0 and L1.</strong> The derived machinery under <code>rotelyx-net</code> measures 122,786 lines, and half of that is a QUIC state machine (a fork of quinn) that upstream did not write either, while the hole-punching core is BSD-3 code derived from Tailscale. Rotelyx owns the parts where privacy is actually decided: relay policy, path selection, and discovery. Discovery is deleted rather than configured off, because upstream's default publishes your public key to a third-party DNS zone on every startup. The defensible claim is "our own transport, derived and substantially rewritten for metadata resistance" , not "written from scratch", which would be false and checkable.</p>
     </div>
   </section>
 
@@ -558,7 +558,7 @@
       </div>
       <div class="card">
         <h3>What you actually invent</h3>
-        <p>A hybrid post-quantum combiner over MLS. RFC 9420's ciphersuites are all classical, and PQ suites are still in draft. Building X25519 + ML-KEM-768 hybrid key agreement in from day one is a real contribution — and the correct place to spend an audit budget.</p>
+        <p>A hybrid post-quantum combiner over MLS. RFC 9420's ciphersuites are all classical, and PQ suites are still in draft. Building X25519 + ML-KEM-768 hybrid key agreement in from day one is a real contribution, and the correct place to spend an audit budget.</p>
       </div>
       <div class="card">
         <h3>What you deliberately skip</h3>
@@ -595,7 +595,7 @@
         <tbody>
           <tr>
             <td>Pure P2P<br><span style="font-weight:400;color:var(--ink-2)">phone hosts, Kik-style</span></td>
-            <td class="t-risk">None — both peers must be online</td>
+            <td class="t-risk">None: both peers must be online</td>
             <td class="t-good">Relay sees node-ID pairs only</td>
             <td class="t-risk">iOS kills background sockets. Dead on arrival.</td>
             <td class="t-risk">Not shippable alone</td>
@@ -619,8 +619,8 @@
     </div>
 
     <div class="col">
-      <p>The recommended shape: when both peers are online, everything — messages, media, calls — flows direct over iroh and touches no server you operate. When the recipient is offline, the sender drops a fixed-size sealed envelope addressed to a rotating pseudonymous tag into a mailbox node that never learns the sender, never learns the plaintext, and deletes on delivery or TTL. The mailbox is self-hostable, so any user or community can run their own — that is the Kik-style autonomy you want, made survivable on real phones.</p>
-      <p>Push notifications are the leak nobody designs around. Apple and Google see that <em>some</em> message arrived for a device. Mitigate with content-free silent wakes, jittered delivery, and decoy pushes — and then write down in the threat model that you did not solve it, because you did not.</p>
+      <p>The recommended shape: when both peers are online, everything: messages, media, calls , flows direct over iroh and touches no server you operate. When the recipient is offline, the sender drops a fixed-size sealed envelope addressed to a rotating pseudonymous tag into a mailbox node that never learns the sender, never learns the plaintext, and deletes on delivery or TTL. The mailbox is self-hostable, so any user or community can run their own , that is the Kik-style autonomy you want, made survivable on real phones.</p>
+      <p>Push notifications are the leak nobody designs around. Apple and Google see that <em>some</em> message arrived for a device. Mitigate with content-free silent wakes, jittered delivery, and decoy pushes, and then write down in the threat model that you did not solve it, because you did not.</p>
     </div>
   </section>
 
@@ -629,7 +629,7 @@
     <div class="sec-head col">
       <p class="eyebrow">Media</p>
       <h2>Dropping WebRTC is correct and more expensive than it looks</h2>
-      <p>The transport argument is settled. <code>iroh-roq</code> carries RTP over QUIC, and n0's own <code>callme</code> already does Opus audio over it with <code>cpal</code> for device access — Linux, macOS, Windows and Android working, iOS untested. It is explicitly experimental, which is the accurate description of where this path stands.</p>
+      <p>The transport argument is settled. <code>iroh-roq</code> carries RTP over QUIC, and n0's own <code>callme</code> already does Opus audio over it with <code>cpal</code> for device access: Linux, macOS, Windows and Android working, iOS untested. It is explicitly experimental, which is the accurate description of where this path stands.</p>
     </div>
     <div class="cards">
       <div class="card">
@@ -651,7 +651,7 @@
       </div>
     </div>
     <div class="col">
-      <p>Plan accordingly: audio-only 1:1 is reachable in weeks on top of <code>callme</code>. Audio that sounds as good as WhatsApp on a bad cellular link is the single longest task in this project — longer than the cryptography.</p>
+      <p>Plan accordingly: audio-only 1:1 is reachable in weeks on top of <code>callme</code>. Audio that sounds as good as WhatsApp on a bad cellular link is the single longest task in this project: longer than the cryptography.</p>
     </div>
   </section>
 
@@ -660,7 +660,7 @@
     <div class="sec-head col">
       <p class="eyebrow">Benchmark</p>
       <h2>Telegram is the wrong target. Signal is the real one.</h2>
-      <p>Beating Telegram is not an achievement worth designing toward — its default chats are readable by its servers and its group chats have no end-to-end encryption at all. Measure against Signal, where the honest reading is: you match on crypto by reusing the same primitives, and you win on the things Signal chose not to fight.</p>
+      <p>Beating Telegram is not an achievement worth designing toward: its default chats are readable by its servers and its group chats have no end-to-end encryption at all. Measure against Signal, where the honest reading is: you match on crypto by reusing the same primitives, and you win on the things Signal chose not to fight.</p>
     </div>
     <div class="tablewrap">
       <table>
@@ -675,7 +675,7 @@
         <tbody>
           <tr>
             <td>E2EE by default</td>
-            <td class="t-risk">No — secret chats only, 1:1, mobile only</td>
+            <td class="t-risk">No: secret chats only, 1:1, mobile only</td>
             <td class="t-good">Yes</td>
             <td class="t-good">Yes, no non-E2EE mode exists</td>
           </tr>
@@ -701,7 +701,7 @@
             <td>Post-quantum</td>
             <td class="t-risk">No</td>
             <td class="t-good">PQXDH + PQ ratchet</td>
-            <td class="t-good">Hybrid from day one — if you build it</td>
+            <td class="t-good">Hybrid from day one, if you build it</td>
           </tr>
           <tr>
             <td>Self-hostable</td>
@@ -713,7 +713,7 @@
             <td>Independent audit</td>
             <td class="t-risk">Protocol criticised repeatedly</td>
             <td class="t-good">Repeatedly audited, formally analysed</td>
-            <td class="t-risk">None yet — the honest gap</td>
+            <td class="t-risk">None yet: the honest gap</td>
           </tr>
         </tbody>
       </table>
@@ -736,7 +736,7 @@
           <h3>The media stack without libwebrtc</h3>
           <p>Jitter buffer, PLC, echo cancellation, congestion control and bandwidth estimation on lossy mobile networks. Underestimated by roughly an order of magnitude in every project that tries this.</p>
         </div>
-        <div class="cost">6–12 months</div>
+        <div class="cost">6-12 months</div>
       </div>
       <div class="rank">
         <div class="rn">02</div>
@@ -744,7 +744,7 @@
           <h3>Mobile background lifecycle</h3>
           <p>iOS will not let you hold a socket. Every design decision downstream of "the phone hosts it" collides with this, and the workaround is push, which is the metadata leak you were avoiding.</p>
         </div>
-        <div class="cost">2–4 months</div>
+        <div class="cost">2-4 months</div>
       </div>
       <div class="rank">
         <div class="rn">03</div>
@@ -752,7 +752,7 @@
           <h3>Multi-device and encrypted backup</h3>
           <p>Adding a second device without a server that holds keys, restoring history without a rollback vector, and losing a phone without losing an identity. MLS helps; it does not solve it.</p>
         </div>
-        <div class="cost">2–3 months</div>
+        <div class="cost">2-3 months</div>
       </div>
       <div class="rank">
         <div class="rn">04</div>
@@ -760,13 +760,13 @@
           <h3>End-to-end encrypted group calls above six</h3>
           <p>SFrame keyed from MLS epochs, plus an SFU that routes frames it cannot decrypt.</p>
         </div>
-        <div class="cost">2–3 months</div>
+        <div class="cost">2-3 months</div>
       </div>
       <div class="rank">
         <div class="rn">05</div>
         <div>
           <h3>Abuse resistance without identity</h3>
-          <p>No phone number means no spam cost. Proof-of-work handshakes, contact-key invitations, per-user blocklists — all imperfect, all necessary.</p>
+          <p>No phone number means no spam cost. Proof-of-work handshakes, contact-key invitations, per-user blocklists: all imperfect, all necessary.</p>
         </div>
         <div class="cost">ongoing</div>
       </div>
@@ -776,7 +776,7 @@
           <h3>Independent cryptographic audit</h3>
           <p>Protocol design plus implementation review by a firm that does this seriously. Non-negotiable before any public security claim.</p>
         </div>
-        <div class="cost">$50k–150k</div>
+        <div class="cost">$50k-150k</div>
       </div>
     </div>
   </section>
@@ -788,8 +788,8 @@
       <h2>Open source it, and say less while doing it</h2>
     </div>
     <div class="col">
-      <p>Yes — open source, permissively, from the first commit. A closed security protocol is not evaluable, and an unevaluable protocol has no security claim to make. Kerckhoffs's principle is not a philosophical preference here; it is the only mechanism by which anyone can believe you.</p>
-      <p>What to publish: the protocol specification as a document separate from the code, the Rust core, the threat model, and the test vectors. What to withhold: nothing technical. What to never write in the README: "unbreakable", "impossible to intercept", "military-grade". Those three phrases are how security researchers decide within thirty seconds that a project is not serious, and they are also simply false — every one of them will be disproved by a determined enough adversary against a device endpoint rather than against your cryptography.</p>
+      <p>Yes: open source, permissively, from the first commit. A closed security protocol is not evaluable, and an unevaluable protocol has no security claim to make. Kerckhoffs's principle is not a philosophical preference here; it is the only mechanism by which anyone can believe you.</p>
+      <p>What to publish: the protocol specification as a document separate from the code, the Rust core, the threat model, and the test vectors. What to withhold: nothing technical. What to never write in the README: "unbreakable", "impossible to intercept", "military-grade". Those three phrases are how security researchers decide within thirty seconds that a project is not serious, and they are also simply false: every one of them will be disproved by a determined enough adversary against a device endpoint rather than against your cryptography.</p>
       <p>Publish the threat model as a peer of the code. State plainly: Rotelyx defends against network adversaries, relay operators, mailbox operators and server seizure. It does not defend against a compromised endpoint, a malicious OS, coercion of a participant, or traffic-analysis by a global passive adversary. Naming those honestly makes the claims you <em>do</em> make credible.</p>
     </div>
   </section>
@@ -815,7 +815,7 @@
 
   <footer>
     <div class="col">
-      <p><strong>Open decisions blocking step 1.</strong> Topology confirmation — is the blind mailbox acceptable, or is pure P2P a hard requirement you are willing to pay for in usability? Platform priority — desktop first, or mobile from the start? And whether the post-quantum combiner is in scope for v1 or deferred, because it changes the audit scope and the timeline substantially.</p>
+      <p><strong>Open decisions blocking step 1.</strong> Topology confirmation: is the blind mailbox acceptable, or is pure P2P a hard requirement you are willing to pay for in usability? Platform priority , desktop first, or mobile from the start? And whether the post-quantum combiner is in scope for v1 or deferred, because it changes the audit scope and the timeline substantially.</p>
       <p style="font-size:.83rem">Version claims verified 15 August 2026: iroh 1.0 released 15 June 2026, current 1.0.3. OpenMLS implements RFC 9420. <code>callme</code> and <code>iroh-roq</code> are experimental. Cost estimates are industry ranges, not quotes.</p>
     </div>
   </footer>

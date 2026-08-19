@@ -7,20 +7,27 @@ members = [
     "crates/rotelyx-net",
     "crates/rotelyx-core",
     "crates/rotelyx-crypto",
+    "crates/rotelyx-media",
+    "crates/rotelyx-codec",
     "crates/rotelyx-mailbox",
+    "crates/rotelyx-capability",
     "crates/rotelyx-cli",
     "crates/rotelyx-relay",
     "crates/rotelyx-web",
     "crates/rotelyx-desktop",
+    "crates/rotelyx-wasm",
+    "crates/rotelyx-mobile",
+    "crates/rotelyx-status",
+    "crates/rotelyx-mailbox-server",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-only"
 repository = "https://github.com/MaliosDark/rotelyx"
-authors = ["Malios Dark"]
+authors = ["Andryu Schittone"]
 
 [workspace.dependencies]
 # --- message crypto (L2) ---
@@ -75,6 +82,8 @@ clap = { version = "4", features = ["derive"] }
 
 # --- internal ---
 rotelyx-net = { path = "crates/rotelyx-net" }
+rotelyx-codec = { path = "crates/rotelyx-codec" }
+rotelyx-status = { path = "crates/rotelyx-status" }
 rotelyx-core = { path = "crates/rotelyx-core" }
 rotelyx-crypto = { path = "crates/rotelyx-crypto" }
 
@@ -89,3 +98,19 @@ panic = "abort"
 # even in dev.
 [profile.dev.package."*"]
 opt-level = 2
+
+# The browser build is optimised for size rather than speed.
+#
+# It is downloaded before anything can happen, often on a phone on a cellular
+# connection, and what it does there is seal and open messages a person typed:
+# work measured in microseconds either way. A megabyte saved is a second of
+# staring at a blank screen saved, and nobody can perceive the difference in
+# how fast an ChaCha20 runs. That trade does not hold for the native build,
+# which is why this is a separate profile rather than a change to `release`.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

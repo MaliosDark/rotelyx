@@ -29,7 +29,7 @@ keywords = [
     "holepunching",
     "p2p",
 ]
-license = "MIT OR Apache-2.0"
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause"
 repository = "https://github.com/MaliosDark/rotelyx"
 resolver = "2"
 
@@ -111,10 +111,12 @@ tls-ring = [
 
 [lib]
 name = "rotelyx_relay_proto"
-crate-type = [
-    "lib",
-    "cdylib",
-]
+# Vendored upstream shipped a cdylib here for C consumers. Nothing in Rotelyx
+# links this as a C library, and building both a rlib and a cdylib from one lib
+# target makes them collide on one output filename under `cargo test
+# --workspace`: whichever lands last wins and the other crates are then told the
+# crate cannot be found.
+crate-type = ["lib"]
 path = "src/lib.rs"
 
 [[bin]]
@@ -133,6 +135,10 @@ path = "tests/relay_hyper.rs"
 [[test]]
 name = "runtime_auth"
 path = "tests/runtime_auth.rs"
+
+[dependencies.rotelyx-status]
+# The status strip, shared with the mailbox so the two cannot drift apart.
+path = "../../rotelyx-status"
 
 [dependencies.blake3]
 version = "1.8.2"

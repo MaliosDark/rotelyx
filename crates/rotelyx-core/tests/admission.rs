@@ -1,7 +1,7 @@
 //! Admission control over a live connection.
 //!
 //! The unit tests prove the gate's decisions are right. They do not prove the
-//! gate is *consulted* — a policy that is never reached on the accept path is
+//! gate is *consulted*: a policy that is never reached on the accept path is
 //! decoration, and this codebase has already shipped that mistake twice. These
 //! tests use real sockets so the wiring is what is under test.
 

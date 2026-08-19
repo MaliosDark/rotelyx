@@ -148,7 +148,7 @@
       <h2>Invitations</h2>
       <p class="hint">
         You are unreachable until you issue one. Hand the code over a channel
-        you trust — anyone holding it can reach you until it expires.
+        you trust: anyone holding it can reach you until it expires.
       </p>
       <div class="row">
         <input id="hours" type="number" value="24" min="1" aria-label="Hours valid">
@@ -193,7 +193,7 @@
         <div class="digits" id="digits"></div>
         <div class="why">
           Read these to your peer over a channel Rotelyx does not control. If they
-          differ, someone is in the middle — the transport authenticated a key,
+          differ, someone is in the middle: the transport authenticated a key,
           not a person.
         </div>
       </div>
@@ -236,7 +236,7 @@
       $("me").textContent = s.id;
       $("invite-count").textContent =
         s.invitations === 0
-          ? "No live invitations — you are unreachable."
+          ? "No live invitations: you are unreachable."
           : `${s.invitations} live invitation(s).`;
     } catch (e) {
       $("me").textContent = "unavailable";
@@ -304,7 +304,7 @@
         // MLS makes membership changes visible; a UI that stays quiet throws
         // that guarantee away.
         case "group_changed":
-          log(`the group changed — ${m.members} members`, "sys");
+          log(`the group changed: ${m.members} members`, "sys");
           break;
 
         case "disconnected":

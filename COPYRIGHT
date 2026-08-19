@@ -1,0 +1,25 @@
+Rotelyx
+Copyright (C) 2026 Andryu Schittone
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+
+Third-party code
+----------------
+
+The transport stack under crates/net is derived from other projects and stays
+under the licenses those projects granted. Each crate there carries its own
+license files. See LICENSING.md for what is under which license and why.
+
+Rotelyx is a trademark of Andryu Schittone. The license above covers the code;
+it does not grant permission to use the name or the marks. See LICENSING.md.
