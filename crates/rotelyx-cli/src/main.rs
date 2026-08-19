@@ -571,14 +571,16 @@ async fn main() -> Result<()> {
                 eprintln!("refusing {} blocked identity(ies)", blocks.len());
             }
 
-            // Direct-only: no relay, no discovery. Both peers must be reachable
-            // to each other, which on one machine or one LAN they are.
-            let endpoint = RotelyxEndpoint::bind(&identity, net_config(relay.as_deref())?).await?;
+            // Without --relay this is direct only: no relay, no discovery, and
+            // both peers must be reachable to each other, which on one machine
+            // or one LAN they are. With it, relayed and never direct.
+            let config = net_config(relay.as_deref())?;
+            let endpoint = RotelyxEndpoint::bind(&identity, config.clone()).await?;
             let addr = endpoint.addr();
 
             println!("listening as {}", endpoint.id());
             println!();
-            println!("  rotelyx connect '{}'", encode_addr(&addr)?);
+            println!("  rotelyx connect '{}'", encode_addr(&addr, &config)?);
             println!();
 
             let mut session = endpoint
@@ -660,8 +662,50 @@ fn net_config(relay: Option<&str>) -> Result<NetConfig> {
     ))
 }
 
-fn encode_addr(addr: &EndpointAddr) -> Result<String> {
-    let json = serde_json::to_vec(addr).context("encoding address")?;
+/// Encode an address to hand to a peer, minus anything the policy will not use.
+///
+/// # Why this filters
+///
+/// An `EndpointAddr` carries whatever the endpoint knows about how to reach
+/// itself, and on an ordinary machine that includes its IP and port. Handing
+/// that to somebody is handing them your address, and on a session that will
+/// never take a direct path they cannot use it for anything except knowing
+/// where you are.
+///
+/// Observed rather than assumed: with `--relay` set, the address printed was
+///
+/// ```text
+/// {"id":"3b427d3f...","addrs":[{"Ip":"192.168.68.46:56860"}]}
+/// ```
+///
+/// which is the operator's LAN address published to whoever they send an
+/// invitation to, on the one configuration whose entire purpose is not
+/// revealing it.
+///
+/// The transport is not wrong to know its own addresses. What was wrong was
+/// printing all of them regardless of what the session would do with them.
+fn encode_addr(addr: &EndpointAddr, config: &NetConfig) -> Result<String> {
+    let mut addr = addr.clone();
+
+    if !config.paths().permits_direct() {
+        addr.addrs
+            .retain(|a| !matches!(a, rotelyx_net::TransportAddr::Ip(_)));
+
+        // Removing the IPs leaves nothing to route on, because `addr()` is read
+        // the moment the endpoint binds and the relay is not established yet.
+        // Measured: with the IPs stripped and nothing put back, the peer failed
+        // with "connecting" and never reached anything.
+        //
+        // The relay from the configuration is the right thing to publish anyway.
+        // It is where this endpoint can be reached, it is already public, and it
+        // is what the peer will use.
+        for url in config.relays().urls() {
+            addr.addrs
+                .insert(rotelyx_net::TransportAddr::Relay(url.clone()));
+        }
+    }
+
+    let json = serde_json::to_vec(&addr).context("encoding address")?;
     Ok(data_encoding::BASE64URL_NOPAD.encode(&json))
 }
 
@@ -670,4 +714,77 @@ fn decode_addr(s: &str) -> Result<EndpointAddr> {
         .decode(s.trim().as_bytes())
         .context("address is not valid base64")?;
     serde_json::from_slice(&bytes).context("address is not a valid Rotelyx address")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rotelyx_net::TransportAddr;
+
+    fn addr_with_ip() -> EndpointAddr {
+        let id = rotelyx_net::SecretKey::generate().public();
+        let mut addr = EndpointAddr::from(id);
+        addr.addrs.insert(TransportAddr::Ip(
+            "192.168.68.46:56860".parse().expect("a socket address"),
+        ));
+        addr
+    }
+
+    fn decoded(encoded: &str) -> EndpointAddr {
+        let bytes = data_encoding::BASE64URL_NOPAD
+            .decode(encoded.as_bytes())
+            .expect("base64");
+        serde_json::from_slice(&bytes).expect("json")
+    }
+
+    /// A relayed session must not publish where the machine is.
+    ///
+    /// This is the check on a claim, not a unit test of a helper: the address a
+    /// user pastes into a chat window is the one place their IP would travel,
+    /// and it did travel, on the configuration whose whole purpose is that it
+    /// does not.
+    #[test]
+    fn a_relayed_address_carries_no_ip() {
+        let config = net_config(Some("http://relay.example.internal")).expect("config");
+        let encoded = encode_addr(&addr_with_ip(), &config).expect("encode");
+        let out = decoded(&encoded);
+
+        assert!(
+            !out.addrs.iter().any(|a| matches!(a, TransportAddr::Ip(_))),
+            "a relay-only address published an IP: {:?}",
+            out.addrs
+        );
+    }
+
+    /// And it must still say where to find them, or the peer cannot connect.
+    ///
+    /// Removing the IPs and putting nothing back was tried, and the peer failed
+    /// with "connecting" against a live relay. Both halves are the property.
+    #[test]
+    fn a_relayed_address_still_says_where_to_connect() {
+        let config = net_config(Some("http://relay.example.internal")).expect("config");
+        let encoded = encode_addr(&addr_with_ip(), &config).expect("encode");
+        let out = decoded(&encoded);
+
+        assert!(
+            out.addrs.iter().any(|a| matches!(a, TransportAddr::Relay(_))),
+            "a relay-only address named no relay, so nothing can reach it"
+        );
+    }
+
+    /// A direct session needs the IP, and must keep it.
+    ///
+    /// The filter is not "always strip": stripping here would break the default
+    /// configuration, which has no relay to fall back to.
+    #[test]
+    fn a_direct_address_keeps_its_ip() {
+        let config = net_config(None).expect("config");
+        let encoded = encode_addr(&addr_with_ip(), &config).expect("encode");
+        let out = decoded(&encoded);
+
+        assert!(
+            out.addrs.iter().any(|a| matches!(a, TransportAddr::Ip(_))),
+            "a direct-only address lost the address it needs"
+        );
+    }
 }
