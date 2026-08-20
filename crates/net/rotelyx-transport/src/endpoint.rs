@@ -1168,6 +1168,47 @@ impl Endpoint {
         &self.inner.static_config.tls_config.secret_key
     }
 
+    /// Also accept connections addressed to `secret_key`.
+    ///
+    /// # What this is for
+    ///
+    /// An endpoint that answers under one key is reachable at one address for
+    /// everybody, and anything carrying that traffic learns which endpoint
+    /// talks to which. Giving each contact an address of its own removes that,
+    /// and an address is a key.
+    ///
+    /// # How the right key is chosen
+    ///
+    /// The caller says which. This transport encodes the endpoint id it is
+    /// dialling into the TLS server name, so it arrives in the ClientHello
+    /// before any key has to be produced.
+    ///
+    /// # The two halves
+    ///
+    /// Being reachable at an address and being able to answer there are
+    /// separate arrangements, and either one alone is useless: a key the relay
+    /// routes but TLS cannot answer is a door that opens onto a wall, and a key
+    /// TLS answers but no relay routes is a door nobody can find. This makes
+    /// both, so a caller cannot do half of it.
+    ///
+    /// # What it does not do
+    ///
+    /// Survive a restart. The relay half lives in the relay's memory and is
+    /// re-made when the connection comes back; the caller has to ask again for
+    /// a key it wants answered in the next process.
+    ///
+    /// The TLS half takes effect immediately, including for connections already
+    /// in flight, because the resolver is shared with every TLS session this
+    /// endpoint makes. The relay half takes as long as a message to the relay.
+    /// Returns whether both halves were arranged. The answering half always is;
+    /// `false` means a relay could not be asked, so the endpoint answers at an
+    /// address that nothing on the network can currently reach.
+    #[must_use]
+    pub fn also_answer_as(&self, secret_key: &SecretKey) -> bool {
+        self.inner.static_config.tls_config.also_answer_as(secret_key);
+        self.inner.bind_relay_alias(secret_key.clone())
+    }
+
     /// Returns the endpoint id of this endpoint.
     ///
     /// This ID is the unique addressing information of this endpoint and other peers must know

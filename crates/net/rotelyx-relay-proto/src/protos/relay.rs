@@ -177,6 +177,42 @@ pub enum ClientToRelayMsg {
         /// The datagrams and related metadata to relay.
         datagrams: Datagrams,
     },
+    /// Ask this connection to also answer to `alias`.
+    ///
+    /// # What the signature covers, and why it is that
+    ///
+    /// The key this connection authenticated with, then the alias. Both, in
+    /// that order, under a domain separator.
+    ///
+    /// Covering the alias alone would let anybody who saw the frame replay it
+    /// on their own connection and be handed that key's traffic. Covering the
+    /// connection's key as well ties the request to one connection: replaying
+    /// it elsewhere is verified against a different first half and fails.
+    ///
+    /// No challenge is needed for the same reason. Binding an alias requires
+    /// the alias's private key **and** control of a connection authenticated as
+    /// that primary, and the second of those is not something a captured frame
+    /// confers.
+    BindAlias {
+        /// The key to also answer to.
+        alias: EndpointId,
+        /// A signature by `alias` over the binding.
+        signature: [u8; 64],
+    },
+}
+
+/// Domain separation for [`ClientToRelayMsg::BindAlias`] signatures.
+const DOMAIN_SEP_ALIAS: &str = "rotelyx relay alias binding v1";
+
+/// What an alias signature is computed over.
+///
+/// Derived rather than signed raw, for the reason the handshake gives: signing
+/// bytes an attacker chooses is a shape to avoid even when no attack is known.
+pub fn alias_binding_message(primary: &EndpointId, alias: &EndpointId) -> [u8; 32] {
+    let mut input = [0u8; 64];
+    input[..32].copy_from_slice(primary.as_bytes());
+    input[32..].copy_from_slice(alias.as_bytes());
+    blake3::derive_key(DOMAIN_SEP_ALIAS, &input)
 }
 
 /// One or multiple datagrams being transferred via the relay.
@@ -469,8 +505,23 @@ impl RelayToClientMsg {
 }
 
 impl ClientToRelayMsg {
+    /// Ask a connection to also answer to a key you hold.
+    ///
+    /// Takes the secret rather than a signature so that the binding cannot be
+    /// computed over the wrong thing: sign the alias alone and a relay would
+    /// accept the frame from anybody who copied it. `primary` is the key this
+    /// connection authenticated with.
+    pub fn bind_alias(alias: &rotelyx_transport_base::SecretKey, primary: &EndpointId) -> Self {
+        let public = alias.public();
+        Self::BindAlias {
+            alias: public,
+            signature: alias.sign(&alias_binding_message(primary, &public)).to_bytes(),
+        }
+    }
+
     pub(crate) fn typ(&self) -> FrameType {
         match self {
+            Self::BindAlias { .. } => FrameType::ClientBindsAlias,
             Self::Datagrams { datagrams, .. } => {
                 if datagrams.segment_size.is_some() {
                     FrameType::ClientToRelayDatagramBatch
@@ -506,6 +557,10 @@ impl ClientToRelayMsg {
             Self::Pong(data) => {
                 dst.put(&data[..]);
             }
+            Self::BindAlias { alias, signature } => {
+                dst.put(alias.as_ref());
+                dst.put(&signature[..]);
+            }
         }
         dst
     }
@@ -513,6 +568,7 @@ impl ClientToRelayMsg {
     pub(crate) fn encoded_len(&self) -> usize {
         let payload_len = match self {
             Self::Ping(_) | Self::Pong(_) => 8,
+            Self::BindAlias { .. } => 32 + 64,
             Self::Datagrams { datagrams, .. } => {
                 32 // endpoint id
                 + datagrams.encoded_len()
@@ -560,6 +616,15 @@ impl ClientToRelayMsg {
                 data.copy_from_slice(&content[..8]);
                 Self::Pong(data)
             }
+            FrameType::ClientBindsAlias => {
+                // Exactly, not at least: a frame with room for more is a frame
+                // somebody built by hand.
+                ensure!(content.len() == EndpointId::LENGTH + 64, Error::InvalidFrame);
+                let alias = cache.key_from_slice(&content[..EndpointId::LENGTH])?;
+                let mut signature = [0u8; 64];
+                signature.copy_from_slice(&content[EndpointId::LENGTH..]);
+                Self::BindAlias { alias, signature }
+            }
             _ => {
                 return Err(e!(Error::InvalidFrameType { frame_type }));
             }
@@ -576,6 +641,102 @@ mod tests {
     use rotelyx_error::Result;
 
     use super::*;
+
+    /// What the constructor builds is what the relay verifies.
+    ///
+    /// The two live in different places and a mismatch would be silent: every
+    /// binding refused, and no way to tell that from a wrong key.
+    #[test]
+    fn the_constructor_agrees_with_the_verifier() {
+        let alias_key = SecretKey::from_bytes(&[5u8; 32]);
+        let primary = SecretKey::from_bytes(&[6u8; 32]).public();
+
+        let ClientToRelayMsg::BindAlias { alias, signature } =
+            ClientToRelayMsg::bind_alias(&alias_key, &primary)
+        else {
+            panic!("bind_alias built something else");
+        };
+
+        assert_eq!(alias, alias_key.public());
+        assert!(
+            alias
+                .verify(
+                    &alias_binding_message(&primary, &alias),
+                    &rotelyx_transport_base::Signature::from_bytes(&signature),
+                )
+                .is_ok(),
+            "the relay would refuse what the constructor produced"
+        );
+    }
+
+    /// A captured alias binding cannot be replayed onto another connection.
+    ///
+    /// This is the property the whole frame rests on. Without it, anybody who
+    /// saw the frame could present it on their own connection and be handed
+    /// that key's traffic by the relay.
+    #[test]
+    fn an_alias_binding_does_not_transfer_to_another_connection() {
+        let alias_key = SecretKey::from_bytes(&[7u8; 32]);
+        let alias = alias_key.public();
+        let mine = SecretKey::from_bytes(&[1u8; 32]).public();
+        let theirs = SecretKey::from_bytes(&[2u8; 32]).public();
+
+        let signature = alias_key.sign(&alias_binding_message(&mine, &alias));
+
+        assert!(
+            alias.verify(&alias_binding_message(&mine, &alias), &signature).is_ok(),
+            "a binding did not verify on the connection it was made for"
+        );
+        assert!(
+            alias.verify(&alias_binding_message(&theirs, &alias), &signature).is_err(),
+            "a binding verified on somebody else's connection"
+        );
+    }
+
+    /// The binding also names which key is being claimed, so one signature
+    /// cannot be reused to claim a different one.
+    #[test]
+    fn an_alias_binding_names_the_key_being_claimed() {
+        let alias_key = SecretKey::from_bytes(&[7u8; 32]);
+        let alias = alias_key.public();
+        let other = SecretKey::from_bytes(&[9u8; 32]).public();
+        let primary = SecretKey::from_bytes(&[1u8; 32]).public();
+
+        let signature = alias_key.sign(&alias_binding_message(&primary, &alias));
+        assert!(
+            alias.verify(&alias_binding_message(&primary, &other), &signature).is_err(),
+            "a binding for one key verified for another"
+        );
+    }
+
+    /// The frame survives its own encoding.
+    #[test]
+    fn a_bind_alias_frame_round_trips() {
+        let alias_key = SecretKey::from_bytes(&[3u8; 32]);
+        let alias = alias_key.public();
+        let primary = SecretKey::from_bytes(&[4u8; 32]).public();
+        let signature = alias_key.sign(&alias_binding_message(&primary, &alias)).to_bytes();
+
+        let frame = ClientToRelayMsg::BindAlias { alias, signature };
+        let bytes = frame.to_bytes().freeze();
+        assert_eq!(bytes.len(), frame.encoded_len(), "encoded_len disagrees with to_bytes");
+
+        let back = ClientToRelayMsg::from_bytes(bytes, &KeyCache::test()).expect("decode");
+        assert_eq!(back, frame, "the frame did not survive the round trip");
+    }
+
+    /// A frame of the wrong length is refused rather than parsed.
+    #[test]
+    fn a_bind_alias_frame_of_the_wrong_length_is_refused() {
+        for extra in [0usize, 1, 32, 63, 65, 128] {
+            let mut body = FrameType::ClientBindsAlias.write_to(BytesMut::new());
+            body.put_bytes(0x41, extra);
+            assert!(
+                ClientToRelayMsg::from_bytes(body.freeze(), &KeyCache::test()).is_err(),
+                "accepted a body of {extra} bytes"
+            );
+        }
+    }
 
     fn check_expected_bytes(frames: Vec<(Vec<u8>, &str)>) {
         for (bytes, expected_hex) in frames {

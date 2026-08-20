@@ -334,6 +334,8 @@ impl ShutdownState {
 /// possible.
 #[derive(Debug)]
 pub(crate) struct Socket {
+    /// Asks the relays to also route packets addressed to another key here.
+    alias_binder: transports::RelayAliasBinder,
     /// Read-only view of the per-remote `RemoteStateActor` inboxes.
     ///
     /// Lets callers send to an existing `RemoteStateActor` without going through
@@ -384,6 +386,15 @@ pub(crate) struct Socket {
 }
 
 impl Socket {
+    /// Asks every relay we are connected to to route `key`'s address here too.
+    ///
+    /// Pairs with the TLS side of the same arrangement: this makes us
+    /// *reachable* at that address, and the resolver makes us able to *answer*
+    /// there. One without the other is a half-open door.
+    pub(crate) fn bind_relay_alias(&self, key: SecretKey) -> bool {
+        self.alias_binder.bind(key)
+    }
+
     /// Returns the relay endpoint we are connected to, that has the best latency.
     ///
     /// If `None`, then we are not connected to any relay endpoints.
@@ -987,7 +998,9 @@ impl EndpointInner {
 
         let home_relay_watch = transports.home_relay_watch();
 
+        let alias_binder = transports.create_alias_binder();
         let sock = Arc::new(Socket {
+            alias_binder,
             remote_actors: remote_map.senders(),
             shutdown: shutdown_state,
             ipv6_reported,

@@ -71,6 +71,19 @@ impl NetEndpoint {
         })
     }
 
+    /// Also accept connections addressed to `key`.
+    ///
+    /// One endpoint, several addresses, so that a contact reaching you does not
+    /// tell anything carrying the traffic who you are. What it does not do is
+    /// make that address findable: a relay has to route it here, which is a
+    /// separate arrangement.
+    /// Returns whether the endpoint is also *reachable* at that address, not
+    /// only able to answer there. See [`rotelyx_transport::endpoint::Endpoint::also_answer_as`].
+    #[must_use]
+    pub fn also_answer_as(&self, key: &SecretKey) -> bool {
+        self.inner.also_answer_as(key)
+    }
+
     pub fn id(&self) -> EndpointId {
         self.inner.id()
     }

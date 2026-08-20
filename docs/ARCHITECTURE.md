@@ -327,6 +327,38 @@ to.
 Revoking a leaked invitation does not shut out holders of the others. Expiry is
 a promise about the future. A leak is a problem right now.
 
+### Every invitation is a different address
+
+An endpoint that answers under one key is reachable at one address for
+everybody, and anything carrying that traffic sees which address talks to which.
+Two people you invited could compare notes and find they had been given the same
+one. So an invitation carries an address of its own, and the code you hand out
+is that address as well as the permission to use it.
+
+One endpoint answers all of them at once, on one socket and one relay
+connection, by two arrangements that are made together:
+
+| Half | What it does | Where it lives |
+|---|---|---|
+| **Answering** | The TLS resolver holds every key and picks by the endpoint id in the ClientHello, which arrives before any key has to be produced | This process |
+| **Being found** | The relay is asked to route the address to this connection, and does so only for a connection that signed a binding with the key itself | The relay's memory |
+
+Neither half is useful alone: a key the relay routes but TLS cannot answer is a
+door onto a wall, and a key TLS answers but no relay routes is a door nobody can
+find. The API makes both, so a caller cannot do half of it.
+
+The signature is over the pair (this connection, the alias), so a binding cannot
+be replayed onto another connection, and the relay refuses an address that is
+already somebody's connection or already answered elsewhere. Taking someone's
+address needs their invitation's secret key.
+
+**What this does not do.** It does not hide the *number* of addresses from the
+relay carrying them, since they arrive on one connection. It does not survive a
+restart: the routing lives in the relay's memory and is re-made on reconnect,
+but a fresh process has to ask again. And answering at several addresses is not
+serving several conversations at once, which is a separate thing this endpoint
+does not do.
+
 ---
 
 ## Path selection

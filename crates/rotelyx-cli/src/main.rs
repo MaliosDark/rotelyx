@@ -463,12 +463,13 @@ async fn main() -> Result<()> {
             // The identity never reaches the wire and a relay carrying this
             // sees a value that belongs to one conversation.
             //
-            // **One invitation at a time.** A relay connection carries one key
-            // (`client_key` in the relay handshake), so being reachable on two
-            // invitations at once means two connections, and multiplexing them
-            // is not built. The newest live one is used and the rest are still
-            // admitted if their holder somehow reaches this address, which is
-            // the honest behaviour rather than pretending they are unreachable.
+            // **Every live invitation, on one connection.** A relay connection
+            // is opened under one key, so the newest invitation is bound first
+            // and the rest are added as aliases: the relay is asked to route
+            // their addresses to this same connection, and the TLS resolver is
+            // given their keys so it can answer there. Each holder still sees
+            // only the address it was given, and nothing on the wire ties them
+            // to each other.
             let newest = live.iter().max_by_key(|i| i.expires_at_epoch);
             let endpoint = match (newest, open) {
                 (Some(inv), _) => {
@@ -484,16 +485,45 @@ async fn main() -> Result<()> {
                      or pass --open to answer on this identity"
                 ),
             };
+            // The rest of the live invitations, answered on the same connection.
+            let primary = newest.map(|i| i.transport);
+            for inv in &live {
+                if Some(inv.transport) == primary {
+                    continue;
+                }
+                if !endpoint.also_answer_as(&SecretKey::from_bytes(&inv.transport)) {
+                    eprintln!(
+                        "warning: could not ask the relay to answer one invitation's \
+                         address. Its holder may not be able to reach you."
+                    );
+                }
+            }
+
             let addr = endpoint.addr();
 
             match newest {
-                Some(inv) => {
-                    println!("answering one invitation. Hand the holder its code:");
+                Some(_) => {
+                    let mut codes: Vec<_> = live.iter().collect();
+                    codes.sort_by_key(|i| i.expires_at_epoch);
+                    let n = codes.len();
+                    if n == 1 {
+                        println!("answering one invitation. Hand the holder its code:");
+                    } else {
+                        println!("answering {n} invitations. Each holder gets its own code:");
+                    }
                     println!();
-                    println!("  rotelyx connect {}", inv.code());
+                    for inv in codes {
+                        println!("  rotelyx connect {}", inv.code());
+                    }
                     println!();
-                    println!("That code is the address as well as the permission, and");
+                    println!("A code is the address as well as the permission, and");
                     println!("the address is not this identity.");
+                    if n > 1 {
+                        println!();
+                        println!("All {n} addresses are answered, and the first caller to");
+                        println!("arrive is the one served: this is one conversation at a");
+                        println!("time, not {n} at once.");
+                    }
                 }
                 None => {
                     println!("listening as {}", endpoint.id());

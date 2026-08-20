@@ -69,6 +69,16 @@ impl TlsConfig {
         }
     }
 
+    /// Also answer as `secret_key` when a caller dials it.
+    ///
+    /// The resolver behind this is shared with every TLS session this config
+    /// produces, including ones already in flight, so a key added here starts
+    /// working without rebuilding anything. See
+    /// [`ResolveRawPublicKeyCert::also_answer_as`].
+    pub(crate) fn also_answer_as(&self, secret_key: &SecretKey) {
+        self.cert_resolver.also_answer_as(secret_key);
+    }
+
     /// Create a TLS client configuration.
     ///
     /// If *keylog* is `true` this will enable logging of the pre-master key to the file in the

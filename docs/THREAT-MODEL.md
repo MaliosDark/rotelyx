@@ -57,15 +57,21 @@ routing.
   strip.
 
 ### ADV-3: Relay operator (including us)
-*Capability:* full control of an iroh relay carrying a session that failed to
+*Capability:* full control of a relay carrying a session that failed to
 hole-punch.
 
-- **Defended:** A1, A4. iroh relays are stateless forwarders of QUIC ciphertext
-  and hold no session state.
-- **Not defended:** **A2.** The relay sees which endpoint id sends to which. This
-  is the single largest metadata exposure in the system and it is inherent to
-  relayed transport. Mitigations: prefer direct paths and surface relay use in
-  the UI; support self-hosted relays; rotate relay selection.
+- **Defended:** A1, A4. Relays are stateless forwarders of QUIC ciphertext and
+  hold no session state.
+- **Partly defended:** **A2.** The relay still sees which address sends to
+  which, and that remains the largest metadata exposure in the system, inherent
+  to relayed transport. What it no longer sees is a stable name shared by all of
+  one endpoint's correspondents: each invitation carries a transport key of its
+  own, so no two people you invited are given a name in common, and the identity
+  key never reaches the wire at all. The relay learns that one connection
+  answers to several addresses, and it can count them, but not that a particular
+  address belongs to a particular person. Further mitigations: prefer direct
+  paths and surface relay use in the UI; support self-hosted relays; rotate
+  relay selection.
 - **Not defended:** A5: connecting to a relay reveals presence to it.
 
 ### ADV-4: Mailbox operator

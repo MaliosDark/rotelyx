@@ -34,6 +34,26 @@ struct Inner {
     clients: DashMap<EndpointId, ClientState>,
     /// Map of which client has sent where
     sent_to: DashMap<EndpointId, HashSet<EndpointId>>,
+    /// Additional keys a connection answers to, each pointing at the key it
+    /// connected under.
+    ///
+    /// # Why a connection needs more than one key
+    ///
+    /// A key is one contact. A person reachable by ten people under ten keys
+    /// would otherwise hold ten connections to this relay, each with its own
+    /// socket, its own handshake and its own keepalive, which is a cost paid by
+    /// every client for a property that costs the relay a map entry.
+    ///
+    /// # Why an alias rather than a second client
+    ///
+    /// A `Client` owns the handle that aborts its connection when dropped, so
+    /// it cannot be duplicated: a copy going out of scope would kill the
+    /// connection the original is still using. An alias is a name, not a
+    /// connection, and resolving it reaches the one client that exists.
+    ///
+    /// Aliases are removed with the connection that registered them, so a name
+    /// never outlives the thing it points at.
+    aliases: DashMap<EndpointId, EndpointId>,
 }
 
 #[derive(Debug)]
@@ -116,6 +136,10 @@ impl Clients {
 
         let mut notify_peers = None;
 
+        // Before the connection goes, so nothing can resolve through it in the
+        // window between removal and cleanup.
+        self.forget_aliases_of(endpoint_id);
+
         self.0.clients.remove_if_mut(&endpoint_id, |_id, state| {
             if state.active.connection_id() == connection_id {
                 // The unregistering client is the currently active client
@@ -197,6 +221,40 @@ impl Clients {
     }
 
     /// Attempt to send a packet to client with [`EndpointId`] `dst`.
+    /// Answer to another key on this connection.
+    ///
+    /// The caller has already proved possession of it: this is the bookkeeping,
+    /// not the check. Registering a key some other connection is using is
+    /// refused rather than stealing their traffic.
+    pub(super) fn register_alias(&self, alias: EndpointId, primary: EndpointId) -> bool {
+        if self.0.clients.contains_key(&alias) {
+            debug!(
+                alias = %alias.fmt_short(),
+                "refusing an alias that is somebody's connection"
+            );
+            return false;
+        }
+        match self.0.aliases.entry(alias) {
+            dashmap::Entry::Occupied(entry) if *entry.get() != primary => {
+                debug!(alias = %alias.fmt_short(), "alias already answered by another connection");
+                false
+            }
+            dashmap::Entry::Occupied(_) => true,
+            dashmap::Entry::Vacant(entry) => {
+                entry.insert(primary);
+                true
+            }
+        }
+    }
+
+    /// Drop every name a connection answered to.
+    ///
+    /// Called when it goes, so an alias never outlives its connection and the
+    /// next holder of that key is not handed somebody else's traffic.
+    fn forget_aliases_of(&self, primary: EndpointId) {
+        self.0.aliases.retain(|_alias, target| *target != primary);
+    }
+
     pub(super) fn send_packet(
         &self,
         dst: EndpointId,
@@ -204,6 +262,21 @@ impl Clients {
         src: EndpointId,
         metrics: &Metrics,
     ) -> Result<(), ForwardPacketError> {
+        // A destination is either a key somebody connected under or a name one
+        // of those connections also answers to. Resolved in that order, so an
+        // alias can never shadow a real connection.
+        let dst = match self.0.clients.contains_key(&dst) {
+            true => dst,
+            false => match self.0.aliases.get(&dst) {
+                Some(primary) => *primary,
+                None => {
+                    debug!(dst = %dst.fmt_short(), "no connected client, dropped packet");
+                    metrics.send_packets_dropped.inc();
+                    return Ok(());
+                }
+            },
+        };
+
         let Some(client) = self.0.clients.get(&dst) else {
             debug!(dst = %dst.fmt_short(), "no connected client, dropped packet");
             metrics.send_packets_dropped.inc();
@@ -293,6 +366,80 @@ mod tests {
         config.write_timeout = Duration::from_secs(1);
         config.channel_capacity = 10;
         (config, Conn::test(client, protocol_version))
+    }
+
+    /// A connection answers to more than one key.
+    ///
+    /// # Why this exists
+    ///
+    /// A key is one contact. Somebody reachable by ten people under ten keys
+    /// would otherwise hold ten connections here, and the property those ten
+    /// keys buy costs this relay a map entry.
+    #[tokio::test]
+    #[traced_test]
+    async fn a_connection_answers_to_an_alias() -> Result {
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7u64);
+        let primary = SecretKey::from_bytes(&rng.random()).public();
+        let alias = SecretKey::from_bytes(&rng.random()).public();
+        let sender = SecretKey::from_bytes(&rng.random()).public();
+
+        let (builder, mut rw) = test_client_builder(primary);
+        let clients = Clients::default();
+        let metrics = Arc::new(Metrics::default());
+        clients.register(builder, metrics.clone());
+
+        assert!(clients.register_alias(alias, primary), "the alias was refused");
+
+        // Addressed to the alias, delivered to the one connection there is.
+        let data = b"for the alias";
+        clients.send_packet(alias, Datagrams::from(&data[..]), sender, &metrics)?;
+        let frame = recv_frame(FrameType::RelayToClientDatagram, &mut rw).await?;
+        assert_eq!(
+            frame,
+            RelayToClientMsg::Datagrams {
+                remote_endpoint_id: sender,
+                datagrams: data.to_vec().into(),
+            },
+            "a packet for the alias did not reach the connection"
+        );
+
+        // And to the key it connected under, which the alias must not shadow.
+        clients.send_packet(primary, Datagrams::from(&data[..]), sender, &metrics)?;
+        recv_frame(FrameType::RelayToClientDatagram, &mut rw).await?;
+
+        Ok(())
+    }
+
+    /// An alias cannot be taken over, and cannot shadow a real connection.
+    ///
+    /// Without this a relay hands one client another's traffic by asking for
+    /// it, which is worse than not having aliases at all.
+    #[tokio::test]
+    #[traced_test]
+    async fn an_alias_cannot_take_over_somebody_else() -> Result {
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(11u64);
+        let a = SecretKey::from_bytes(&rng.random()).public();
+        let b = SecretKey::from_bytes(&rng.random()).public();
+        let alias = SecretKey::from_bytes(&rng.random()).public();
+
+        let (builder_a, _rw_a) = test_client_builder(a);
+        let (builder_b, _rw_b) = test_client_builder(b);
+        let clients = Clients::default();
+        let metrics = Arc::new(Metrics::default());
+        clients.register(builder_a, metrics.clone());
+        clients.register(builder_b, metrics.clone());
+
+        assert!(clients.register_alias(alias, a), "the first claim was refused");
+        assert!(
+            !clients.register_alias(alias, b),
+            "a second connection took over an alias already answered"
+        );
+        assert!(
+            !clients.register_alias(b, a),
+            "an alias shadowed a key somebody had connected under"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]

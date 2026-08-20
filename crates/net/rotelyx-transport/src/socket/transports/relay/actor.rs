@@ -152,10 +152,24 @@ struct ActiveRelayActor {
     stop_token: CancellationToken,
     metrics: Arc<SocketMetrics>,
     my_relay: HomeRelayWatch,
+    /// This connection's own key, which an alias binding is signed over.
+    primary: EndpointId,
+    /// Keys this connection has asked the relay to also answer to.
+    ///
+    /// Kept rather than sent and forgotten, because a relay drops a
+    /// connection's aliases when the connection goes. Without re-sending them
+    /// on reconnect, a dropped link would leave every address except the
+    /// primary quietly unreachable, and nothing would report it.
+    aliases: Vec<SecretKey>,
 }
 
 #[derive(Debug)]
 enum ActiveRelayMessage {
+    /// Ask the relay to also route `alias` to this connection.
+    ///
+    /// The relay verifies possession before it agrees, so this carries the
+    /// secret: the proof is built here, next to the connection it is bound to.
+    BindAlias(SecretKey),
     /// Triggers a connection check to the relay server.
     ///
     /// Sometimes it is known the local network interfaces have changed in which case it
@@ -196,6 +210,8 @@ struct ActiveRelayActorOptions {
     stop_token: CancellationToken,
     metrics: Arc<SocketMetrics>,
     my_relay: HomeRelayWatch,
+    /// Keys to bind as aliases as soon as this relay connection is up.
+    aliases: Vec<SecretKey>,
 }
 
 /// Configuration needed to create a connection to a relay server.
@@ -268,9 +284,15 @@ impl ActiveRelayActor {
             stop_token,
             metrics,
             my_relay,
+            aliases,
         } = opts;
+        // Kept before the builder consumes the options: an alias binding is
+        // signed over this connection's own key, so the actor has to know it.
+        let primary = connection_opts.secret_key.public();
         let relay_client_builder = Self::create_relay_builder(url.clone(), connection_opts);
         ActiveRelayActor {
+            primary,
+            aliases,
             prio_inbox,
             inbox,
             relay_datagrams_recv,
@@ -450,6 +472,15 @@ impl ActiveRelayActor {
                             self.set_home_relay(is_home);
                         }
                         ActiveRelayMessage::CheckConnection { .. } => {}
+                        ActiveRelayMessage::BindAlias(key) => {
+                            // Not connected: remembered, and sent once there is
+                            // a connection to send it on. Dropping it here
+                            // would leave an address that answers and cannot be
+                            // found, which is the failure this is for.
+                            if !self.aliases.iter().any(|k| k.public() == key.public()) {
+                                self.aliases.push(key);
+                            }
+                        }
                         #[cfg(test)]
                         ActiveRelayMessage::GetLocalAddr(sender) => {
                             sender.send(None).ok();
@@ -526,6 +557,18 @@ impl ActiveRelayActor {
             test_pong: None,
         };
 
+        // Re-bind every alias this connection is meant to answer to.
+        //
+        // A relay drops a connection's aliases when the connection goes, so a
+        // reconnect starts with only the primary key routed here. Anything
+        // reachable at one of the other addresses would stop being reachable,
+        // and nothing would say so: no error, no log, just an address that
+        // answers and cannot be found.
+        for key in self.aliases.clone() {
+            let fut = client_sink.send(ClientToRelayMsg::bind_alias(&key, &self.primary));
+            self.run_sending(fut, &mut state, &mut client_stream).await?;
+        }
+
         // A buffer to pass through multiple datagrams at once as an optimisation.
         let mut send_datagrams_buf = Vec::with_capacity(SEND_DATAGRAM_BATCH_SIZE);
 
@@ -581,6 +624,16 @@ impl ActiveRelayActor {
                             if is_home {
                                 self.my_relay
                                     .set_status(&self.url, RelayConnectionState::Connected);
+                            }
+                        }
+                        ActiveRelayMessage::BindAlias(key) => {
+                            let fut = client_sink.send(ClientToRelayMsg::bind_alias(
+                                &key,
+                                &self.primary,
+                            ));
+                            self.run_sending(fut, &mut state, &mut client_stream).await?;
+                            if !self.aliases.iter().any(|k| k.public() == key.public()) {
+                                self.aliases.push(key);
                             }
                         }
                         ActiveRelayMessage::CheckConnection { local_ips } => {
@@ -828,7 +881,7 @@ impl ConnectedRelayState {
     }
 }
 
-pub(super) enum RelayActorMessage {
+pub(crate) enum RelayActorMessage {
     MaybeCloseRelaysOnRebind,
     NetworkChange {
         report: Report,
@@ -838,6 +891,8 @@ pub(super) enum RelayActorMessage {
     /// Sent after a major network change to detect broken connections faster
     /// using RTT-based timeouts instead of the default 5s ping timeout.
     CheckConnectionAfterNetworkChange,
+    /// Ask every relay to also route this key to this endpoint.
+    BindAlias(SecretKey),
 }
 
 #[derive(Debug, Clone)]
@@ -862,6 +917,10 @@ pub(super) struct RelayActor {
     /// The tasks for the [`ActiveRelayActor`]s in `active_relays` above.
     active_relay_tasks: JoinSet<()>,
     cancel_token: CancellationToken,
+    /// Keys this endpoint also answers to, kept so a relay we connect to later
+    /// learns about them too. Without this an alias bound before the relay was
+    /// up, or before we moved to a new relay, would be silently forgotten.
+    aliases: Vec<SecretKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -1006,6 +1065,7 @@ impl RelayActor {
             relay_datagram_recv_queue,
             active_relays: Default::default(),
             active_relay_tasks: JoinSet::new(),
+            aliases: Vec::new(),
             cancel_token,
         }
     }
@@ -1086,6 +1146,9 @@ impl RelayActor {
             }
             RelayActorMessage::CheckConnectionAfterNetworkChange => {
                 self.check_connection_after_network_change().await;
+            }
+            RelayActorMessage::BindAlias(key) => {
+                self.bind_alias_everywhere(key).await;
             }
         }
     }
@@ -1263,6 +1326,7 @@ impl RelayActor {
             stop_token: self.cancel_token.child_token(),
             metrics: self.config.metrics.clone(),
             my_relay: self.config.my_relay.clone(),
+            aliases: self.aliases.clone(),
         };
         let actor = ActiveRelayActor::new(opts);
         self.active_relay_tasks.spawn(
@@ -1322,6 +1386,32 @@ impl RelayActor {
             }
         });
         rotelyx_future::join_all(send_futs).await;
+    }
+
+    /// Ask every relay this endpoint is connected to, to also route `key` here.
+    ///
+    /// Every one rather than only the home relay: which relay a caller reaches
+    /// this endpoint through is the caller's choice, and an address that works
+    /// through one and not another is worse than one that does not work at all,
+    /// because the failure depends on who is calling.
+    ///
+    /// A relay connected to later gets the key too: each actor keeps the
+    /// aliases it was given and re-sends them when it connects.
+    async fn bind_alias_everywhere(&mut self, key: SecretKey) {
+        if !self.aliases.iter().any(|k| k.public() == key.public()) {
+            self.aliases.push(key.clone());
+        }
+        let sends = self.active_relays.values().map(|handle| {
+            let key = key.clone();
+            async move {
+                handle
+                    .inbox_addr
+                    .send(ActiveRelayMessage::BindAlias(key))
+                    .await
+                    .ok();
+            }
+        });
+        rotelyx_future::join_all(sends).await;
     }
 
     /// Cleans up [`ActiveRelayActor`]s which have stopped running.
@@ -1441,6 +1531,7 @@ mod tests {
             stop_token,
             metrics: Default::default(),
             my_relay: Default::default(),
+            aliases: Vec::new(),
         };
         let task = tokio::spawn(ActiveRelayActor::new(opts).run().instrument(span));
         AbortOnDropHandle::new(task)

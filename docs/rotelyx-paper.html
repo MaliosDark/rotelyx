@@ -1154,6 +1154,45 @@
       talking.
     </p>
 
+
+    <h3>An address per invitation</h3>
+
+    <p>
+      An endpoint answering under a single key is reachable at one address for
+      everybody, so whatever carries the traffic sees a stable name shared by
+      all of that endpoint&rsquo;s correspondents, and two people invited by the
+      same host can discover as much by comparing what they were given. Each
+      invitation therefore carries a transport key of its own, and the code
+      handed to a holder is that address as well as the permission to use it.
+    </p>
+
+    <p>
+      One endpoint answers all of them on one socket and one relay connection.
+      Two arrangements are made together, and neither is useful alone. Answering
+      is local: the TLS certificate resolver holds every key and selects by the
+      endpoint identifier carried in the ClientHello server name, which arrives
+      before any key must be produced. Being found is the relay&rsquo;s: the
+      endpoint asks it to route the address to this connection, presenting a
+      signature made with the invitation key over the pair
+      <em>(connection, address)</em>. Binding to the pair keeps a binding from
+      being replayed onto a different connection, and the relay refuses an
+      address that is already some connection&rsquo;s own or already answered
+      elsewhere. Taking another party&rsquo;s address requires that
+      invitation&rsquo;s secret key.
+    </p>
+
+    <p>
+      The property obtained is unlinkability between an endpoint&rsquo;s
+      correspondents at the transport layer: no two of them are given a name in
+      common, and nothing on the wire relates the names to each other. Three
+      things fall outside it. The count of addresses is not hidden from the relay
+      carrying them, because they arrive on one connection. The routing lives in
+      the relay&rsquo;s memory, so it is re-established on reconnect but must be
+      requested again by a fresh process. And answering at several addresses is
+      not serving several conversations concurrently, which the present
+      implementation does not do.
+    </p>
+
   </div>
 </section>
 

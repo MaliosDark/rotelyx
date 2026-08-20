@@ -80,6 +80,32 @@ impl RotelyxEndpoint {
         })
     }
 
+    /// Also answer at another invitation's address on this endpoint.
+    ///
+    /// # Why one endpoint rather than one per invitation
+    ///
+    /// Answering several invitations otherwise means several endpoints: several
+    /// sockets, several handshakes, and several connections to a relay, all for
+    /// one person. This is the same endpoint proving it holds more than one
+    /// key, which the transport picks between using the address the caller
+    /// dialled.
+    ///
+    /// # Being found, as well as answering
+    ///
+    /// Those are two arrangements and this makes both: the relay is asked to
+    /// route the address here, which it does only for a connection that proved
+    /// it holds the key, and the TLS resolver is given the key so it can answer
+    /// there. The relay half is kept in the relay's memory, so it is re-made on
+    /// reconnect but not across a restart of this process: a caller that wants
+    /// a key answered next time has to ask again.
+    /// Returns `false` if the relay could not be asked, which leaves this
+    /// endpoint able to answer at that address but not reachable there. Worth
+    /// telling the user: it looks like a working setup until somebody calls.
+    #[must_use]
+    pub fn also_answer_as(&self, transport: &SecretKey) -> bool {
+        self.net.also_answer_as(transport)
+    }
+
     /// A transport key for one session, belonging to no identity.
     ///
     /// Generated from the OS entropy source and never written down. Pair it

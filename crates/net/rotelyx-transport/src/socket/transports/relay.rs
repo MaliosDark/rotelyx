@@ -21,8 +21,10 @@ use crate::endpoint::RelayStatus;
 
 mod actor;
 
-pub(crate) use self::actor::{Config as RelayActorConfig, HomeRelayWatch, RelayConnectionState};
-use self::actor::{RelayActor, RelayActorMessage, RelayRecvDatagram, RelaySendItem};
+pub(crate) use self::actor::{
+    Config as RelayActorConfig, HomeRelayWatch, RelayActorMessage, RelayConnectionState,
+};
+use self::actor::{RelayActor, RelayRecvDatagram, RelaySendItem};
 
 type RelayAddrWatcher =
     rotelyx_watcher::Map<rotelyx_watcher::Direct<Option<RelayStatus>>, Option<(RelayUrl, EndpointId)>>;
@@ -48,6 +50,16 @@ impl std::fmt::Display for RelayTransport {
 }
 
 impl RelayTransport {
+    /// Ask the relays to also route `key` to this endpoint.
+    ///
+    /// Fire and forget: a relay that refuses says so in its own log and not to
+    /// the caller, because telling one client why a key was refused tells it
+    /// who else is connected there.
+    /// A cloneable way to reach this relay's actor after this object is moved.
+    pub(crate) fn alias_sender(&self) -> mpsc::Sender<RelayActorMessage> {
+        self.actor_sender.clone()
+    }
+
     pub(crate) fn new(config: RelayActorConfig, cancel_token: CancellationToken) -> Self {
         let (relay_datagram_send_tx, relay_datagram_send_rx) = mpsc::channel(256);
 

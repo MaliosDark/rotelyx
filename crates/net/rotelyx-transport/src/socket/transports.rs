@@ -39,7 +39,7 @@ pub(crate) use self::ip::Config as IpConfig;
 #[cfg(not(wasm_browser))]
 use self::ip::{IpNetworkChangeSender, IpTransports, IpTransportsSender};
 pub(crate) use self::relay::{
-    HomeRelayWatch, RelayActorConfig, RelayConnectionState, RelayTransport,
+    HomeRelayWatch, RelayActorConfig, RelayActorMessage, RelayConnectionState, RelayTransport,
 };
 
 /// How many times all transports may error on `poll_recv` before we give up.
@@ -47,6 +47,37 @@ pub(crate) use self::relay::{
 /// Once all transports errored for this many times in a row, we give up and forward
 /// the error to rotelyx_quic, which will kill the endpoint driver then.
 const MAX_CONSECUTIVE_RECV_ERRORS: usize = 8;
+
+/// Asks the relays to also route a key to this endpoint.
+///
+/// # Why this is separate from answering as that key
+///
+/// Answering as a key and being findable at it are two arrangements. The TLS
+/// layer handles the first; without the second the endpoint answers at an
+/// address nothing on the network can reach.
+#[derive(Debug, Clone)]
+pub(crate) struct RelayAliasBinder {
+    relays: Vec<tokio::sync::mpsc::Sender<RelayActorMessage>>,
+}
+
+impl RelayAliasBinder {
+    /// Asks every relay to route `key`'s address to this endpoint.
+    ///
+    /// Returns whether every relay took the request. A dropped one leaves the
+    /// endpoint answering at an address nothing can reach, which looks exactly
+    /// like a working setup until somebody tries to call, so it is reported
+    /// rather than swallowed.
+    pub(crate) fn bind(&self, key: rotelyx_transport_base::SecretKey) -> bool {
+        let mut delivered = true;
+        for relay in &self.relays {
+            if let Err(err) = relay.try_send(RelayActorMessage::BindAlias(key.clone())) {
+                warn!("could not ask a relay to answer an extra address: {err:#}");
+                delivered = false;
+            }
+        }
+        delivered
+    }
+}
 
 /// Manages the different underlying data transports that the socket can support.
 #[derive(Debug)]
@@ -187,6 +218,17 @@ impl TransportConfig {
 }
 
 impl Transports {
+    /// A handle that can ask the relays to route more keys here.
+    ///
+    /// Taken before this object is moved into the QUIC endpoint, in the same
+    /// way as the network change sender, because afterwards there is no way
+    /// back to it.
+    pub(crate) fn create_alias_binder(&self) -> RelayAliasBinder {
+        RelayAliasBinder {
+            relays: self.relay.iter().map(|r| r.alias_sender()).collect(),
+        }
+    }
+
     /// Binds the  transports.
     pub(crate) fn bind(
         configs: &[TransportConfig],

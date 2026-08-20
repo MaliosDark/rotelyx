@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use rotelyx_transport_base::EndpointId;
+use rotelyx_transport_base::{EndpointId, Signature};
 use rotelyx_error::{e, stack_error};
 use rotelyx_future::{SinkExt, StreamExt};
 use rand::RngExt;
@@ -472,8 +472,43 @@ where
             ClientToRelayMsg::Pong(data) => {
                 self.ping_tracker.pong_received(data);
             }
+            ClientToRelayMsg::BindAlias { alias, signature } => {
+                self.handle_bind_alias(alias, signature);
+            }
         }
         Ok(())
+    }
+
+    /// Also answer to `alias` on this connection, if the caller can prove it
+    /// holds that key.
+    ///
+    /// # What is verified, and what a failure does
+    ///
+    /// A signature by `alias` over this connection's key and the alias, in that
+    /// order. Covering the connection's key is what stops a captured frame
+    /// being replayed onto somebody else's connection to be handed that key's
+    /// traffic.
+    ///
+    /// A bad signature, or a key already answered elsewhere, is logged and
+    /// dropped. Not an error to the client and not a disconnection: telling a
+    /// caller which of those it was is telling them who else is connected here.
+    fn handle_bind_alias(&self, alias: EndpointId, signature: [u8; 64]) {
+        let primary = self.guard.endpoint_id;
+        let message = crate::protos::relay::alias_binding_message(&primary, &alias);
+
+        let signature = Signature::from_bytes(&signature);
+        if alias.verify(&message, &signature).is_err() {
+            debug!(alias = %alias.fmt_short(), "alias signature did not verify");
+            return;
+        }
+
+        if self.clients.register_alias(alias, primary) {
+            debug!(
+                alias = %alias.fmt_short(),
+                primary = %primary.fmt_short(),
+                "connection now answers to an alias"
+            );
+        }
     }
 
     fn handle_frame_send_packet(

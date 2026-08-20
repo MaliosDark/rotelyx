@@ -62,6 +62,11 @@ pub enum FrameType {
     ///
     /// [`Status`]: super::relay::Status
     Status = 13,
+    /// A client asking this connection to also answer to another key.
+    ///
+    /// 32B the key, then a 64B signature by it over the binding. See
+    /// `ClientToRelayMsg::BindAlias`.
+    ClientBindsAlias = 14,
 }
 
 #[stack_error(derive, add_meta)]
