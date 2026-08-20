@@ -119,6 +119,14 @@ fn main() -> std::io::Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let speech = root.join("tests/speech");
     let out_dir = root.join("../../target/listening");
+    // Wipe first. Without this the directory accumulates: every run writes
+    // files under fresh random ids and overwrites key.txt, so the previous
+    // run's files stay behind with nothing identifying them. A listener then
+    // rates a mixture of two bakes and half the session cannot be read back,
+    // which is exactly what happened the first time this was used.
+    if out_dir.exists() {
+        fs::remove_dir_all(&out_dir)?;
+    }
     fs::create_dir_all(&out_dir)?;
 
     let mut clips: Vec<PathBuf> = fs::read_dir(&speech)?
@@ -154,7 +162,8 @@ fn main() -> std::io::Result<()> {
     }
 
     key.push(String::new());
-    key.push("Opus and the 3.5 kHz anchor are added by scripts/bake-listening-test.".into());
+    key.push("Every file in this directory is listed above. If one is not, do not".into());
+    key.push("trust the session: it is left over from an earlier bake.".into());
     fs::write(out_dir.join("key.txt"), key.join("\n") + "\n")?;
 
     println!("wrote {} files to {}", clips.len() * 4, out_dir.display());

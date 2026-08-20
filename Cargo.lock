@@ -5682,12 +5682,15 @@ dependencies = [
 name = "rotelyx-mobile"
 version = "0.1.0"
 dependencies = [
+ "data-encoding",
  "rotelyx-codec",
+ "rotelyx-core",
  "rotelyx-media",
  "rotelyx-net",
  "rotelyx-wasm",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -63,11 +63,18 @@ reveal() {
     # differently, so the separator is applied by hand rather than with -F:
     # doing it globally silently made every rating unmatchable.
     awk 'NR==FNR {
-            i = index($0, "  ->  ")
-            if (i > 0) {
-                name = substr($0, 1, i - 1); gsub(/^ +| +$/, "", name)
-                key[name] = substr($0, i + 6)
-            }
+              # The name, then two or more spaces, then a system name that
+              # itself contains spaces ("telyx 12 kbit/s"). Splitting on single
+              # spaces truncates every system name. Looking for a fixed arrow
+              # matched nothing at all, because the baker never wrote one, and
+              # the failure was silent: every rating came back "unknown" and the
+              # session looked usable. Match the first run of two spaces, which
+              # is what is actually in the file.
+              if (match($0, /^[A-Za-z0-9_]+  +/)) {
+                  name = substr($0, 1, RLENGTH); gsub(/ +$/, "", name)
+                  rest = substr($0, RLENGTH + 1); gsub(/^ +| +$/, "", rest)
+                  if (rest != "") key[name] = rest
+              }
             next
          }
          NF == 2 {
@@ -94,6 +101,22 @@ else
 fi
 
 mapfile -t FILES < <(ls "$DIR/${CLIP}"_*.wav 2>/dev/null | shuf)
+# Every file offered must be in the key, or the session cannot be read back.
+# Refusing here rather than at reveal time: the cost of finding out afterwards
+# is somebody's whole listening session, and the first real use of this script
+# lost one exactly that way.
+ORPHANS=0
+for f in "${FILES[@]}"; do
+    n="$(basename "$f" .wav)"
+    grep -q "^$n  " "$DIR/key.txt" 2>/dev/null || { echo "  not in key.txt: $n"; ORPHANS=1; }
+done
+if [ "$ORPHANS" != "0" ]; then
+    echo
+    echo "  Those are left over from an earlier bake. Rebuild before listening:"
+    echo "    cargo run --release -p rotelyx-codec --example bake_listening_test"
+    exit 1
+fi
+
 [ ${#FILES[@]} -eq 0 ] && { echo "No files for '$CLIP'. Available:"; printf '  %s\n' "${CLIPS[@]}"; exit 1; }
 
 echo

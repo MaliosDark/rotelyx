@@ -24,5 +24,11 @@ rotelyx-wasm = { path = "../rotelyx-wasm" }
 rotelyx-codec = { workspace = true }
 rotelyx-media = { path = "../rotelyx-media" }
 rotelyx-net = { workspace = true }
+rotelyx-core = { workspace = true }
+
+# The ABI is synchronous and the transport is not, so the network operations
+# block on a runtime this crate owns. See src/net.rs.
+tokio = { workspace = true }
+data-encoding = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"

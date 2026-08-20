@@ -13,6 +13,24 @@
 //! handshake diverge, and the divergence is a security bug that presents as an
 //! interoperability bug.
 //!
+//! # This ABI touches the network, in exactly one place
+//!
+//! Everything below except `net.rs` is offline. `session.send` hands back
+//! ciphertext for the caller to move and `session.receive` takes ciphertext the
+//! caller already has: twenty operations, not one of which opens a socket. That
+//! is what lets a phone carry bytes however it can.
+//!
+//! `rotelyx_net_*` breaks that, and it is the only thing that does. Voice needs
+//! datagrams and needs to cross NAT, and neither survives a WebSocket to the
+//! mailbox: that is TCP, one lost segment stalls everything behind it, and on a
+//! call a frame that arrives late is worse than one that never arrives.
+//!
+//! It also has a weight. This crate declared `rotelyx-net` before for one enum;
+//! reaching the transport puts a QUIC stack and a relay client in the binary of
+//! every build that links this library, including one that never calls anybody.
+//!
+//! See `net.rs`, which says what it costs and refuses to offer a direct path.
+//!
 //! # Why one function instead of forty two
 //!
 //! The engine's surface is 42 calls, all of which take and return base64 or hex
@@ -472,6 +490,8 @@ use rotelyx_codec::mdct::{FRAME, WINDOW};
 use rotelyx_codec::{TelyxDecoder, TelyxEncoder};
 use rotelyx_media::transport::{MediaIn, MediaOut};
 use rotelyx_media::{Mode, Playout, SenderKeys};
+pub mod net;
+
 use rotelyx_net::PathPolicy;
 
 /// Samples in one frame: 960 at 48 kHz is 20 ms, which is what the app hands us.
