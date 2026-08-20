@@ -261,6 +261,15 @@
 </dialog>
 
 <script type="module">
+  // Diagnostic: the whole script is one module, so anything thrown up here
+  // stops every handler below from ever being defined, and the window renders
+  // perfectly while doing nothing at all. Reporting it into the page is the
+  // only way to see it without a console.
+  if (!window.__TAURI__) {
+    document.getElementById("me").textContent =
+      "window.__TAURI__ is undefined: the page cannot reach the app";
+    throw new Error("no tauri api");
+  }
   const { invoke } = window.__TAURI__.core;
   const { listen: onEvent } = window.__TAURI__.event;
 

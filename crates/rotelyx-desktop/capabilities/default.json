@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The minimum this window needs. Tauri v2 denies core plugin commands unless a capability grants them, and a denied listen rejects the promise the whole init awaits, which leaves the window rendered and inert.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
