@@ -260,14 +260,29 @@ pub unsafe extern "C" fn rotelyx_net_connect(endpoint: i64, addr: *const c_char)
     handle
 }
 
-/// Wait for a peer to connect, and return the connection.
+/// Wait up to `timeout_ms` for a peer to connect.
 ///
-/// Blocks. The receiving side of a call uses this after telling the caller its
-/// address over the conversation.
+/// Returns a handle, 0 when nobody connected in time, -2 no such endpoint, -4
+/// something arrived and failed.
 ///
-/// Returns a handle, or -2 no such endpoint, -4 nothing arrived.
+/// # Why this takes a timeout and does not simply block
+///
+/// Because the caller is single threaded and does not know it.
+///
+/// Written first as a blocking accept, which is the obvious shape and is wrong
+/// for every consumer this ABI has. A Dart isolate has one thread: a blocking
+/// accept there does not wait alongside other work, it stops the isolate, so
+/// the connect that was supposed to happen concurrently never runs and the two
+/// sides deadlock waiting for each other. Found by writing exactly that test
+/// and watching it hang for ten minutes.
+///
+/// On a phone it would be worse than a deadlock. Blocking the interface thread
+/// for twenty seconds is an application the system offers to close.
+///
+/// So this returns, and the caller asks again. Zero means "not yet", which is
+/// the ordinary answer and not a failure.
 #[no_mangle]
-pub extern "C" fn rotelyx_net_accept(endpoint: i64) -> i64 {
+pub extern "C" fn rotelyx_net_accept(endpoint: i64, timeout_ms: i32) -> i64 {
     let transport = {
         let h = lock();
         let Some(held) = h.endpoints.get(&endpoint) else {
@@ -276,7 +291,15 @@ pub extern "C" fn rotelyx_net_accept(endpoint: i64) -> i64 {
         held.endpoint.transport().clone()
     };
 
-    let accepted = runtime().block_on(transport.accept());
+    let waited = runtime().block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms.max(0) as u64),
+            transport.accept(),
+        )
+        .await
+    });
+
+    let Ok(accepted) = waited else { return 0 };
     let Ok(session) = accepted else { return -4 };
 
     let (_send, _recv, conn) = session.split();
