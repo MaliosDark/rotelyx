@@ -24,7 +24,6 @@ place anything hard to classify ended up:
 
 | Document | Subject |
 |---|---|
-| [`ACCESS.md`](ACCESS.md) | Tiers, capability tokens, blind issuance, metering |
 | [`BROWSER.md`](BROWSER.md) | The browser client and its failure modes |
 | [`THREAT-MODEL.md`](THREAT-MODEL.md) | What Rotelyx defends against, and what it does not |
 | [`PQ-COMPOSITION.md`](PQ-COMPOSITION.md) | The post-quantum construction, specified for review |

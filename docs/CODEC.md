@@ -306,3 +306,60 @@ cancellation, and a trained vector quantiser for the envelope, which is the
 largest remaining saving and needs a speech corpus.
 
 ---
+
+## Somebody listened
+
+Every number above is signal to noise, and signal to noise does not say whether
+a codec sounds good. On 20 August 2026 one listener rated three clips blind and
+in random order against the untouched original.
+
+| rate | mean | spread | range |
+|---|---:|---:|---|
+| reference | 100.0 | 0.0 | 100-100 |
+| 24 kbit/s | 93.3 | 2.4 | 90-95 |
+| 16 kbit/s | 88.3 | 13.1 | 70-100 |
+| 12 kbit/s | 83.3 | 4.7 | 80-90 |
+
+The measured error orders the same way and separates the rates cleanly: 12 is
+1855 RMS from the original, 16 is 1374, 24 is 1023.
+
+**What it supports.** The reference was identified as untouched on all three
+clips, so the session is valid, and no rate scored below 80 against it,
+including 12 kbit/s.
+
+**What it does not.** The spread within one rate is 13.1 and the largest gap
+between rates is 10.0. With one listener the three rates are not distinguishable
+from each other, and this must not be quoted as though they were.
+
+One clip rated 16 kbit/s below 12, inverted against both the measurement and the
+other two clips. It did not hold up. Recorded so it is not rediscovered as a
+finding.
+
+The raw ratings and the full note are in
+[`listening-2026-08-20.txt`](listening-2026-08-20.txt). Rebuild the files with
+`cargo run --release -p rotelyx-codec --example bake_listening_test` and run
+`scripts/listen`.
+
+## A call, end to end
+
+The codec had no consumer for a long time. It has one now: `/call` in the
+terminal client, and a Call button in the desktop window, both through
+`rotelyx-audio`.
+
+Measured between two processes through a running relay, twenty seconds each way:
+
+| | |
+|---|---:|
+| frames sent | 991 |
+| frames received | 944 |
+| audio queued at the end | 79 ms |
+| microphone dropped | 0 ms |
+
+The first version managed 322 frames in the same twenty seconds and accumulated
+360 ms of delay that never came back, because it encoded one frame per timer
+tick and a late tick never fires twice to make up for it. It drains what is
+ready instead.
+
+A call refuses to start on a session that permits a direct path. That is
+enforced in `rotelyx-media`, not in the caller, because a direct path is your
+address handed to whoever is on the other end.

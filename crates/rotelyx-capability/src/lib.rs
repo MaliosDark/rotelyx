@@ -25,7 +25,7 @@
 //!   tokens, and clients are open source.
 //! - **The tier definitions**, because the server enforces them.
 //!
-//! What leaves is the code that holds a signing key. See `docs/BILLING.md`.
+//! What leaves is the code that holds a signing key.
 
 use std::collections::HashMap;
 use std::fs;

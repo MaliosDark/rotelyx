@@ -2608,7 +2608,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
     /// The key the paid-tier tests mint with. Not an issuer: minting here is
     /// `rotelyx_capability::testing`, a test fixture. The issuer itself is a
-    /// separate crate that is not in this repository. See docs/BILLING.md.
+    /// separate crate that is not in this repository.
     const TEST_KEY: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
 
     /// Start a server that accepts tokens, and return its URL plus the key that

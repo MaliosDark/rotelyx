@@ -1,3 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="assets/favicon.png">
 <title>Rotelyx Protocol Paper</title>
 <style>
   :root {
@@ -15,10 +21,18 @@
     --risk:        #A33B4D;
     --risk-soft:   #F6DDE1;
 
-    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-    --body: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    /* Latin Modern is what LaTeX sets an article in, and Computer Modern is
+       its predecessor. Anyone with a TeX distribution installed has them and
+       gets the real thing; everyone else falls through to the closest widely
+       installed serifs. Naming them costs nothing and downloads nothing, which
+       matters on a site that makes no external requests at all. */
+    --display: "Latin Modern Roman", "CMU Serif", "Computer Modern Roman",
+               "Nimbus Roman", "Times New Roman", Times, Georgia, serif;
+    --body: "Latin Modern Roman", "CMU Serif", "Computer Modern Roman",
+            "Nimbus Roman", "Times New Roman", Times, Georgia, serif;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --mono: "Latin Modern Mono", "CMU Typewriter Text", ui-monospace,
+            "SF Mono", Menlo, Consolas, monospace;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -68,10 +82,35 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  .wrap { width: 1000px; max-width: 100%; margin: 0 auto; }
-  .col { max-width: 68ch; }
+  /* One measure, centred, for everything.
+     LaTeX centres the text block on the page: the margins are equal and figures
+     and tables share the same width as the prose. A narrow column pinned to the
+     left of a wide container is not a narrower measure, it is a broken page. */
+  .wrap { width: 34em; max-width: 100%; margin: 0 auto; }
+  /* About 345pt of measure, which is what the article class sets at 10pt on
+     A4. Wider reads as a web page; this is the width the typography was
+     designed around. */
+  .col { max-width: 34em; margin-left: auto; margin-right: auto; }
 
-  p { margin: 0 0 1.05rem; text-wrap: pretty; }
+  /* Justified with hyphenation, and paragraphs marked by an indent rather than
+     a gap. That pair is most of what makes a page read as TeX rather than as a
+     web article: LaTeX sets \parindent and leaves \parskip at zero. */
+  p {
+    margin: 0;
+    text-align: justify;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    text-wrap: pretty;
+  }
+
+  /* The first paragraph after a heading is not indented, which is the rule
+     LaTeX follows and the reason indented text does not look ragged at the
+     start of a section. */
+  p + p, ul + p, ol + p, .tablewrap + p, figure + p, pre + p { text-indent: 1.5em; }
+  p + p { margin-top: 0; }
+  h2 + p, h3 + p, h4 + p, .abstract p { text-indent: 0; }
+
+  p:not(:last-child) { margin-bottom: .35rem; }
   a { color: var(--accent); text-underline-offset: 2px; }
   a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   strong { font-weight: 700; }
@@ -89,92 +128,137 @@
     margin-bottom: 3rem;
   }
   .kicker {
-    font-family: var(--mono); font-size: .7rem; letter-spacing: .2em;
-    text-transform: uppercase; color: var(--accent); margin: 0 0 1.2rem;
+    font-family: var(--body); font-size: .82rem; letter-spacing: .06em;
+    font-variant: small-caps; color: var(--ink-2); margin: 0 0 1rem;
   }
+  /* The \maketitle block: everything centred, nothing decorated. */
+  header { text-align: center; margin: 0 auto 2.5rem; max-width: none; }
+
   h1 {
     font-family: var(--display); font-weight: 400;
-    font-size: clamp(2.2rem, 5.5vw, 3.4rem); line-height: 1.08;
-    letter-spacing: -.02em; margin: 0 0 1rem; text-wrap: balance; max-width: 20ch;
+    font-size: clamp(1.7rem, 3.4vw, 2.15rem); line-height: 1.22;
+    letter-spacing: 0; margin: 0 0 .9rem; text-wrap: balance; max-width: none;
   }
   .subtitle {
-    font-size: clamp(1.05rem, 2.2vw, 1.3rem); line-height: 1.5;
-    color: var(--ink-2); margin: 0 0 2rem; max-width: 50ch;
+    font-size: 1rem; line-height: 1.45; font-style: italic;
+    color: var(--ink-2); margin: 0 auto 1.6rem; max-width: none;
+    text-align: center; text-indent: 0;
   }
   .byline {
-    font-family: var(--sans); font-size: .88rem; color: var(--ink-2);
-    display: flex; flex-wrap: wrap; gap: .4rem 1.6rem;
+    font-family: var(--body); font-size: .95rem; color: var(--ink-2);
+    display: flex; flex-wrap: wrap; justify-content: center; gap: .2rem 1.4rem;
   }
   .byline b { color: var(--ink); font-weight: 600; }
 
   .notice {
     background: var(--risk-soft); border-left: 3px solid var(--risk);
-    padding: 1rem 1.2rem; margin: 2rem 0 0; max-width: 68ch;
+    padding: 1rem 1.2rem; margin: 2rem 0 0; max-width: none;
     font-size: .95rem; color: var(--ink);
   }
   .notice b { color: var(--risk); }
 
   /* abstract */
+  /* \begin{abstract}: narrower than the body, one size down, heading centred
+     and unnumbered. No box, because LaTeX does not draw one. */
   .abstract {
-    background: var(--surface-2); border-radius: 4px;
-    padding: 1.6rem 1.8rem; margin-bottom: 3.5rem; max-width: 74ch;
+    background: none; border-radius: 0; border: none;
+    padding: 0; margin: 0 auto 2.5rem; max-width: 32em;
+    font-size: .94rem;
   }
   .abstract h2 {
-    font-family: var(--mono); font-size: .7rem; letter-spacing: .18em;
-    text-transform: uppercase; color: var(--ink-2); margin: 0 0 .8rem;
-    font-weight: 400; border: none; padding: 0;
+    font-family: var(--display); font-size: 1rem; letter-spacing: 0;
+    text-transform: none; color: var(--ink); margin: 0 0 .6rem;
+    font-weight: 700; border: none; padding: 0; text-align: center;
   }
   .abstract p:last-child { margin-bottom: 0; }
 
   /* sections */
   section { margin-bottom: 3.5rem; }
+  /* \section: bold, left, no rule. The space above a heading is larger than
+     the space below it, which is what visually attaches a heading to the text
+     it introduces rather than to the text it follows. */
   h2 {
-    font-family: var(--display); font-weight: 400;
-    font-size: clamp(1.5rem, 3vw, 1.95rem); line-height: 1.2;
-    letter-spacing: -.012em; margin: 0 0 1.2rem; text-wrap: balance;
-    padding-bottom: .5rem; border-bottom: 1px solid var(--rule);
+    font-family: var(--display); font-weight: 700;
+    font-size: 1.32rem; line-height: 1.25;
+    letter-spacing: 0; margin: 2.2rem 0 .7rem; text-wrap: balance;
+    padding-bottom: 0; border-bottom: none;
   }
+  /* Section numbers come from counters, not from the markup.
+     They were written out by hand and drifted the moment a section was
+     inserted in the middle: the paper briefly had two sections 10 and two 11.
+     A number that can disagree with its position is worse than no number. */
+  body { counter-reset: sec; }
+  section { counter-reset: sub; }
+  section > h2::before {
+    counter-increment: sec;
+    content: counter(sec) "\2003";
+  }
+  section h3::before {
+    counter-increment: sub;
+    content: counter(sec) "." counter(sub) "\2003";
+  }
+  /* The abstract is not a numbered section. */
+  .abstract h2::before { content: none; }
+
   h2 .num {
-    font-family: var(--mono); font-size: .62em; color: var(--accent);
+    font-family: var(--display); font-size: 1em; font-weight: 700; color: inherit;
     margin-right: .7rem; letter-spacing: .02em;
   }
+  /* \subsection and \subsubsection: the same serif as the body, bold, and
+     only slightly larger. LaTeX never switches to a sans face for headings in
+     the article class, and that switch is the single most obvious tell. */
   h3 {
-    font-family: var(--sans); font-size: 1.02rem; font-weight: 650;
-    margin: 2rem 0 .7rem; letter-spacing: -.005em;
+    font-family: var(--display); font-size: 1.12rem; font-weight: 700;
+    margin: 1.6rem 0 .5rem; letter-spacing: 0;
   }
-  h3 .num { font-family: var(--mono); font-size: .82em; color: var(--ink-2); margin-right: .55rem; }
+  h3 .num { font-family: var(--display); font-size: 1em; color: inherit; margin-right: .55rem; }
   h4 {
-    font-family: var(--sans); font-size: .92rem; font-weight: 650;
-    margin: 1.5rem 0 .5rem; color: var(--ink-2);
+    font-family: var(--display); font-size: 1rem; font-weight: 700;
+    margin: 1.2rem 0 .4rem; color: var(--ink); font-style: italic;
   }
 
-  ul, ol { margin: 0 0 1.05rem; padding-left: 1.35rem; max-width: 68ch; }
+  ul, ol { margin: .6rem 0 1rem; padding-left: 1.5rem; max-width: none; }
+  li { margin-bottom: .25rem; text-align: justify; hyphens: auto; }
   li { margin-bottom: .45rem; }
   li::marker { color: var(--ink-2); }
 
   /* figures */
+  /* A float: centred, unboxed, with the caption below in a smaller size. The
+     box and the rule above the caption are web conventions; LaTeX draws
+     neither. */
   figure {
-    margin: 2.2rem 0; padding: 1.6rem;
-    background: var(--surface); border: 1px solid var(--rule); border-radius: 5px;
+    margin: 1.8rem auto; padding: 0;
+    background: none; border: none; border-radius: 0;
+    text-align: center;
   }
   figure svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
   figcaption {
-    font-family: var(--sans); font-size: .84rem; line-height: 1.55;
-    color: var(--ink-2); margin-top: 1.2rem;
-    padding-top: .9rem; border-top: 1px solid var(--rule-soft);
+    font-family: var(--body); font-size: .88rem; line-height: 1.45;
+    color: var(--ink-2); margin: .8rem auto 0;
+    padding-top: 0; border-top: none;
+    max-width: none; text-align: left; text-indent: 0;
   }
-  figcaption b { color: var(--ink); font-weight: 650; }
+  figcaption b { color: var(--ink); font-weight: 700; }
 
   /* tables */
+  /* booktabs: a rule above the header, one below it, one at the foot, and
+     nothing between rows. No vertical rules and no shading, which is the house
+     style of every table in a TeX paper worth reading. */
   .tablewrap {
-    overflow-x: auto; margin: 1.8rem 0;
-    border: 1px solid var(--rule); border-radius: 5px; background: var(--surface);
+    overflow-x: auto; margin: 1.6rem 0;
+    border: none; border-radius: 0; background: none;
   }
-  table { border-collapse: collapse; width: 100%; min-width: 560px; }
+  table {
+    border-collapse: collapse; width: 100%; min-width: 0;
+    border-top: 1.1px solid var(--ink);
+    border-bottom: 1.1px solid var(--ink);
+  }
+  thead th { border-bottom: .6px solid var(--ink); }
+  tbody tr td { border-bottom: none; }
   th, td {
-    text-align: left; padding: .72rem 1rem; font-size: .9rem;
-    border-bottom: 1px solid var(--rule-soft); vertical-align: top;
-    font-family: var(--sans); line-height: 1.5;
+    text-align: left; padding: .42rem .8rem; font-size: .88rem;
+    vertical-align: top;
+    font-family: var(--body); line-height: 1.45;
   }
   thead th {
     font-family: var(--mono); font-size: .68rem; letter-spacing: .1em;
@@ -190,7 +274,7 @@
   /* callouts */
   .callout {
     border-left: 3px solid var(--accent); background: var(--accent-soft);
-    padding: 1rem 1.2rem; margin: 1.6rem 0; max-width: 70ch;
+    padding: 1rem 1.2rem; margin: 1.6rem 0; max-width: none;
     font-size: .96rem;
   }
   .callout.risk { border-color: var(--risk); background: var(--risk-soft); }
@@ -211,27 +295,53 @@
   pre code { background: none; padding: 0; font-size: inherit; }
 
   /* references */
-  .refs { counter-reset: ref; list-style: none; padding: 0; max-width: 74ch; }
+  /* \thebibliography: hanging indent, bracketed numbers, same face as the
+     body one size down. */
+  .refs { counter-reset: ref; list-style: none; padding: 0; max-width: none; }
   .refs li {
-    counter-increment: ref; position: relative; padding-left: 2.6rem;
-    margin-bottom: .85rem; font-size: .9rem; line-height: 1.55;
-    font-family: var(--sans); color: var(--ink-2);
+    counter-increment: ref; position: relative; padding-left: 2.2rem;
+    margin-bottom: .5rem; font-size: .86rem; line-height: 1.4;
+    font-family: var(--body); color: var(--ink);
+    text-align: left; text-indent: 0;
   }
   .refs li::before {
     content: "[" counter(ref) "]"; position: absolute; left: 0;
-    font-family: var(--mono); font-size: .78rem; color: var(--accent);
+    font-family: var(--body); font-size: .86rem; color: var(--ink);
   }
-  .refs li b { color: var(--ink); font-weight: 600; }
+  .refs li b { color: var(--ink); font-weight: 700; }
 
-  sup a { text-decoration: none; font-family: var(--mono); font-size: .72em; padding: 0 .1em; }
+  /* A citation is set on the baseline in brackets, not raised. Superscripts
+     are a journal house style; the article class is not one of them. */
+  sup a {
+    text-decoration: none; font-family: var(--body); font-size: .9em;
+    padding: 0 .05em; vertical-align: baseline;
+  }
+  sup { vertical-align: baseline; font-size: 1em; }
 
   footer {
-    border-top: 2px solid var(--ink); padding-top: 2rem; margin-top: 4rem;
-    font-family: var(--sans); font-size: .86rem; color: var(--ink-2); max-width: 68ch;
+    border-top: .6px solid var(--ink); padding-top: 1.4rem; margin-top: 3rem;
+    font-family: var(--body); font-size: .84rem; color: var(--ink-2); max-width: none;
+  }
+  footer p { text-align: left; text-indent: 0; }
+
+  /* ---- narrow screens ----
+     The structure already survives: tables scroll inside .tablewrap and the
+     diagrams carry max-width. What a phone needs is the measure and the
+     margins brought in, so a line is not four words wide inside 3rem of
+     padding. */
+  @media (max-width: 700px) {
+    body { padding: 0 1rem 5rem; }
+    .col { max-width: none; }
+
+    figure { margin: 1.6rem 0; padding: 1rem; border-radius: 4px; }
+    .tablewrap { margin: 1.4rem 0; }
+    th, td { padding: .6rem .7rem; font-size: .84rem; }
   }
 
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
+</head>
+<body>
 
 <div class="wrap">
 
@@ -246,8 +356,8 @@
   <div class="byline">
     <span><b>Andryu Schittone</b> (Malios Dark)</span>
     <span>Ideoa Labs</span>
-    <span>16 August 2026</span>
-    <span>Revision 1</span>
+    <span>20 August 2026</span>
+    <span>Revision 2</span>
   </div>
 
   <div class="notice">
@@ -291,7 +401,7 @@
 
 <!-- ================= 1 ================= -->
 <section>
-  <h2><span class="num">1</span>Introduction</h2>
+  <h2>Introduction</h2>
   <div class="col">
     <p>
       The deployment of the Signal protocol across WhatsApp, Signal, and Google
@@ -310,7 +420,7 @@
       layer.
     </p>
 
-    <h3><span class="num">1.1</span>Design principles</h3>
+    <h3>Design principles</h3>
     <p>
       Three rules governed the implementation, and each was violated at least
       once during development before being caught by a test.
@@ -341,7 +451,7 @@
 
 <!-- ================= 2 ================= -->
 <section>
-  <h2><span class="num">2</span>Threat model</h2>
+  <h2>Threat model</h2>
   <div class="col">
     <p>
       We model ten adversaries. The table below summarises them; the full model
@@ -387,7 +497,7 @@
 
 <!-- ================= 3 ================= -->
 <section>
-  <h2><span class="num">3</span>Architecture</h2>
+  <h2>Architecture</h2>
   <div class="col">
     <p>
       Rotelyx is organised into five layers. The two encryption layers are
@@ -468,7 +578,7 @@
 
 <!-- ================= 4 ================= -->
 <section>
-  <h2><span class="num">4</span>Post quantum composition</h2>
+  <h2>Post quantum composition</h2>
   <div class="col">
     <p>
       RFC 9420 defines seven ciphersuites, all of them classical.<sup><a href="#r1">[1]</a></sup>
@@ -478,7 +588,7 @@
       called harvest now, decrypt later.
     </p>
 
-    <h3><span class="num">4.1</span>Choice of primitive</h3>
+    <h3>Choice of primitive</h3>
     <p>
       Rotelyx does not construct a key encapsulation combiner. It uses
       X-Wing,<sup><a href="#r2">[2]</a><a href="#r3">[3]</a></sup> a hybrid KEM
@@ -506,7 +616,7 @@
   </div>
 
   <div class="col">
-    <h3><span class="num">4.2</span>Injection into the MLS key schedule</h3>
+    <h3>Injection into the MLS key schedule</h3>
     <p>
       The contribution of this work is the composition, not the primitive. Rather
       than forking MLS to add a post quantum ciphersuite, Rotelyx injects the
@@ -586,7 +696,7 @@
   </figure>
 
   <div class="col">
-    <h3><span class="num">4.3</span>Why this is a small contribution on purpose</h3>
+    <h3>Why this is a small contribution on purpose</h3>
     <p>
       MLS has received machine checked symbolic security analysis, both for
       TreeKEM<sup><a href="#r4">[4]</a></sup> and for the external operations
@@ -604,7 +714,7 @@
       </p>
     </div>
 
-    <h3><span class="num">4.4</span>Verification that the layer is load bearing</h3>
+    <h3>Verification that the layer is load bearing</h3>
     <p>
       During development the injection function was written, compiled, and
       covered by tests that passed while the function was in fact dead code: it
@@ -623,7 +733,7 @@
 
 <!-- ================= 5 ================= -->
 <section>
-  <h2><span class="num">5</span>Metadata resistant path selection</h2>
+  <h2>Metadata resistant path selection</h2>
   <div class="col">
     <p>
       Peer to peer transports attempt a direct hole punched path and fall back to
@@ -711,7 +821,7 @@
 
 <!-- ================= 6 ================= -->
 <section>
-  <h2><span class="num">6</span>The blind mailbox</h2>
+  <h2>The blind mailbox</h2>
   <div class="col">
     <p>
       Direct delivery requires both peers online. On mobile devices that is the
@@ -786,7 +896,7 @@
   </figure>
 
   <div class="col">
-    <h3><span class="num">6.1</span>Three implementation decisions</h3>
+    <h3>Three implementation decisions</h3>
     <p>
       <strong>No length prefix.</strong> Padding is trailing zeroes, and the
       recipient recovers the real content because the inner MLS message is self
@@ -824,7 +934,7 @@
 
 <!-- ================= 7 ================= -->
 <section>
-  <h2><span class="num">7</span>Message padding, measured</h2>
+  <h2>Message padding, measured</h2>
   <div class="col">
     <p>
       Traffic analysis of encrypted messengers recovers user actions, message
@@ -836,7 +946,7 @@
       percent.<sup><a href="#r6">[6]</a><a href="#r7">[7]</a></sup>
     </p>
 
-    <h3><span class="num">7.1</span>An initial scheme that did not work</h3>
+    <h3>An initial scheme that did not work</h3>
     <p>
       Rotelyx originally padded envelopes to five buckets with the smallest at
       256 bytes, which appeared generous for a chat message. Measurement of the
@@ -879,6 +989,52 @@
       The cost is that a one word reply occupies 1 KiB on the wire.
     </p>
 
+    <h3>A second revision, for a cost that bought nothing</h3>
+
+    <p>
+      The five bucket ladder survived that correction and was wrong again for a
+      different reason. Its steps were 1&nbsp;KiB, 8&nbsp;KiB, 64&nbsp;KiB,
+      1&nbsp;MiB and 8&nbsp;MiB, so the jump from 64&nbsp;KiB to 1&nbsp;MiB is a
+      factor of sixteen. A group commit for a thousand members measures
+      83&nbsp;KB and was therefore padded to 1&nbsp;MiB: twelve times its own
+      size, paid by every member on every membership change.
+    </p>
+
+    <p>
+      The padding bought nothing there. A commit&rsquo;s size is a function of
+      the number of members, and that number is already visible to the operator,
+      because a fan out names every recipient. Twelve times the bandwidth was
+      being spent to hide a quantity in plain view.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Members</th><th>Commit</th><th>Old bucket</th><th>New bucket</th></tr></thead>
+        <tbody>
+          <tr><td>32</td><td>3.4&nbsp;KB</td><td>8&nbsp;KiB</td><td>4&nbsp;KiB</td></tr>
+          <tr><td>256</td><td>21.8&nbsp;KB</td><td>64&nbsp;KiB</td><td>32&nbsp;KiB</td></tr>
+          <tr><td>512</td><td>42.8&nbsp;KB</td><td>64&nbsp;KiB</td><td>64&nbsp;KiB</td></tr>
+          <tr><td>1000</td><td>83&nbsp;KB</td><td>1&nbsp;MiB</td><td>128&nbsp;KiB</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The ladder now doubles from the same 1&nbsp;KiB floor, in fourteen steps,
+      so nothing pays more than twice its own size. <b>The floor did not
+      move</b>, which is the part that matters: every message from a one word
+      reply to a long paragraph still lands in the same bucket, and that is the
+      property protecting conversation.
+    </p>
+
+    <p>
+      The cost is stated rather than buried. Above the floor a length is now
+      known to within a factor of two rather than a factor of eight. That affects
+      files and protocol traffic, whose sizes are far less revealing than a
+      sentence&rsquo;s, and it is what makes a group of a thousand affordable at
+      all.
+    </p>
+
     <div class="callout">
       <span class="label">Method note</span>
       <p>
@@ -892,7 +1048,7 @@
 
 <!-- ================= 8 ================= -->
 <section>
-  <h2><span class="num">8</span>Reachability and abuse resistance</h2>
+  <h2>Reachability and abuse resistance</h2>
   <div class="col">
     <p>
       Removing telephone numbers from the identity layer removes the natural
@@ -906,7 +1062,7 @@
       available: authorisation and cost.
     </p>
 
-    <h3><span class="num">8.1</span>Authorisation as the default</h3>
+    <h3>Authorisation as the default</h3>
     <p>
       An identity is unreachable unless the caller holds an invitation it issued
       out of band. The caller proves possession with a MAC over its own identity
@@ -920,7 +1076,7 @@
       future; a leak is a present problem.
     </p>
 
-    <h3><span class="num">8.2</span>Cost for publicly reachable identities</h3>
+    <h3>Cost for publicly reachable identities</h3>
     <p>
       Identities that must accept strangers, such as a support account, may
       require a proof of work. The proof binds to the sender, the recipient, and
@@ -951,19 +1107,747 @@
       identity imposes no computational cost on the recipient. A block that still
       consumes CPU is a block the blocked party can exploit.
     </p>
+  
+    <h3>Admission control on the relay itself</h3>
+
+    <p>
+      Everything above governs who may open a <em>session</em> with a person. A
+      relay is a different surface: it accepts connections from endpoints it has
+      no relationship with, and the vendored transport it derives from ships no
+      accept-time limits at all. A relay run as published would accept
+      connections until it ran out of file descriptors, which is a denial of
+      service that costs an attacker almost nothing.
+    </p>
+
+    <p>
+      Admission is therefore bounded per identity and in total, and the numbers
+      are stated here because a limit whose value is undocumented is a limit
+      nobody can argue with:
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Bound</th><th class="num">Value</th><th>Why this and not something else</th></tr></thead>
+        <tbody>
+          <tr><td>Concurrent connections per identity</td><td class="num">8</td><td>A phone, a laptop, a desktop and spare. Past this it is not one person's devices</td></tr>
+          <tr><td>New connections per identity</td><td class="num">30/min</td><td>Reconnecting after a network change is a handful; thirty a minute is a loop</td></tr>
+          <tr><td>Burst above that rate</td><td class="num">10</td><td>A device waking from sleep retries several times in a second and is not an attack</td></tr>
+          <tr><td>Total concurrent connections</td><td class="num">4096</td><td>What one relay is sized for. The bound exists so the failure is a refusal rather than a crash</td></tr>
+          <tr><td>Idle identity forgotten after</td><td class="num">600 s</td><td>The table is bounded by memory as well as by policy, or the limiter becomes the leak</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Two properties matter more than the values. The limiter <b>composes</b>
+      with whatever access control is configured rather than replacing it, and
+      the inner decision runs first, so an identity that is not permitted is
+      refused for that reason and never consumes a rate limit slot on the way.
+      And a refusal is indistinguishable from any other closed connection: a
+      relay that explained itself would be an oracle for its own policy.
+    </p>
+
+    <p>
+      The refusal counts are reported to the operator&rsquo;s log and deliberately
+      not to the public status page. A live count of open connections is a load
+      signal, and on a relay with few users a load signal correlates with who is
+      talking.
+    </p>
+
   </div>
 </section>
 
 <!-- ================= 9 ================= -->
 <section>
-  <h2><span class="num">9</span>Limitations</h2>
+  <h2>Groups</h2>
+  <div class="col">
+
+    <p>
+      A conversation of two is a group of two, so groups needed no new
+      cryptography. What they needed was a way to address them, and the obvious
+      way is wrong.
+    </p>
+
+    <p>
+      Mailbox collection is destructive: an envelope handed over is gone. With
+      two members that is exactly right, because a sender cannot collect its own
+      deposit and the other side therefore gets it. With three it fails
+      silently. A message deposited under one shared tag is collected by
+      whichever member reaches it first, and the rest never see it.
+    </p>
+
+    <p>
+      Every member therefore has <b>its own tag</b>, derived from the group&rsquo;s
+      exported key and that member&rsquo;s signature key. Every other member computes
+      the same value for a given recipient and nobody outside can. A signature
+      key rather than a leaf index, because MLS reuses a slot after a removal and
+      the new occupant would inherit the departed member&rsquo;s tag.
+    </p>
+
+    <h3>The cost of addressing everyone</h3>
+
+    <p>
+      One tag per member means one copy per member. Uploading each copy
+      separately makes a group of a hundred unusable on a phone, so the mailbox
+      fans out: a sender uploads once and names every recipient, and the server
+      makes the copies.
+    </p>
+
+    <p>
+      That is a real reduction in what the operator has to infer, and it is
+      stated rather than glossed. Before, it saw a burst of deposits and had to
+      correlate them against who subscribes to what. Now the recipient set
+      arrives written down in a single request. The operator could already reach
+      the same conclusion, since it observes which connection listens on which
+      tag, so this makes an existing inference cheap rather than creating a new
+      one. It is the price of groups beyond a few dozen.
+    </p>
+
+    <p>
+      Padding stays on the client. The server refuses a payload that is not
+      already a bucket size, because a server that padded on the sender&rsquo;s
+      behalf would be handed the true length, which is the one thing the buckets
+      exist to withhold.
+    </p>
+
+    <h3>Post-quantum material for more than two</h3>
+
+    <p>
+      The composition in section&nbsp;4 does not survive the move to groups
+      unchanged. Encapsulation <i>derives</i> a shared secret rather than
+      carrying a chosen one, which is right for two parties and useless for many:
+      MLS looks a pre-shared key up by a single id, and a commit carrying
+      different material for different members fails for all but one of them.
+    </p>
+
+    <p>
+      The committing member therefore chooses one group secret and seals it to
+      each member individually. X-Wing protects a wrapping key and
+      XChaCha20-Poly1305 protects the secret under it, so both halves of the
+      hybrid still have to break for the group secret to leak. 1192 bytes per
+      recipient, once per rotation.
+    </p>
+
+    <h3>Where the ceiling actually is</h3>
+
+    <p>
+      Not in MLS. The ratchet tree grows by about 186 bytes per member and the
+      commit by about 83, so the largest padding bucket would hold a group of
+      roughly forty five thousand. The limit is what a membership change costs
+      every member: 32&nbsp;KiB at 256 members, 128&nbsp;KiB at a thousand. An
+      ordinary text message costs 1&nbsp;KiB at any group size, because the floor
+      of the padding ladder does not move.
+    </p>
+
+  </div>
+</section>
+
+<!-- ================= 10 ================= -->
+<section>
+  <h2>Media</h2>
+  <div class="col">
+
+    <p>
+      Calls work, and were the largest piece of unfinished work in the project
+      until August 2026. What decides whether a call is as end to end as a
+      message is the keys and the frame format, and those came first; what
+      followed was the media engineering, which is the long part and is not
+      finished. Two processes now hold a measured conversation through a relay,
+      and echo cancellation is still absent.
+    </p>
+
+    <h3>Why media cannot reuse the message layer</h3>
+
+    <p>
+      An MLS application message is ordered, reliable and ratcheted. Every
+      message advances a chain, and one that arrives out of order or not at all
+      is a problem to be resolved. Audio is the opposite: frames arrive every
+      twenty milliseconds, some never arrive, and a frame that is late is
+      worthless rather than worth waiting for. Fifty ratchet steps a second per
+      speaker, stalling on every lost packet, produces a call that breaks
+      whenever the network does.
+    </p>
+
+    <p>
+      Media therefore takes a key from MLS and does its own framing, in the shape
+      of SFrame.<sup><a href="#r12">[12]</a></sup> A counter travels in the clear
+      so any frame can be decrypted on arrival without the frames before it, and
+      a replay window covers the consequence of that, which is that a counter in
+      the clear is a counter an attacker can repeat.
+    </p>
+
+    <h3>One key per speaker</h3>
+
+    <p>
+      Each participant encrypts under a key derived from the group&rsquo;s
+      exported media key and that participant&rsquo;s identity. Two consequences,
+      and the second is the one that matters. Counters cannot collide, so no
+      nonce repeats. And a frame claiming to be from one member can only have
+      been produced by that member: under a shared key any participant could
+      manufacture another&rsquo;s stream, which in a call means putting words in
+      somebody&rsquo;s mouth.
+    </p>
+
+    <p>
+      The key changes with the epoch, so a membership change rekeys the call. A
+      removed member stops being able to decrypt immediately rather than at the
+      end of the call, which is what a removal has to mean.
+    </p>
+
+    <h3>A codec for a channel where latency is free</h3>
+
+    <p>
+      Opus will not be beaten at its own objective, which is quality per bit
+      under a hard twenty millisecond latency budget. That budget is not a
+      detail; it is the constraint the whole design bends around, forcing short
+      windows, no lookahead, and loss concealment inside the codec because the
+      transport cannot recover anything in time.
+    </p>
+
+    <p>
+      Rotelyx&rsquo;s fidelity channel has none of the three. Telyx is what that
+      produces: a 40&nbsp;ms MDCT window, twice the frequency resolution at the
+      same hop; Bark spaced bands; and energy coded separately from shape, so a
+      starved band keeps its loudness and loses only its texture.
+    </p>
+
+    <h3>Why the shape is coded as a vector</h3>
+
+    <p>
+      At 24&nbsp;kbit/s a frame has roughly 336 bits left after the band
+      energies, against 960 coefficients. That is a third of a bit each. Scalar
+      quantisation cannot spend it: the cheapest thing it can say about a
+      coefficient is one bit, so it says nothing about any of them. The first
+      working version of Telyx sat in exactly that state, filling every band
+      with noise while its entire budget went unspent.
+    </p>
+
+    <p>
+      Pyramid vector quantisation describes the band as a whole instead: a
+      direction chosen from every way of placing <i>K</i> signed pulses across
+      <i>N</i> positions, where the codebook size follows
+      V(N,K) = V(N&minus;1,K) + V(N,K&minus;1) + V(N&minus;1,K&minus;1).
+      Choosing <i>K</i> chooses the rate at any fraction of a bit, and the
+      codebook is never stored, because it is enumerable.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>kbit/s</th><th>Scalar quantiser</th><th>PVQ</th></tr></thead>
+        <tbody>
+          <tr><td>12</td><td>2.7 dB</td><td>12.9 dB</td></tr>
+          <tr><td>16</td><td>7.4 dB</td><td>20.3 dB</td></tr>
+          <tr><td>24</td><td>8.4 dB</td><td>28.2 dB</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Every codeword has the same norm, which is the property that matters for
+      speech: a band&rsquo;s loudness is carried entirely by its transmitted
+      energy and cannot drift with how coarsely its texture was coded. Starve a
+      band and it becomes a rough version of itself at the right level, which is
+      the failure a listener forgives.
+    </p>
+
+    <h3>Residual stages, and what they actually buy</h3>
+
+    <p>
+      Neural codecs beat Opus by wide margins at low rates, and the part doing
+      the work is the quantiser rather than the network: code the vector
+      coarsely, subtract what was coded, code what remains. Nothing about that
+      requires a learned codebook.
+    </p>
+
+    <p>
+      Measured, staging is <b>not</b> a better rate. Two stages of eight pulses
+      match a 16 coefficient band to 0.989 for 60 bits, against 0.985 for a
+      single stage of twenty four using 51. What staging buys is a ceiling that
+      one stage does not have: V(64,16) outruns a 64 bit index, so a single
+      stage on a wide band stops at twelve pulses and a 0.751 match, while three
+      stages reach 0.867. The gain grows with the width of the band, and wide
+      bands are where the upper spectrum lives.
+    </p>
+
+    <div class="callout">
+      <span class="label">What has not been done</span>
+      <p>
+        <b>Nobody has listened to it.</b> Every number here is objective, and
+        codec quality is not: it is settled by listening panels, and a decade of
+        Opus&rsquo;s advantage is exactly that tuning. No comparison with any
+        other codec can be made until that has happened.
+      </p>
+    </div>
+
+    <h3>Layers, and why only this channel can use them</h3>
+
+    <p>
+      Residual stages are ordered by importance and independent to decode, so a
+      frame need not arrive all at once. Telyx splits one into a base and three
+      refinements: the base carries the band energies and the first stage of
+      every band, and each refinement improves on the last.
+    </p>
+
+    <p>
+      For a telephone call this is worthless. A refinement arriving after its
+      frame has played is discarded, so there is nothing to gain by sending it
+      separately and overhead to lose. On a channel that already spends seconds
+      of delay and already asks for lost frames again, a refinement that arrives
+      late is a refinement that arrives.
+    </p>
+
+    <p>
+      One encode therefore serves every rate. A listener on a poor link is sent
+      the base and nothing more; the same recording sent elsewhere carries every
+      layer. Nothing is re-encoded and nothing is stored twice.
+    </p>
+
+    <p>
+      What it does not yet buy is a base cheap enough to protect much harder
+      than the rest, though it is closer than it was. The twenty four band
+      energies took eighteen bytes of a sixty byte frame at six bits each; they
+      now take twelve and a half. Getting there took four attempts, and three of
+      them failed in ways worth recording.
+    </p>
+
+    <h3>Four attempts at the band energies</h3>
+
+    <p>
+      <b>The floor was measured wrong.</b> A helper computing the entropy of the
+      energies multiplied each symbol&rsquo;s surprise by its own count rather
+      than by the total, and reported the floor as under two bytes a frame
+      against a true figure near fifteen. Work was then aimed at a ten-fold
+      saving that did not exist. An error in a measurement does not announce
+      itself the way an error in a program does; it produces a number, and the
+      number is used.
+    </p>
+
+    <p>
+      <b>The prediction was pointed at the wrong axis.</b> Each band was
+      predicted from the same band in the previous frame, which is the design
+      anyone would write first. But the fastest-moving thing in a voice is its
+      overall level, and twenty milliseconds is long enough for it to move a
+      great deal, while the <i>shape</i> of the spectrum barely moves at all.
+      Predicting each band from the band below it, within the same frame, took
+      the energies from 15.4 to 12.9 bytes a frame and made every frame
+      independent of every other. Codec&nbsp;2 reached the same conclusion for
+      its mel-spaced envelope, and cites the independence rather than the bits as
+      the reason.
+    </p>
+
+    <p>
+      <b>The coder was flushed fifty times a second.</b> An arithmetic coder
+      must be closed before its output can be read, and closing costs four to
+      six bytes whatever it is carrying: thirty seven all-zero symbols come to
+      six. A long stream amortises that to nothing and a 20 ms frame pays it in
+      full. Batching ten frames into one stream pays it once, at the cost of
+      200 ms of latency and of tying a group&rsquo;s energies together. Both are
+      affordable here and neither is affordable on a telephone call. MELPe at
+      600 bit/s groups four frames into a superframe for the same reason.
+    </p>
+
+    <p>
+      <b>The energy step was the ceiling all along.</b> The codec saturated at
+      26.3 dB however many bits it was given, and the reason was not the shape
+      coder. A 1.5 dB energy quantiser has an rms error of 0.43 dB, and a gain
+      error of 0.43 dB predicts an SNR of 25.9 dB. Every bit above 24 kbit/s was
+      refining a shape that was then multiplied by the wrong number. The step is
+      now derived from the frame size, which both sides already know and so costs
+      nothing to signal: coarse where a finer envelope would be paid for out of
+      the shapes, fine where the envelope is the limit. That is 26.2 to 28.2 dB
+      at 24 kbit/s, and a ceiling of 29.2 rather than 26.3.
+    </p>
+
+    <h3>What the low-rate vocoders had to teach us</h3>
+
+    <p>
+      MELP, MELPe (STANAG 4591) and Codec&nbsp;2 operate between 600 and 2400
+      bit/s, an order of magnitude below Telyx, and most of their machinery does
+      not transfer. They are parametric vocoders: they resynthesise speech from
+      pitch, voicing and a linear-prediction envelope, where Telyx codes a
+      transform of the waveform. Mixed excitation, bandpass voicing, pulse
+      dispersion and aperiodic jitter all shape an excitation signal that Telyx
+      does not have.
+    </p>
+
+    <p>
+      What did transfer arrived as confirmation: the superframe and the
+      predictor above. What did not transfer is more instructive. Codec&nbsp;2
+      found that 6 dB envelope steps cost it very little quality. The same step
+      costs Telyx 13.7 dB of SNR, because a vocoder resynthesises <i>from</i> the
+      envelope while Telyx multiplies its coefficients <i>by</i> it, so an
+      envelope error is a gain error on the output waveform. A result imported
+      without its reason would have made the codec substantially worse.
+    </p>
+
+    <p>
+      Two ideas from that literature remain unexplored and are worth the work:
+      MELPe&rsquo;s noise pre-processor, designed for battlefield noise and
+      directly relevant to a phone in a loud room, and the analysis-by-synthesis
+      principle from CELP, which selects the quantiser index minimising
+      perceptual error rather than the one nearest in the parameter domain.
+      Telyx&rsquo;s residual quantiser currently does the latter.
+    </p>
+
+    <h3>What it does on speech</h3>
+
+    <p>
+      Every figure above was measured on a synthetic signal. Six clips of neural
+      text-to-speech, generated at 22.05 kHz and resampled to 48 kHz, give the
+      same codec at the same rates roughly half as many decibels.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Clip</th><th>12 kbit/s</th><th>16 kbit/s</th><th>24 kbit/s</th></tr></thead>
+        <tbody>
+          <tr><td>Digits</td><td>7.3 dB</td><td>9.9 dB</td><td>12.4 dB</td></tr>
+          <tr><td>Fricatives</td><td>8.4 dB</td><td>10.4 dB</td><td>11.7 dB</td></tr>
+          <tr><td>Nasals</td><td>14.5 dB</td><td>17.6 dB</td><td>21.1 dB</td></tr>
+          <tr><td>Plosives</td><td>10.5 dB</td><td>13.8 dB</td><td>17.8 dB</td></tr>
+          <tr><td>Sibilants</td><td>10.6 dB</td><td>13.3 dB</td><td>16.1 dB</td></tr>
+          <tr><td>Transients</td><td>7.7 dB</td><td>10.8 dB</td><td>14.1 dB</td></tr>
+          <tr><td><i>Synthetic vowel</i></td><td><i>12.8 dB</i></td><td><i>20.2 dB</i></td><td><i>28.2 dB</i></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The cause is neither the resampling nor the missing top half of the band:
+      no bits at all are spent above 11 kHz, so the empty region costs nothing.
+      It is that the synthetic signal leaves eleven of the twenty four bands
+      asleep and speech leaves three. The same sixty byte frame spread across
+      twenty one bands rather than thirteen accounts for most of the gap, and it
+      means the codec had been tuned, measured and reported against material
+      substantially easier than the material it exists for.
+    </p>
+
+    <h3>What happened when it was given sounds it had never been given</h3>
+
+    <p>
+      Every figure recorded for Telyx had been measured on one signal: twelve
+      harmonics with vibrato, a formant and an amplitude envelope. That is a
+      sustained vowel. Speech is not made of sustained vowels, so the codec was
+      given a plosive, a fricative and a voiced onset after silence.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Signal</th><th>12 kbit/s</th><th>24 kbit/s</th></tr></thead>
+        <tbody>
+          <tr><td>Sustained vowel</td><td>11.9 dB</td><td>24.0 dB</td></tr>
+          <tr><td>Voiced onset</td><td>12.7 dB</td><td>23.9 dB</td></tr>
+          <tr><td>Fricative /s/</td><td>&minus;2.7 dB</td><td>&minus;1.9 dB</td></tr>
+          <tr><td>Plosive /t/</td><td>&minus;2.8 dB</td><td>&minus;1.8 dB</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The negative figures are not straightforwardly a failure, and saying why
+      is the first useful thing the exercise produced. A fricative is noise. The
+      codec reproduces its spectrum rather than its waveform, and two different
+      noises with the same spectrum sound identical while scoring about zero
+      decibels against each other. That is a demonstration, from this codec's
+      own numbers, of why an SNR comparison against Opus would carry no
+      information.
+    </p>
+
+    <p>
+      Three real defects did fall out, and none of them was visible to any test
+      that already existed.
+    </p>
+
+    <p>
+      <b>The noise fill was not noise.</b> A band that receives no bits is given
+      an invented texture, and that texture was a hash of the coefficient index
+      and nothing else: the same pattern in every frame, indefinitely. A decoded
+      fricative correlated with itself one frame later at <b>+0.991</b>, against
+      +0.008 for the noise that went in. That is not a hiss but a tone at the
+      frame rate, and 48000/960 is 50 Hz, so an <i>/s/</i> emerged as a buzz.
+      Signal to noise cannot see this; the level is correct throughout; every
+      round trip test passed either way. The comment above the code said the
+      signs had to be random, and they were merely scattered. Seeded from the
+      decoder's frame counter it now measures +0.010.
+    </p>
+
+    <p>
+      <b>A rate too low to carry the envelope was delivered rather than
+      refused.</b> The encoder finished a frame with a resize to the frame
+      length, which pads and also truncates; the truncating case had never been
+      considered. At fifteen bytes a frame the band energies alone require
+      eighteen, so the final bands were cut off, read back out of the zero
+      padding, and the frame decoded six decibels quiet with no error raised
+      anywhere. It had been published as the 6 kbit/s row of the rate table.
+    </p>
+
+    <p>
+      <b>Pre-echo is real and remains unfixed.</b> A plosive places noise 14.8 dB
+      below itself into the silence <i>preceding</i> it, because a 40 ms window
+      spreads quantisation error across its whole length. This is the known cost
+      of the long window and the remedy is block switching, which is not built.
+      It is now measured and recorded rather than left to be discovered by a
+      listener.
+    </p>
+
+    
+    <h3>What systematic mutation found in the decoder</h3>
+
+    <p>
+      A decoder normally sits behind an authenticated transport and only ever
+      sees what a real encoder produced. That is an argument for not testing it
+      against anything else, and it is wrong twice: the authentication can be
+      misconfigured, and a decoder is exactly the component that gets reused
+      later somewhere the authentication is not there.
+    </p>
+
+    <p>
+      Every parser reachable from the wire is therefore driven with every
+      truncation, every byte value at every position, and arbitrary input from a
+      fixed seed. Not a fuzzer: it runs in the ordinary test suite on every
+      change rather than in a separate tool nobody remembers to start.
+    </p>
+
+    <p>
+      It found one defect, and the class matters more than the count. A
+      <b>single corrupted byte</b> in a Telyx frame decoded to a peak of
+      <b>3,530</b>, three thousand times full scale, because a band&rsquo;s
+      energy is exponential in its coded level and one byte moves it a long way.
+      A corrupt frame is not a rare event on a real network, and in headphones
+      that is not an artefact but a hazard to the person wearing them. The
+      overlap-add now clamps to full scale, which costs one comparison per
+      sample. No unit test built from valid input would have produced it.
+    </p>
+
+    <h3>The layers on the wire, and what it cost to find out</h3>
+
+    <p>
+      Giving each layer its own datagram is the obvious way to let a network
+      drop refinements, and it was costed before it was built. Every datagram
+      carries its own sixteen byte authentication tag, and on frames this small
+      the tag is most of the packet.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Stream</th><th>One datagram</th><th>One per layer</th></tr></thead>
+        <tbody>
+          <tr><td>12 kbit/s</td><td>19.6 kbit/s on the wire</td><td>42.4</td></tr>
+          <tr><td>16 kbit/s</td><td>23.6</td><td>46.4</td></tr>
+          <tr><td>24 kbit/s</td><td>31.6</td><td>54.4</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Splitting a 24 kbit/s stream four ways puts more on the wire than the
+      stream carries. So the layers travel in one datagram, self-delimited by a
+      byte of layer count and a length for each layer but the last, and the
+      sender decides how many to include <i>before</i> protecting the frame,
+      which is free. The lengths sit inside the authenticated payload rather
+      than in the header, so a flipped bit in a length field is a failed tag
+      rather than a parse of attacker-chosen structure.
+    </p>
+
+    <p>
+      Measured end to end, a link with room for 40 byte datagrams carries 89
+      percent of the bytes a 96 byte link does. That is not a limitation of the
+      trimming; it is the shape of the frame. The base layer is 86 percent of
+      it, so discarding every refinement can save at most fourteen percent, and
+      44 percent of the base is the energy envelope. Layered delivery is worth
+      what the base costs, and the way to make it worth more is to shrink the
+      base rather than to trim harder.
+    </p>
+
+    <h3>The transform was the whole story</h3>
+
+    <p>
+      Written from its definition the MDCT is O(<i>n</i>&sup2;): 1.8 million
+      multiplies and as many evaluations of a cosine per frame, 28 ms forward
+      and 26 ms back against a frame carrying 20 ms of audio. A call needs both
+      directions, so the transform alone cost 270 percent of real time on one
+      core. Every quality figure in this section was, until that was fixed,
+      measured offline on a codec that could not have carried a conversation.
+    </p>
+
+    <p>
+      An MDCT of 2<i>M</i> samples is a fold onto <i>M</i> values followed by a
+      DCT-IV, and a DCT-IV of length <i>M</i> is a complex FFT of length
+      <i>M</i>/2 between two twiddles. For 960 coefficients that is one 480
+      point transform, and 480 = 2<sup>5</sup>&nbsp;&times;&nbsp;15: the
+      factorisation halves five times and finishes with thirty two direct
+      fifteen point transforms. The result is 0.5 percent of real time, and the
+      whole codec, encoding and decoding together, is 1.2 percent.
+    </p>
+
+    <p>
+      It is also 775 times more accurate than the definition it replaced, which
+      is not what a fast path usually is. Summing 1920 similar terms in single
+      precision loses about two parts in ten thousand; an FFT accumulates in a
+      tree of depth nine instead. That mattered practically: the fast transform
+      was first checked against the slow one, disagreed by exactly that much,
+      and the disagreement looked precisely like a wrong twiddle factor. A fast
+      implementation can only be checked against a slow one while the slow one
+      is the more accurate of the two.
+    </p>
+
+    <h3>A call, end to end</h3>
+
+    <p>
+      Until August 2026 nothing in the project made a call. The codec had been
+      measured on files, the media layer had been tested against an in-process
+      network, and the two had never met over a socket. They have now: two
+      processes, real devices, real datagrams, through a running relay.
+    </p>
+
+    <p>
+      Twenty seconds of speech each way carried <b>991 frames sent and 944
+      received</b>, with <b>79 milliseconds</b> of audio queued for playback at
+      the end and nothing discarded. At fifty frames a second that is the call
+      running in real time rather than falling behind, which is the only
+      property that matters and the one the first version did not have.
+    </p>
+
+    <p>
+      The first version managed <b>322 frames in the same twenty seconds</b> and
+      accumulated <b>360 milliseconds</b> of delay that never came back. The
+      cause was one line of scheduling: it encoded one frame per timer tick, and
+      a timer that fires late does not fire twice to make up for it, so every
+      late tick left twenty milliseconds in the buffer that nothing removed.
+      Draining what is ready on each tick instead took it from a third of real
+      time to real time. It is recorded here because it is invisible to every
+      test that does not run against a clock.
+    </p>
+
+    <h3>A call refuses a direct path</h3>
+
+    <p>
+      A call will not start on a connection that permits a direct path, and the
+      refusal is in the media layer rather than in a caller that could forget it.
+      The reason is not latency: a direct path is the caller&rsquo;s address
+      handed to whoever is on the other end. Relay-only costs a round trip
+      through a machine that can read nothing, and it is the difference between
+      a call that hides where somebody is and one that does not.
+    </p>
+
+    <p>
+      The same audit found the address itself leaking. The string a user pastes
+      to a peer is built from whatever the endpoint knows about reaching itself,
+      which on an ordinary machine is its IP and port, and it travelled even on
+      relay-only sessions where the peer could not use it. Relay-only addresses
+      now carry the relay and nothing else.
+    </p>
+
+    <h3>Somebody listened</h3>
+
+    <p>
+      Every number recorded for the codec until this point was signal to noise,
+      and signal to noise does not say whether a codec sounds good. Three clips
+      were rated blind and in random order against the untouched original.
+    </p>
+
+    <figure>
+      <svg viewBox="0 0 860 290" role="img" aria-label="Left: listening scores per rate, mean and range. Right: measured error per rate. The measurement separates the rates; the listening ranges overlap.">
+<g font-family="ui-monospace, Menlo, monospace" font-size="12" fill="currentColor">
+<text x="132" y="46" font-size="12" font-weight="600">heard, 0 to 100</text>
+<text x="556" y="46" font-size="12" font-weight="600">measured error from the original</text>
+<text x="132" y="62" font-size="11" opacity=".62">one listener, three clips</text>
+<text x="556" y="62" font-size="11" opacity=".62">RMS, lower is closer</text>
+<line x1="132" y1="72" x2="132" y2="230" stroke="currentColor" stroke-opacity=".13"/>
+<text x="132" y="246" font-size="10" opacity=".55" text-anchor="middle">60</text>
+<line x1="200" y1="72" x2="200" y2="230" stroke="currentColor" stroke-opacity=".13"/>
+<text x="200" y="246" font-size="10" opacity=".55" text-anchor="middle">70</text>
+<line x1="267" y1="72" x2="267" y2="230" stroke="currentColor" stroke-opacity=".13"/>
+<text x="267" y="246" font-size="10" opacity=".55" text-anchor="middle">80</text>
+<line x1="334" y1="72" x2="334" y2="230" stroke="currentColor" stroke-opacity=".13"/>
+<text x="334" y="246" font-size="10" opacity=".55" text-anchor="middle">90</text>
+<line x1="402" y1="72" x2="402" y2="230" stroke="currentColor" stroke-opacity=".13"/>
+<text x="402" y="246" font-size="10" opacity=".55" text-anchor="middle">100</text>
+<line x1="556" y1="72" x2="556" y2="230" stroke="currentColor" stroke-opacity=".28"/>
+<text x="120" y="88" text-anchor="end" font-size="12">reference</text>
+<circle cx="402.0" cy="84" r="5" fill="#256B5B" stroke="#FFFFFF" stroke-width="2"/>
+<text x="402.0" y="71" font-size="10" text-anchor="middle" opacity=".75">100</text>
+<text x="564" y="88" font-size="11" opacity=".55">0, it is the original</text>
+<text x="120" y="132" text-anchor="end" font-size="12">24 kbit/s</text>
+<line x1="334.5" y1="128" x2="368.2" y2="128" stroke="currentColor" stroke-opacity=".30" stroke-width="6" stroke-linecap="round"/>
+<circle cx="356.8" cy="128" r="5" fill="currentColor" stroke="#FFFFFF" stroke-width="2"/>
+<text x="356.8" y="115" font-size="10" text-anchor="middle" opacity=".75">93</text>
+<rect x="556" y="119" width="138.1" height="18" rx="4" fill="#A33B4D" fill-opacity=".72"/>
+<text x="702" y="132" font-size="11" opacity=".8">1023</text>
+<text x="120" y="176" text-anchor="end" font-size="12">16 kbit/s</text>
+<line x1="199.5" y1="172" x2="402.0" y2="172" stroke="currentColor" stroke-opacity=".30" stroke-width="6" stroke-linecap="round"/>
+<circle cx="323.0" cy="172" r="5" fill="currentColor" stroke="#FFFFFF" stroke-width="2"/>
+<text x="323.0" y="159" font-size="10" text-anchor="middle" opacity=".75">88</text>
+<rect x="556" y="163" width="185.5" height="18" rx="4" fill="#A33B4D" fill-opacity=".72"/>
+<text x="749" y="176" font-size="11" opacity=".8">1374</text>
+<text x="120" y="220" text-anchor="end" font-size="12">12 kbit/s</text>
+<line x1="267.0" y1="216" x2="334.5" y2="216" stroke="currentColor" stroke-opacity=".30" stroke-width="6" stroke-linecap="round"/>
+<circle cx="289.3" cy="216" r="5" fill="currentColor" stroke="#FFFFFF" stroke-width="2"/>
+<text x="289.3" y="203" font-size="10" text-anchor="middle" opacity=".75">83</text>
+<rect x="556" y="207" width="250.4" height="18" rx="4" fill="#A33B4D" fill-opacity=".72"/>
+<text x="814" y="220" font-size="11" opacity=".8">1855</text>
+</g></svg>
+      <figcaption>
+        <b>Figure 5.</b> The first perceptual measurement of Telyx, beside the
+        objective one. Measured error separates the three rates cleanly and
+        monotonically. The listening scores order the same way, and their ranges
+        overlap: the spread within one rate, 13.1, is larger than the largest gap
+        between rates, 10.0. With one listener the rates are <b>not</b>
+        distinguishable from one another. What the session does support is that
+        the untouched reference was identified as untouched on all three clips,
+        and that no rate scored below 80 against it, 12 kbit/s included.
+      </figcaption>
+    </figure>
+
+    <p>
+      One clip rated 16 kbit/s below 12, inverted against both the measurement
+      and the other two clips. It was worth checking, it did not hold up, and it
+      is written down so that it is not rediscovered later as a finding. What
+      would make any of this conclusive is a second listener, which is worth more
+      than more clips from the first one.
+    </p>
+
+    <h3>What is not built, and what it will cost</h3>
+
+    <p>
+      <b>Echo cancellation and congestion control are absent.</b> Echo
+      cancellation in particular is not written from scratch by anybody sensible,
+      and without it a call on a speakerphone sends the other side back to
+      themselves. Device capture and the jitter buffer, listed here as missing in
+      earlier versions of this paper, are built.
+    </p>
+
+    <p>
+      One measured cost is already known. Frame overhead is 25 bytes, a nine byte
+      header and a sixteen byte tag, which on an 80 byte Opus frame is 31
+      percent. SFrame permits truncating the tag to eight or four bytes for
+      exactly this reason, and that should be done before a call runs over a
+      metered connection.
+    </p>
+
+    <p>
+      Group calls above a handful of participants need a unit that forwards
+      streams. The frame format already suits one, since the header is
+      authenticated but not encrypted and can be routed by without being read.
+      What such a unit sees is who is speaking and when, and with silence
+      suppression that is the rhythm of the conversation. It is the same bargain
+      the blind mailbox makes, and it should be declared before anyone builds on
+      it.
+    </p>
+
+  </div>
+</section>
+
+<!-- ================= 11 ================= -->
+<section>
+  <h2>Limitations</h2>
   <div class="col">
     <p>
       This section states the known weaknesses of the design. Several are
       unsolved and at least one is unsolvable within the current architecture.
     </p>
 
-    <h3><span class="num">9.1</span>Statistical disclosure against rotating tags</h3>
+    <h3>Statistical disclosure against rotating tags</h3>
     <p>
       Signal's sealed sender removes the sender field from a message, and the
       resulting one sided anonymity is broken when two parties exchange messages
@@ -1036,7 +1920,7 @@
       </g>
     </svg>
     <figcaption>
-      <b>Figure 5.</b> The residual attack. The operator cannot read any
+      <b>Figure 6.</b> The residual attack. The operator cannot read any
       envelope, cannot link tag A to tag B cryptographically, and cannot see any
       identity. It can observe that a deposit under one tag is repeatedly
       followed within seconds by a collection under another. Over enough
@@ -1075,7 +1959,7 @@
       </p>
     </div>
 
-    <h3><span class="num">9.2</span>Push notification metadata</h3>
+    <h3>Push notification metadata</h3>
     <p>
       Mobile platforms will not permit a background socket, so waking a device
       requires the platform push service. Apple and Google therefore observe that
@@ -1085,7 +1969,7 @@
       battery. This is inherent to the platforms rather than to the protocol.
     </p>
 
-    <h3><span class="num">9.3</span>Relay observation is inherent</h3>
+    <h3>Relay observation is inherent</h3>
     <p>
       A relay carrying a session necessarily learns which endpoint identifier
       communicates with which. No configuration removes this. Path selection
@@ -1094,9 +1978,9 @@
       knowledge across two operators, is not implemented.
     </p>
 
-    <h3><span class="num">9.4</span>Derived rather than original transport</h3>
+    <h3>Derived rather than original transport</h3>
     <p>
-      The transport comprises 121,197 lines vendored from iroh, whose socket
+      The transport comprises 123,893 lines vendored from iroh, whose socket
       layer is itself derived from Tailscale under BSD-3-Clause and whose QUIC
       layer is a fork of quinn. Rotelyx owns the policy layers, has deleted the
       identity publishing code outright, and has replaced the path selection
@@ -1110,7 +1994,7 @@
       cryptographic project this is not optional work.
     </p>
 
-    <h3><span class="num">9.5</span>Storage at rest</h3>
+    <h3>Storage at rest</h3>
     <p>
       Identity keys are sealed with Argon2id, using 64 MiB of memory and three
       passes, and XChaCha20-Poly1305 with the file header bound as associated
@@ -1126,7 +2010,61 @@
       open items.
     </p>
 
-    <h3><span class="num">9.6</span>Client trust boundaries differ</h3>
+    
+    <h3>What it cost to make the vault usable</h3>
+
+    <p>
+      Argon2id at 64 MiB is expensive on purpose, and the expense is correct
+      exactly once: when a passphrase is being checked. The mailbox server was
+      re-deriving the same key from the same passphrase on every write, and the
+      wake registry writes on every device registration. Measured against a
+      running server, <b>eight requests took 2.26 seconds</b>, so under four a
+      second saturated a core, and each derivation allocated 64 MiB on the way.
+      An attacker did not need a botnet for that; they needed a loop.
+    </p>
+
+    <p>
+      A cache of derived keys fixes it, and the first version of that cache was
+      an <b>authentication bypass</b>. It was keyed on the salt alone, so opening
+      a file with the wrong passphrase found the entry cached from the right one
+      and decrypted it. That is worth recording rather than quietly fixing: the
+      change that removes a denial of service is exactly the sort of change that
+      removes the check as well. The cache is now bound to a hash of the
+      passphrase, compared in constant time, and there is a test that opens with
+      a wrong passphrase against a warm cache.
+    </p>
+
+    <p>
+      With it, a write costs <b>0.4 ms rather than 265</b>, and the derivation
+      still happens once per passphrase. The test that pins this counts
+      derivations rather than measuring elapsed time, because the timing version
+      failed under parallel load and a flaky test is deleted the first time CI
+      is busy.
+    </p>
+
+    <h3>Calls are new, and thinly measured</h3>
+
+    <p>
+      A call has been carried end to end between two processes through a relay,
+      and the figures in section 10 come from that run. They are one run on one
+      machine over a loopback relay. Nothing here has been measured across a
+      real network, under real loss, on a phone, or on a battery.
+    </p>
+
+    <p>
+      <b>There is no echo cancellation.</b> A call on a speakerphone sends the
+      other side back to themselves. Until that exists, calls are for headsets.
+    </p>
+
+    <p>
+      The perceptual measurement is one listener rating three clips. It supports
+      the claim that the codec is usable at 12 kbit/s and it does not support any
+      comparison between the rates, because the spread within a rate is larger
+      than the gaps between them. A second listener is worth more than more clips
+      from the first.
+    </p>
+
+    <h3>Client trust boundaries differ</h3>
     <p>
       Three clients exist and they do not offer the same guarantee. The desktop
       client uses in process IPC, so plaintext never crosses a socket. The
@@ -1140,16 +2078,17 @@
       clients and describes them all with one security claim is making a false
       statement about at least one of them.
     </p>
+  </div>
   </section>
 
 <!-- ================= 10 ================= -->
 <section>
-  <h2><span class="num">10</span>Implementation status</h2>
+  <h2>Implementation status</h2>
   <div class="col">
     <p>
-      The implementation is written in Rust across seven first party crates plus
-      a vendored transport tree, and is exercised by 157 tests. The distribution
-      of those tests is more informative than the count.
+      The implementation is written in Rust across sixteen first party crates
+      plus a vendored transport tree, and is exercised by 459 tests. The
+      distribution of those tests is more informative than the count.
     </p>
   </div>
 
@@ -1157,19 +2096,24 @@
     <table>
       <thead><tr><th>Component</th><th class="num">Tests</th><th>Notable coverage</th></tr></thead>
       <tbody>
+        <tr><td>Voice codec</td><td class="num">80</td><td>Real speech, deliberate stressors, and the transform against a slower reference</td></tr>
+        <tr><td>Blind mailbox and its server</td><td class="num">79</td><td>Expiry enforced on collection, not only on sweep, and a wrong passphrase rejected against a warm cache</td></tr>
         <tr><td>Identity, framing, admission</td><td class="num">64</td><td>Admission control verified over live QUIC connections, not only in unit tests</td></tr>
-        <tr><td>Message crypto</td><td class="num">23</td><td>Negative test proving a PSK commit fails without the staged secret</td></tr>
-        <tr><td>Blind mailbox</td><td class="num">23</td><td>Expiry enforced on collection, not only on sweep</td></tr>
+        <tr><td>Browser, phone and desktop clients</td><td class="num">46</td><td>The same engine in all three, and the C ABI boundary crossed in both directions</td></tr>
+        <tr><td>Media transport</td><td class="num">40</td><td>Per sender keys, the jitter buffer, and layers crossing a real wire</td></tr>
+        <tr><td>Hostile input</td><td class="num">33</td><td>Every parser reachable before authentication, under systematic mutation</td></tr>
+        <tr><td>Message crypto</td><td class="num">32</td><td>Negative test proving a PSK commit fails without the staged secret</td></tr>
+        <tr><td>Access control</td><td class="num">24</td><td>What a client is permitted to ask for, checked against frozen test vectors</td></tr>
         <tr><td>Transport and path policy</td><td class="num">21</td><td>Live connections, and a guard that fails the build on any third party hostname</td></tr>
-        <tr><td>Cross layer</td><td class="num">6</td><td>Operator's serialised view scanned byte wise for plaintext and identities</td></tr>
-        <tr><td>Relay</td><td class="num">4</td><td>Refusal to start on an empty allowlist</td></tr>
-        <tr><td>Sealed storage</td><td class="num">14</td><td>Wrong passphrase rejected, tampered header rejected, plaintext migration preserves the identity</td></tr>
+        <tr><td>Relay and its status page</td><td class="num">15</td><td>Refusal to start on an empty allowlist, and admission limits under load</td></tr>
+        <tr><td>Terminal client</td><td class="num">15</td><td>The operator's serialised view scanned byte wise for plaintext, and a relayed address carrying no IP</td></tr>
+        <tr><td>Devices, calls, availability</td><td class="num">10</td><td>The backlog bound, and the record both landing pages read</td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="col">
-    <h3><span class="num">10.1</span>Defects found by testing rather than review</h3>
+    <h3>Defects found by testing rather than review</h3>
     <p>
       Three classes of defect survived code review and were caught only by tests
       that crossed a layer boundary or used real sockets. We record them because
@@ -1204,11 +2148,54 @@
       </p>
     </div>
   </div>
+
+  <div class="col">
+
+    <h3>What ships, and whether it can be checked</h3>
+
+    <p>
+      A protocol that asks people to trust no server still asks them to run a
+      binary. Two properties of those binaries were wrong, and both were
+      invisible until somebody looked at the bytes.
+    </p>
+
+    <p>
+      <b>They carried the build machine&rsquo;s username.</b> Rust embeds
+      <code>file!()</code> in panic messages, and for a dependency that is the
+      full path into the build machine&rsquo;s package registry. Measured before
+      it was fixed: <b>173</b> such paths in the WebAssembly module downloaded by
+      every visitor, <b>387</b> in the relay and <b>269</b> in the mailbox server.
+      That is the operator&rsquo;s account name, shipped to strangers, in a
+      project whose entire subject is not revealing who somebody is. Paths are
+      now remapped at build time, and the build refuses to produce an artifact
+      that still contains one.
+    </p>
+
+    <p>
+      <b>The same change made the builds reproducible</b>, which is the more
+      valuable half. Two clean builds of identical source produced different
+      bytes before and produce identical bytes now. Without that, publishing
+      source alongside a binary is a claim nobody can test: an operator running a
+      relay somebody else compiled had no way to establish that it corresponds to
+      the source it claims to come from. The hashes are printed by the build and
+      can be published beside the artifacts.
+    </p>
+
+    <p>
+      The browser module also shrank from 2,352,899 bytes to 1,510,029, and from
+      749,195 to 531,303 compressed, by choosing a size-optimised profile and
+      dropping the debugging symbol names. Production stack traces become
+      numeric, which for a client that handles keys is arguably the better
+      default anyway.
+    </p>
+
+  </div>
+
 </section>
 
 <!-- ================= 11 ================= -->
 <section>
-  <h2><span class="num">11</span>Comparison</h2>
+  <h2>Comparison</h2>
   <div class="tablewrap">
     <table>
       <thead><tr><th>Property</th><th>Telegram</th><th>Signal</th><th>Rotelyx</th></tr></thead>
@@ -1238,7 +2225,7 @@
 
 <!-- ================= 12 ================= -->
 <section>
-  <h2><span class="num">12</span>Conclusion</h2>
+  <h2>Conclusion</h2>
   <div class="col">
     <p>
       Rotelyx demonstrates that a messaging protocol can treat metadata as a
@@ -1269,7 +2256,7 @@
 
 <!-- ================= refs ================= -->
 <section>
-  <h2><span class="num">13</span>References</h2>
+  <h2>References</h2>
   <ol class="refs">
     <li id="r1"><b>R. Barnes, B. Beurdouche, R. Robert, J. Millican, E. Omara, K. Cohn-Gordon.</b> The Messaging Layer Security (MLS) Protocol. RFC 9420, IETF, July 2023.</li>
     <li id="r2"><b>M. Barbosa, D. Connolly, J. Duarte, A. Kaiser, P. Schwabe, K. Varner, B. Westerbaan.</b> X-Wing: The Hybrid KEM You've Been Looking For. IACR ePrint 2024/039.</li>
@@ -1282,6 +2269,9 @@
     <li id="r9"><b>No safety in numbers: traffic analysis of sealed-sender groups in Signal.</b> arXiv:2305.09799.</li>
     <li id="r10"><b>iroh.</b> Peer-to-peer QUIC transport with NAT traversal. N0, INC. Version 1.0.3, 2026. MIT OR Apache-2.0.</li>
     <li id="r11"><b>OpenMLS.</b> A Rust implementation of the Messaging Layer Security protocol. Version 0.8.1, 2026.</li>
+    <li id="r12"><b>RFC 9605</b>. Omara, E., Uberti, J., Murillo, S. G., Barnes,
+      R., and Y. Fablet. Secure Frame (SFrame): Lightweight Authenticated
+      Encryption for Real-Time Media. IETF, 2024.</li>
   </ol>
 </section>
 
@@ -1297,3 +2287,6 @@
 </footer>
 
 </div>
+
+</body>
+</html>

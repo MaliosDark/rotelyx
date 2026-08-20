@@ -19,7 +19,6 @@ crates/
   rotelyx-capability       capability tokens: the format, and verifying them.
                            Issuing them is a separate crate, not published here,
                            so a mailbox runs free without any of it. See
-                           docs/BILLING.md
   rotelyx-status           the availability record behind both landing pages
   rotelyx-mobile           the C ABI the phone bindings call
   rotelyx-cli              two terminal chat, for running the protocol
@@ -27,11 +26,10 @@ crates/
   rotelyx-mailbox-server   the blind mailbox as a WebSocket service
   rotelyx-desktop          native desktop window, Tauri v2, no Node
   rotelyx-web              local browser harness
-  net/                     the vendored transport stack, 121,197 lines
+  net/                     the vendored transport stack, 123,893 lines
 site/                          the public site and the browser client, self contained
 docs/
   brand/                       logo, light and dark variants, and the square mark
-  BILLING.md                   what is not in this repository, and why
   DEPLOYMENT.md                what is deployed, where, and why each choice was made
   THREAT-MODEL.md              what Rotelyx defends against, and what it does not
   PQ-COMPOSITION.md            the novel construction, specified for review

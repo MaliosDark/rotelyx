@@ -61,3 +61,7 @@ target/listening/
 
 # The public site. Served from elsewhere; it is not part of the source tree.
 /site/
+
+# Kept out of the public repository. Notes on access, tiers and billing live
+# here and are not part of what is published.
+/private/

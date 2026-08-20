@@ -1,6 +1,16 @@
 # Rotelyx TODO
 
-Status as of 16 August 2026. 158 tests passing.
+Status as of 20 August 2026. 459 tests passing.
+
+**Calls work.** Two processes, real devices, real datagrams, through a relay:
+991 frames sent and 944 received in twenty seconds, 79 ms queued, nothing
+dropped. `/call` in the terminal client, a Call button in the desktop window.
+Somebody has listened to the codec, once, and `docs/listening-2026-08-20.txt`
+records both what that supports and what it does not.
+
+**What a call still lacks:** echo cancellation, congestion control, more than
+two participants, and any measurement across a real network rather than a
+loopback relay.
 
 This file is the honest ledger. Items move to **Done** only when a test proves
 them, not when the code exists. Three separate defects in this project were
@@ -25,7 +35,7 @@ is written" is not a completion criterion here.
 ### Foundations
 
 - [x] Threat model written before code, ten adversaries modelled
-- [x] Cargo workspace, seven first party crates
+- [x] Cargo workspace, sixteen first party crates
 - [x] Ed25519 identity with a `Debug` that redacts and key generation that
       panics rather than degrading if the OS entropy source is unavailable
 - [x] Safety numbers, twelve groups of five digits, order independent
@@ -33,7 +43,7 @@ is written" is not a completion criterion here.
 
 ### Transport (L0 / L1)
 
-- [x] Transport stack vendored into the repository, 121,197 lines across
+- [x] Transport stack vendored into the repository, 123,893 lines across
       fourteen crates, renamed throughout. No upstream networking package is
       downloaded
 - [x] Identity publishing code deleted from the tree: the pkarr and DNS lookup
@@ -250,10 +260,13 @@ Everything needed for this is built.
       has a row for it. Closing that would mean reporting success without
       registering, which leaves a real device believing it will be woken
 - [x] **The published systemd units carried the operator's account name and
-      home directory.** `User=OPERATOR` and `/home/OPERATOR/rotelyx`, in
-      files meant to be read by other people. The same class of leak the build
-      scripts already refuse in binaries, which slipped through because these
-      are documentation. Placeholders now
+      home directory**, in files meant to be read by other people. The same
+      class of leak the build scripts already refuse in binaries, which slipped
+      through because these are documentation rather than an artifact.
+      Placeholders now.
+
+      Writing this entry reintroduced it: the first version quoted the real
+      account name and path as evidence. A note about a leak is published too
 - [ ] Watch the refusal counters in production. Limits chosen from reasoning
       rather than from traffic, and the first real load will say whether they
       are in the right place

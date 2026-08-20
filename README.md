@@ -82,6 +82,23 @@ safety number 41908 75433 94850 77313 01440 94499 53654 59718
 Nobody can reach you unless you hand them an invitation first. That is the
 default and it is not a setting you have to find.
 
+### Talking
+
+Type `/call` in the chat. `/hang` stops it.
+
+Both sides need `--relay <url>` for a call, and it will tell you so if you
+forget. That is not a network preference: over a direct path the other side
+sees your address, so a call refuses to start on one.
+
+Measured between two processes through a relay: 991 frames sent and 944
+received in twenty seconds, 79 ms of audio queued, nothing dropped. Somebody
+has also listened to it, once, and that is written down in
+[`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) including what
+it does not show.
+
+**There is no echo cancellation.** On a speakerphone you send the other person
+back to themselves. Use headphones.
+
 ## What the people running a server can see
 
 Nothing you write, ever. Here is the rest of it, in full:
@@ -126,9 +143,8 @@ Details in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 |---|---|
 | [Architecture](docs/ARCHITECTURE.md) | How a message actually travels, layer by layer |
 | [Threat model](docs/THREAT-MODEL.md) | Ten adversaries, and what is not defended |
-| [The voice codec](docs/CODEC.md) | Voice is built and tested, but there is no call command yet |
+| [The voice codec](docs/CODEC.md) | Why calls do not use Opus, and what a listener made of it |
 | [Post quantum](docs/PQ-COMPOSITION.md) | The construction, written for review |
-| [Access and tiers](docs/ACCESS.md) | What a mailbox limits, and how |
 | [Deployment](docs/DEPLOYMENT.md) | Running one properly |
 | [Working on it](docs/CONTRIBUTING.md) | Layout, tests, roadmap |
 | [Provenance](docs/PROVENANCE.md) | Where the vendored code came from |

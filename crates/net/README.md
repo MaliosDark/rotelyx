@@ -12,21 +12,21 @@ as part of Rotelyx's. Each crate here is its own workspace root.
 
 | Crate | Derived from | LOC | Role |
 |---|---|---:|---|
-| `rotelyx-quic-proto` | `noq-proto` (a fork of `quinn`) | 50,162 | QUIC protocol state machine |
-| `rotelyx-transport` | `iroh` | 27,768 | endpoint, socket, hole punching |
-| `rotelyx-relay-proto` | `iroh-relay` | 12,361 | relay client and server |
-| `rotelyx-quic` | `noq` | 7,872 | QUIC async layer |
-| `rotelyx-netwatch` | `netwatch` | 5,679 | link and route change detection |
-| `rotelyx-metrics` | `iroh-metrics` | 4,636 | metrics |
-| `rotelyx-quic-udp` | `noq-udp` | 2,790 | UDP socket abstraction |
-| `rotelyx-discovery` | `iroh-dns` | 2,524 | DNS resolution, **kept**; the discovery half is unreachable. See below |
-| `rotelyx-error` | `n0-error` | 1,820 | error plumbing |
-| `rotelyx-future` | `n0-future` | 1,506 | async utilities |
+| `rotelyx-quic-proto` | `noq-proto` (a fork of `quinn`) | 50,170 | QUIC protocol state machine |
+| `rotelyx-transport` | `iroh` | 27,884 | endpoint, socket, hole punching |
+| `rotelyx-relay-proto` | `iroh-relay` | 13,257 | relay client and server |
+| `rotelyx-quic` | `noq` | 9,173 | QUIC async layer |
+| `rotelyx-netwatch` | `netwatch` | 5,857 | link and route change detection |
+| `rotelyx-metrics` | `iroh-metrics` | 4,783 | metrics |
+| `rotelyx-quic-udp` | `noq-udp` | 3,553 | UDP socket abstraction |
+| `rotelyx-discovery` | `iroh-dns` | 1,685 | DNS resolution, **kept**; the discovery half is unreachable. See below |
+| `rotelyx-error` | `n0-error` | 1,937 | error plumbing |
+| `rotelyx-future` | `n0-future` | 1,515 | async utilities |
 | `rotelyx-watcher` | `n0-watcher` | 1,475 | change notification |
 | `rotelyx-transport-base` | `iroh-base` | 1,139 | key and address types |
 | `rotelyx-error-macros` | `n0-error-macros` | 978 | derive macros |
 | `rotelyx-metrics-derive` | `iroh-metrics-derive` | 487 | derive macros |
-| | **Total** | **121,197** | |
+| | **Total** | **123,893** | |
 
 ## How the rename works
 
