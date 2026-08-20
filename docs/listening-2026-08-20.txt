@@ -1,0 +1,49 @@
+# The first time anybody listened to Telyx
+#
+# 20 August 2026. One listener, three clips, four versions each, blind and in
+# random order. The raw ratings are below; what they support is this:
+#
+#   rate         mean   spread   range
+#   reference   100.0      0.0   100-100
+#   24 kbit/s    93.3      2.4    90-95
+#   16 kbit/s    88.3     13.1    70-100
+#   12 kbit/s    83.3      4.7    80-90
+#
+# What is solid:
+#
+#   The reference scored 100 on all three clips, so the sessions are valid: the
+#   listener could tell untouched audio from coded audio every time.
+#
+#   No rate scored below 80 against a reference of 100, including 12 kbit/s.
+#
+#   The ordering matches the measured error, which is monotonic: 12 kbit/s is
+#   1855 RMS from the original, 16 is 1374, 24 is 1023.
+#
+# What is not:
+#
+#   The spread within one rate (13.1) is larger than the largest gap between
+#   rates (10.0). With one listener and three clips the rates are not
+#   distinguishable from each other, and this cannot be quoted as though they
+#   were. It says the codec is usable at 12 kbit/s. It does not say by how much
+#   24 is better.
+#
+#   digits_alan rated 16 kbit/s at 70 and 12 kbit/s at 80, which is inverted
+#   against both the measurement and the other two clips. One data point. It was
+#   worth checking and it did not hold up; recorded here so nobody rediscovers
+#   it as a finding.
+#
+# To make this conclusive: more listeners, not more clips. A second pair of ears
+# is worth more than the remaining three clips from this one.
+
+digits_alan_gtvngp 100
+digits_alan_gyxure 95
+digits_alan_vsuwcu 80
+digits_alan_zmpdcp 70
+fricatives_jenny_jmxdpn 100
+fricatives_jenny_ertccv 95
+fricatives_jenny_byxmyu 90
+fricatives_jenny_jknkbq 80
+plosives_ryan_rbhrnx 100
+plosives_ryan_vwbyms 90
+plosives_ryan_ccpydu 95
+plosives_ryan_twqqfa 100

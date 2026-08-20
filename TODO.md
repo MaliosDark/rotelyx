@@ -323,11 +323,18 @@ wide margin the largest single task remaining in the project.
       libopus, and a 3.5 kHz anchor. Same length, meaningless names, mapping
       withheld. `scripts/listen` plays them in random order and takes MUSHRA
       ratings; `--reveal` joins them to what they were
-- [ ] **Run it, with more than one pair of ears.** One listener is an anecdote.
-      The hidden reference is the check: if it does not score near 100 the
-      session is not usable Every number recorded is objective. Codec quality is
-      settled by listening panels and nobody has heard a second of this. No
-      comparison with anything may be published before that happens
+- [x] **Somebody listened.** 20 August 2026, one listener, three clips, blind
+      and in random order. The reference scored 100 all three times, so the
+      sessions are valid, and no rate scored below 80 against it, including
+      12 kbit/s. Recorded in `docs/listening-2026-08-20.txt`
+- [!] **What it does not support.** The spread within one rate is 13.1 and the
+      largest gap between rates is 10.0, so with one listener the three rates
+      are not distinguishable from each other. It says the codec is usable at
+      12 kbit/s; it does not say how much better 24 is, and must not be quoted
+      as though it did
+- [ ] **A second pair of ears.** Worth more than the remaining three clips from
+      the first one. Until then every rate comparison here is one person's
+      afternoon
 - [x] A rate-distortion allocator: reverse water-filling. The curve no longer
       goes backwards. A band's next increment is worth `E² · 4^-r`, which does
       not scale with width while its cost does, so a wide high band can no
