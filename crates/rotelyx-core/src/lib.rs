@@ -28,7 +28,8 @@ pub mod store;
 pub mod wire;
 
 pub use access::{
-    epoch_at, Admission, Gate, estimated_cost, solve, verify_proof, AccessError, ContactProof, Invitation,
+    epoch_at, Admission, Gate, estimated_cost, peer_identity, solve, verify_proof, AccessError,
+    ContactProof, Invitation,
     ReachabilityPolicy, EPOCH_SECONDS,
 };
 #[cfg(feature = "transport")]

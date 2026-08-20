@@ -1,0 +1,18 @@
+[package]
+name = "rotelyx-path"
+description = "How a path is chosen once more than one is available"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# No dependencies, and that is the entire point of this crate existing.
+#
+# `PathPolicy` lived in `rotelyx-net`, which is right where it is read and wrong
+# for who else needs it. `rotelyx-media` uses it for one decision and got the
+# whole transport with it, including `ring`, which does not build for wasm32. So
+# the media layer could not reach a browser because of an enum with four
+# variants and two methods that match on themselves.
+[dependencies]

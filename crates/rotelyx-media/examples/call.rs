@@ -24,7 +24,7 @@ use rotelyx_codec::{TelyxDecoder, TelyxEncoder};
 use rotelyx_media::transport::{MediaIn, MediaOut};
 use rotelyx_media::{Mode, Playout};
 use rotelyx_media::SenderKeys;
-use rotelyx_net::PathPolicy;
+use rotelyx_path::PathPolicy;
 use std::collections::VecDeque;
 
 const BYTES_PER_FRAME: usize = 60; // 24 kbit/s

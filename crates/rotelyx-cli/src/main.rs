@@ -23,7 +23,7 @@ use rotelyx_core::{
     RotelyxEndpoint, RotelyxId,
 };
 use rotelyx_crypto::{Conversation, Member};
-use rotelyx_net::{EndpointAddr, NetConfig, PathPolicy, RelayPolicy, RelayUrl};
+use rotelyx_net::{EndpointAddr, NetConfig, PathPolicy, RelayPolicy, RelayUrl, SecretKey};
 use rotelyx_audio::Call;
 
 #[derive(Parser, Debug)]
@@ -119,14 +119,54 @@ fn now_epoch() -> Result<u64> {
 }
 
 /// Show what the user needs to compare out of band before trusting the session.
-fn print_safety_number(me: &Identity, peer: RotelyxId) {
+/// Refuse a session whose peer is blocked.
+///
+/// The transport check in `Gate::admit` cannot do this any more: an endpoint
+/// bound under an invitation's key authenticates that key, and a blocklist
+/// holds identities. Without this, blocking would report success and do
+/// nothing, which is the one outcome worse than not having it.
+fn refuse_if_blocked(gate: &Gate, conversation: &Conversation) -> Result<()> {
+    let identities: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
+    if let Some(id) = gate.blocked_member(&identities) {
+        bail!("{id} is blocked. Closing.");
+    }
+    Ok(())
+}
+
+/// The safety number, over the identity the group authenticated.
+///
+/// # Why not over the transport peer
+///
+/// It used to be, and that was correct while the transport key was the identity
+/// key. It is not any more: an invitation is answered on a key of its own, so
+/// the peer a handshake authenticates is a value that belongs to one
+/// conversation and says nothing about who is behind it. A safety number over
+/// that verifies that nobody swapped the key, which is not what anybody reads
+/// it out loud for.
+///
+/// The identity is inside, where MLS put it, and that is what this compares.
+/// Read after the handshake rather than before it, which is later than a user
+/// might like and is the only point at which the number means anything.
+fn print_safety_number(me: &Identity, conversation: &Conversation) {
+    let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
+
     println!();
-    println!("  peer          {peer}");
-    println!("  safety number {}", me.safety_number(&peer));
-    println!();
-    println!("  Read those digits to your peer over a channel Rotelyx does not");
-    println!("  control. If they differ, someone is in the middle: the");
-    println!("  transport authenticated a key, not a person.");
+    match rotelyx_core::peer_identity(&roster, me.id()) {
+        Some(peer) => {
+            println!("  peer          {peer}");
+            println!("  safety number {}", me.safety_number(&peer));
+            println!();
+            println!("  Read those digits to your peer over a channel Rotelyx does not");
+            println!("  control. If they differ, somebody is in the middle.");
+            println!();
+            println!("  This is their identity, not the address you called. Those are");
+            println!("  different values now, and only this one is the person.");
+        }
+        None => {
+            println!("  no peer identity in the group, which should not happen.");
+            println!("  Do not trust this session.");
+        }
+    }
     println!();
 }
 
@@ -319,6 +359,7 @@ async fn main() -> Result<()> {
             let invitation = Invitation::issue(expires);
             let stored = StoredInvitation {
                 secret: *invitation.secret_bytes(),
+                transport: *invitation.transport_bytes(),
                 expires_at_epoch: expires,
             };
             let code = stored.code();
@@ -329,8 +370,12 @@ async fn main() -> Result<()> {
             println!();
             println!("  {code}");
             println!();
-            println!("The holder connects with:");
-            println!("  rotelyx connect <address> --invite {code}");
+            println!("The holder connects with just that:");
+            println!("  rotelyx connect {code}");
+            println!();
+            println!("It carries the address as well as the permission, and that");
+            println!("address belongs to this invitation alone. It is not your");
+            println!("identity, and a relay carrying the traffic never sees one.");
         }
 
         Command::Block { id } => {
@@ -372,11 +417,15 @@ async fn main() -> Result<()> {
             let epoch = now_epoch()?;
             let blocks = Blocklist::load(&paths.blocks)?;
 
+            // Loaded before the gate, because they decide two things now: who is
+            // admitted, and which key this endpoint answers on.
+            let live = store::load_invitations(&paths.invitations, epoch)?;
+
             let mut gate = if open {
                 eprintln!("WARNING: accepting anyone who connects");
                 Gate::new(ReachabilityPolicy::Open)
             } else {
-                let invitations = store::load_invitations(&paths.invitations, epoch)?;
+                let invitations = &live;
                 if invitations.is_empty() {
                     bail!(
                         "no live invitations in {}. Run `rotelyx invite` first, \
@@ -386,7 +435,7 @@ async fn main() -> Result<()> {
                 }
                 let mut gate = Gate::invitation_only();
                 let count = invitations.len();
-                for inv in &invitations {
+                for inv in invitations {
                     gate.add_invitation(inv.to_invitation());
                 }
                 eprintln!("admitting holders of {count} live invitation(s)");
@@ -406,58 +455,152 @@ async fn main() -> Result<()> {
             // both peers must be reachable to each other, which on one machine
             // or one LAN they are. With it, relayed and never direct.
             let config = net_config(relay.as_deref())?;
-            let endpoint = RotelyxEndpoint::bind(&identity, config.clone()).await?;
+
+            // Which key to answer on.
+            //
+            // An invitation now carries an address of its own, so answering
+            // means binding that invitation's key rather than the identity's.
+            // The identity never reaches the wire and a relay carrying this
+            // sees a value that belongs to one conversation.
+            //
+            // **One invitation at a time.** A relay connection carries one key
+            // (`client_key` in the relay handshake), so being reachable on two
+            // invitations at once means two connections, and multiplexing them
+            // is not built. The newest live one is used and the rest are still
+            // admitted if their holder somehow reaches this address, which is
+            // the honest behaviour rather than pretending they are unreachable.
+            let newest = live.iter().max_by_key(|i| i.expires_at_epoch);
+            let endpoint = match (newest, open) {
+                (Some(inv), _) => {
+                    let key = SecretKey::from_bytes(&inv.transport);
+                    RotelyxEndpoint::bind_as(&identity, key, config.clone()).await?
+                }
+                // An open host publishes one address and keeps it, so it answers
+                // on the identity. There is nobody to hide it from: it is
+                // already telling strangers where it is.
+                (None, true) => RotelyxEndpoint::bind(&identity, config.clone()).await?,
+                (None, false) => bail!(
+                    "no live invitation to answer on. Issue one with `rotelyx invite`, \
+                     or pass --open to answer on this identity"
+                ),
+            };
             let addr = endpoint.addr();
 
-            println!("listening as {}", endpoint.id());
-            println!();
-            println!("  rotelyx connect '{}'", encode_addr(&addr, &config)?);
-            println!();
+            match newest {
+                Some(inv) => {
+                    println!("answering one invitation. Hand the holder its code:");
+                    println!();
+                    println!("  rotelyx connect {}", inv.code());
+                    println!();
+                    println!("That code is the address as well as the permission, and");
+                    println!("the address is not this identity.");
+                }
+                None => {
+                    println!("listening as {}", endpoint.id());
+                    println!();
+                    println!("  rotelyx connect '{}'", encode_addr(&addr, &config)?);
+                    println!();
+                }
+            }
 
             let mut session = endpoint
                 .accept_with(&gate, epoch)
                 .await
                 .context("accepting")?;
-            print_safety_number(&identity, session.peer());
-
             let me = Member::new(identity.id().as_bytes()).context("creating member")?;
             let conversation = handshake::host(&mut session, &me).await?;
+            refuse_if_blocked(&gate, &conversation)?;
+            print_safety_number(&identity, &conversation);
             chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
             endpoint.close().await;
         }
 
         Command::Connect { addr, invite, relay } => {
-            let addr = decode_addr(&addr)?;
             let epoch = now_epoch()?;
 
-            let evidence = match invite {
-                Some(code) => {
+            // A transport key for this call and nothing else.
+            //
+            // The relay sees this and never the identity. It is generated here
+            // rather than stored, so two calls to the same person are two
+            // unrelated values to anybody carrying them. The identity is still
+            // authenticated, inside, where an operator cannot look.
+            let transport = RotelyxEndpoint::ephemeral_transport_key();
+            let calling_as: RotelyxId = transport.public().into();
+
+            // An invitation code carries where to call as well as permission to.
+            // A bare address is still accepted, for a host running --open.
+            let code = invite.as_deref().or(Some(addr.as_str()));
+            let (evidence, addr) = match code {
+                Some(text) => {
                     let bytes = data_encoding::BASE64URL_NOPAD
-                        .decode(code.trim().as_bytes())
+                        .decode(text.trim().as_bytes())
                         .context("invitation is not valid base64")?;
-                    let secret: [u8; 32] = bytes
-                        .as_slice()
-                        .try_into()
-                        .context("invitation secret is not 32 bytes")?;
-                    // Expiry is the issuer's to enforce; we only prove holding.
-                    let invitation = Invitation::from_secret(secret, u64::MAX);
-                    Admission::Invitation {
-                        proof: invitation.prove(&identity.id(), epoch),
-                        epoch,
+
+                    match Invitation::read_code(&bytes) {
+                        Ok((secret, host)) => {
+                            // Expiry is the issuer's to enforce; we prove holding.
+                            let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
+                            // The code names who to call and not where. A bare
+                            // id is not routable: the transport reports "no
+                            // addressing information" and stops, because
+                            // address lookup is deliberately not configured
+                            // and never will be.
+                            //
+                            // The relay is where. Which is also why an
+                            // invitation address is only reachable through
+                            // one: it is a key belonging to nobody, and
+                            // nothing on the network knows where it lives.
+                            let mut to = EndpointAddr::from(host.endpoint_id());
+                            let cfg = net_config(relay.as_deref())?;
+                            for url in cfg.relays().urls() {
+                                to.addrs
+                                    .insert(rotelyx_net::TransportAddr::Relay(url.clone()));
+                            }
+                            if to.addrs.is_empty() {
+                                bail!(
+                                    "an invitation address is reachable only through a relay, \
+                                     and none was given. Pass --relay <url>, the same one the \
+                                     other side is answering on"
+                                );
+                            }
+
+                            (
+                                Admission::Invitation {
+                                    proof: invitation.prove(&calling_as, epoch),
+                                    epoch,
+                                },
+                                to,
+                            )
+                        }
+                        // Not an invitation code, so it is a plain address.
+                        Err(_) => (Admission::None, decode_addr(&addr)?),
                     }
                 }
-                None => Admission::None,
+                None => (Admission::None, decode_addr(&addr)?),
             };
 
-            let endpoint = RotelyxEndpoint::bind(&identity, net_config(relay.as_deref())?).await?;
+            let endpoint =
+                RotelyxEndpoint::bind_as(&identity, transport, net_config(relay.as_deref())?)
+                    .await?;
             let mut session = endpoint
                 .connect_with(addr, &evidence)
                 .await
                 .context("connecting")?;
-            print_safety_number(&identity, session.peer());
-
             let me = Member::new(identity.id().as_bytes()).context("creating member")?;
             let conversation = handshake::join(&mut session, &me).await?;
+
+            // The caller checks too. Blocking somebody and then dialling them
+            // and talking is not blocking, and the person on the other end has
+            // no way to know you meant to refuse.
+            {
+                let mut gate = Gate::invitation_only();
+                for id in Blocklist::load(&paths.blocks)?.iter() {
+                    gate.block(*id);
+                }
+                refuse_if_blocked(&gate, &conversation)?;
+            }
+
+            print_safety_number(&identity, &conversation);
             chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
             endpoint.close().await;
         }

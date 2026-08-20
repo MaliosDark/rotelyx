@@ -94,6 +94,8 @@ fn issue_invitation(app: tauri::State<'_, Arc<App>>, hours: u64) -> Result<Strin
     let invitation = Invitation::issue(expires);
     let stored = StoredInvitation {
         secret: *invitation.secret_bytes(),
+        // The address this invitation is answered on. See `Invitation`.
+        transport: *invitation.transport_bytes(),
         expires_at_epoch: expires,
     };
     let code = stored.code();

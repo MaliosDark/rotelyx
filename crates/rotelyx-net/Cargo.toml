@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+rotelyx-path = { path = "../rotelyx-path" }
 # The transport stack lives in this repository under crates/net/: there is no
 # upstream package download. `rotelyx-net` owns every policy decision above it:
 # relay selection, path selection, discovery. No code path here may reach

@@ -9,6 +9,8 @@
 //! config value is a bug you find in production; a missing constructor is a bug
 //! you find at compile time.
 
+pub use rotelyx_path::PathPolicy;
+
 use std::fmt;
 
 use rotelyx_transport::RelayUrl;
@@ -52,70 +54,6 @@ impl RelayPolicy {
     }
 }
 
-/// How a path is chosen once more than one is available.
-///
-/// Upstream optimises for latency, which is the right objective for a general
-/// transport and the wrong one for a private messenger: given a fast relayed
-/// path and a slow direct one, latency-first hands your social graph to the
-/// relay operator to save 20ms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PathPolicy {
-    /// Lowest latency wins, relayed or not. Matches upstream behaviour.
-    ///
-    /// Provided for benchmarking against the privacy-preserving policies. Not
-    /// a sensible production choice for Rotelyx.
-    Fastest,
-
-    /// Prefer any direct path over any relayed path, regardless of latency.
-    ///
-    /// Falls back to relay when no direct path exists. The default: it keeps
-    /// the system usable while ensuring a relay only ever carries traffic that
-    /// had nowhere else to go.
-    PreferDirect,
-
-    /// Use a relay only until a direct path is available, then never again for
-    /// this session, and surface the transition to the user.
-    ///
-    /// Costs a visible reconnect. Buys a bounded window of relay exposure
-    /// rather than an open-ended one.
-    DirectOnceAvailable,
-
-    /// Never take a direct path. Relay or nothing.
-    ///
-    /// # Why a policy exists whose whole purpose is to be slower
-    ///
-    /// The other three trade latency for keeping a relay operator out of your
-    /// social graph, because for a message the alternative exposure is to an
-    /// operator. **A call inverts that.** On a direct path the other party
-    /// learns your address, and in a group call every participant does, so the
-    /// exposure that matters is to whoever is on the call rather than to a
-    /// server.
-    ///
-    /// A messenger whose call feature hands your address to whoever rings you
-    /// cannot claim to protect anybody, so this is what media uses and there is
-    /// no switch to turn it off.
-    ///
-    /// If no relay is reachable the connection fails, which is the honest
-    /// outcome for a policy whose entire promise is that a direct path is never
-    /// taken.
-    RelayOnly,
-}
-
-impl PathPolicy {
-    /// Whether a relayed path is acceptable when a direct one exists.
-    pub fn tolerates_relay_alongside_direct(&self) -> bool {
-        matches!(self, Self::Fastest | Self::RelayOnly)
-    }
-
-    /// Whether a direct path may ever be used.
-    ///
-    /// The one question media asks. A `false` here is what stops a call from
-    /// silently becoming an address disclosure the moment hole punching
-    /// succeeds.
-    pub fn permits_direct(&self) -> bool {
-        !matches!(self, Self::RelayOnly)
-    }
-}
 
 /// Whether the endpoint publishes its address anywhere discoverable.
 ///

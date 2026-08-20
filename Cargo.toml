@@ -5,6 +5,7 @@ resolver = "2"
 exclude = ["crates/net"]
 members = [
     "crates/rotelyx-net",
+    "crates/rotelyx-path",
     "crates/rotelyx-core",
     "crates/rotelyx-crypto",
     "crates/rotelyx-media",
@@ -83,6 +84,7 @@ clap = { version = "4", features = ["derive"] }
 
 # --- internal ---
 rotelyx-net = { path = "crates/rotelyx-net" }
+rotelyx-path = { path = "crates/rotelyx-path" }
 rotelyx-codec = { path = "crates/rotelyx-codec" }
 rotelyx-status = { path = "crates/rotelyx-status" }
 rotelyx-core = { path = "crates/rotelyx-core" }

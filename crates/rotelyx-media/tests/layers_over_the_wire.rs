@@ -13,7 +13,7 @@ use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder, LayeredFrame};
 use rotelyx_codec::mdct::{self, FRAME, WINDOW};
 use rotelyx_media::transport::{MediaIn, MediaOut};
 use rotelyx_media::SenderKeys;
-use rotelyx_net::PathPolicy;
+use rotelyx_path::PathPolicy;
 use std::f32::consts::PI;
 
 const BYTES_PER_FRAME: usize = 60;

@@ -178,17 +178,24 @@ impl Blocklist {
 #[derive(Debug, Clone)]
 pub struct StoredInvitation {
     pub secret: [u8; 32],
+    /// The transport key this invitation is answered on.
+    ///
+    /// Stored rather than derived, because the holder of the code must not be
+    /// able to work it out: it is the private key of the endpoint they call.
+    pub transport: [u8; 32],
     pub expires_at_epoch: u64,
 }
 
 impl StoredInvitation {
     pub fn to_invitation(&self) -> Invitation {
-        Invitation::from_secret(self.secret, self.expires_at_epoch)
+        Invitation::from_parts(self.secret, self.transport, self.expires_at_epoch)
     }
 
-    /// The code to hand to the person being invited.
+    /// The code to hand to the person being invited: the secret, and the
+    /// address to call. Sixty four bytes rather than thirty two, because an
+    /// address that is not the identity has to travel somehow.
     pub fn code(&self) -> String {
-        data_encoding::BASE64URL_NOPAD.encode(&self.secret)
+        data_encoding::BASE64URL_NOPAD.encode(&self.to_invitation().code()[..])
     }
 }
 
@@ -217,14 +224,30 @@ pub fn load_invitations(path: &Path, now_epoch: u64) -> Result<Vec<StoredInvitat
             reason: reason.into(),
         };
 
-        let (code, expiry) = line.split_once(' ').ok_or_else(|| malformed("expected `code expiry`"))?;
-        let bytes = data_encoding::BASE64URL_NOPAD
-            .decode(code.as_bytes())
-            .map_err(|_| malformed("code is not valid base64"))?;
-        let secret: [u8; 32] = bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| malformed("secret is not 32 bytes"))?;
+        // `secret transport expiry`. A line with two fields is from a build
+        // before invitations had an address, and is dropped rather than
+        // migrated: it was answered on the identity, there is no transport key
+        // to invent for it, and inventing one would produce an address the
+        // holder of that code has never been told. Reissuing is the migration.
+        let mut fields = line.split_whitespace();
+        let (Some(code), Some(transport), Some(expiry)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+
+        let decode32 = |s: &str, what: &str| -> Result<[u8; 32], StoreError> {
+            let bytes = data_encoding::BASE64URL_NOPAD
+                .decode(s.as_bytes())
+                .map_err(|_| malformed(&format!("{what} is not valid base64")))?;
+            bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| malformed(&format!("{what} is not 32 bytes")))
+        };
+
+        let secret = decode32(code, "secret")?;
+        let transport = decode32(transport, "transport key")?;
         let expires_at_epoch: u64 = expiry
             .trim()
             .parse()
@@ -233,6 +256,7 @@ pub fn load_invitations(path: &Path, now_epoch: u64) -> Result<Vec<StoredInvitat
         if expires_at_epoch >= now_epoch {
             out.push(StoredInvitation {
                 secret,
+                transport,
                 expires_at_epoch,
             });
         }
@@ -241,9 +265,13 @@ pub fn load_invitations(path: &Path, now_epoch: u64) -> Result<Vec<StoredInvitat
 }
 
 pub fn save_invitations(path: &Path, invitations: &[StoredInvitation]) -> Result<(), StoreError> {
-    let mut out = String::from("# Rotelyx invitations. `code expiry-epoch` per line. Treat as passwords.\n");
+    let mut out = String::from(
+        "# Rotelyx invitations. `secret transport expiry-epoch` per line.\n         # The secret authorises and the transport key is the address it is\n         # answered on. Both are secrets: treat this file as a keyring.\n",
+    );
     for inv in invitations {
-        out.push_str(&inv.code());
+        out.push_str(&data_encoding::BASE64URL_NOPAD.encode(&inv.secret));
+        out.push(' ');
+        out.push_str(&data_encoding::BASE64URL_NOPAD.encode(&inv.transport));
         out.push(' ');
         out.push_str(&inv.expires_at_epoch.to_string());
         out.push('\n');
@@ -359,6 +387,7 @@ mod tests {
         let path = tmp("invites");
         let inv = StoredInvitation {
             secret: [3u8; 32],
+            transport: [0x5a; 32],
             expires_at_epoch: 500,
         };
         save_invitations(&path, &[inv.clone()]).expect("save");
@@ -377,8 +406,8 @@ mod tests {
         save_invitations(
             &path,
             &[
-                StoredInvitation { secret: [1u8; 32], expires_at_epoch: 50 },
-                StoredInvitation { secret: [2u8; 32], expires_at_epoch: 500 },
+                StoredInvitation { secret: [1u8; 32], transport: [0x5a; 32], expires_at_epoch: 50 },
+                StoredInvitation { secret: [2u8; 32], transport: [0x5a; 32], expires_at_epoch: 500 },
             ],
         )
         .expect("save");
@@ -394,13 +423,13 @@ mod tests {
         let path = tmp("invites-prune");
         save_invitations(
             &path,
-            &[StoredInvitation { secret: [1u8; 32], expires_at_epoch: 50 }],
+            &[StoredInvitation { secret: [1u8; 32], transport: [0x5a; 32], expires_at_epoch: 50 }],
         )
         .expect("save");
 
         add_invitation(
             &path,
-            StoredInvitation { secret: [9u8; 32], expires_at_epoch: 500 },
+            StoredInvitation { secret: [9u8; 32], transport: [0x5a; 32], expires_at_epoch: 500 },
             100,
         )
         .expect("add");

@@ -157,11 +157,11 @@ impl Engine {
             .context("accepting")?;
 
         let me = Member::new(self.identity.id().as_bytes()).context("creating member")?;
-        self.announce(&session, &endpoint).await;
 
         let conversation = crate::handshake::host(&mut session, &me)
             .await
             .context("MLS handshake")?;
+        self.announce(&endpoint, &conversation).await;
 
         self.chat(session, conversation, me, rx).await;
         endpoint.close().await;
@@ -209,19 +209,37 @@ impl Engine {
             .context("connecting")?;
 
         let me = Member::new(self.identity.id().as_bytes()).context("creating member")?;
-        self.announce(&session, &endpoint).await;
 
         let conversation = crate::handshake::join(&mut session, &me)
             .await
             .context("MLS handshake")?;
+        self.announce(&endpoint, &conversation).await;
 
         self.chat(session, conversation, me, rx).await;
         endpoint.close().await;
         Ok(())
     }
 
-    async fn announce(&self, session: &Session, endpoint: &RotelyxEndpoint) {
-        let peer = session.peer();
+    /// # Which value the safety number compares
+    ///
+    /// The identity the group authenticated, not the key the transport did.
+    /// Those were the same value while an endpoint bound under its identity,
+    /// and are not once it binds under an invitation's own key: that key
+    /// belongs to one conversation and says nothing about who is behind it.
+    ///
+    /// Read after the handshake for the same reason. Before it there is no
+    /// identity to compare, only an address.
+    async fn announce(&self, endpoint: &RotelyxEndpoint, conversation: &Conversation) {
+        let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
+        let peer = match rotelyx_core::peer_identity(&roster, self.identity.id()) {
+            Some(id) => id,
+            None => {
+                self.emit(Event::Error {
+                    text: "no peer identity in the group. Do not trust this session.".into(),
+                });
+                return;
+            }
+        };
         // Whether a third party is carrying this session. Shown in the window,
         // because a user deserves to know when a relay is in the path even
         // though it can read nothing.

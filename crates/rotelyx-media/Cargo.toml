@@ -15,7 +15,7 @@ sha2.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
-rotelyx-net.workspace = true
+rotelyx-path = { path = "../rotelyx-path" }
 
 [dev-dependencies]
 # Only the tests know about the codec. The crate itself carries opaque bytes,

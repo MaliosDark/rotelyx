@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use rotelyx_core::{Admission, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint};
+use rotelyx_core::{Admission, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint, RotelyxId};
 use rotelyx_net::NetConfig;
 
 const EPOCH: u64 = 100;
@@ -222,4 +222,74 @@ async fn work_solved_for_someone_else_is_refused() {
         caller.close().await;
     })
     .await;
+}
+
+/// A caller reachable under a key that is not their identity.
+///
+/// # What this pins
+///
+/// The relay's disclosure, that it learns which endpoint talks to which, holds
+/// only while the transport key and the identity key are the same key. They do
+/// not have to be. This binds a caller under a key generated for the session
+/// and shows two things at once: the peer the host authenticates is that key
+/// and not the caller's identity, and the invitation still admits them.
+///
+/// # Why the invitation still works
+///
+/// The proof is a MAC over the caller's transport identity, which is what stops
+/// a proof captured on the wire being replayed by somebody else. That argument
+/// never needed the key to be permanent. It is computed over the ephemeral key
+/// here, and an attacker replaying it would present a different key and fail in
+/// exactly the same way.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_caller_can_be_admitted_under_a_key_that_is_not_their_identity() {
+    with_timeout(async {
+        let host_id = Identity::generate();
+        let caller_id = Identity::generate();
+
+        // The key the relay and the host would see. It belongs to nobody.
+        let transport = RotelyxEndpoint::ephemeral_transport_key();
+        let transport_id: RotelyxId = transport.public().into();
+
+        assert_ne!(
+            transport_id,
+            caller_id.id(),
+            "the ephemeral key is the identity, which defeats the point"
+        );
+
+        let invitation = Invitation::issue(EPOCH + 10);
+        let proof = invitation.prove(&transport_id, EPOCH);
+
+        let mut gate = Gate::invitation_only();
+        gate.add_invitation(invitation);
+
+        let host = RotelyxEndpoint::bind(&host_id, NetConfig::direct_only())
+            .await
+            .expect("bind host");
+        let caller = RotelyxEndpoint::bind_as(&caller_id, transport, NetConfig::direct_only())
+            .await
+            .expect("bind caller");
+
+        let addr = host.addr();
+        let accept = tokio::spawn(async move {
+            let session = host.accept_with(&gate, EPOCH).await;
+            // What the host authenticated is the transport key, not the identity.
+            let seen = session.as_ref().ok().map(|s| s.peer());
+            host.close().await;
+            seen
+        });
+
+        let session = caller
+            .connect_with(addr, &Admission::Invitation { proof, epoch: EPOCH })
+            .await
+            .expect("an invitation proved over the transport key was refused");
+        session.close().await;
+
+        let seen = accept.await.expect("join").expect("the host refused");
+        assert_eq!(seen, transport_id, "the host saw something other than the key used");
+        assert_ne!(seen, caller_id.id(), "the caller's identity reached the wire");
+
+        caller.close().await;
+    })
+    .await
 }

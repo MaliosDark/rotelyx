@@ -5,7 +5,7 @@
 //! concerned with turning a transport session into a stream of Rotelyx frames.
 
 use anyhow::{bail, Result};
-use rotelyx_net::{EndpointAddr, NetConfig, NetEndpoint, NetSession};
+use rotelyx_net::{EndpointAddr, NetConfig, NetEndpoint, NetSession, SecretKey};
 
 use crate::access::{Admission, Gate};
 use crate::identity::{Identity, RotelyxId};
@@ -28,15 +28,64 @@ pub struct RotelyxEndpoint {
 impl RotelyxEndpoint {
     /// Bind an endpoint for this identity.
     ///
+    /// The transport key is the identity key, so the address this endpoint
+    /// hands out **is** the identity, and so is what a relay sees. That is the
+    /// behaviour every caller has today. [`bind_as`](Self::bind_as) is the one
+    /// that separates them.
+    ///
     /// The [`NetConfig`] must be stated explicitly: there is no default that
     /// could reach infrastructure we do not operate. Use
     /// [`NetConfig::direct_only`] for the maximum-privacy posture.
     pub async fn bind(identity: &Identity, config: NetConfig) -> Result<Self> {
-        let net = NetEndpoint::bind(identity.secret_key(), config, ALPN).await?;
+        Self::bind_as(identity, identity.secret_key(), config).await
+    }
+
+    /// Bind under a transport key that is not this identity.
+    ///
+    /// # What this is for
+    ///
+    /// A relay carries traffic it cannot read, and still learns which endpoint
+    /// talks to which, because the endpoint key is the identity key and never
+    /// changes. That is the disclosure this project has recorded as inherent
+    /// and it is only inherent while those two keys are the same key.
+    ///
+    /// Given a transport key of its own, an endpoint is reachable and the relay
+    /// learns a value that means nothing beyond this session. The identity is
+    /// still authenticated, inside, where an operator cannot see it.
+    ///
+    /// # Why the invitation still binds
+    ///
+    /// An invitation proof is a MAC over the caller's transport identity, so
+    /// that a proof captured on the wire cannot be replayed by somebody else.
+    /// That argument does not depend on the key being permanent: an attacker
+    /// replaying a captured proof presents their own transport key, the MAC is
+    /// over a different value, and it fails exactly as before.
+    ///
+    /// # What it does cost
+    ///
+    /// Blocking. A blocklist holds identities, and an identity that changes
+    /// every session cannot be listed. The answer is not a longer list: it is
+    /// that a contact reached under a key of their own is blocked by discarding
+    /// that key, which is stronger, because a discarded key is not refused, it
+    /// is unreachable. That is the next piece and it is not built yet.
+    pub async fn bind_as(
+        identity: &Identity,
+        transport: SecretKey,
+        config: NetConfig,
+    ) -> Result<Self> {
+        let net = NetEndpoint::bind(transport, config, ALPN).await?;
         Ok(Self {
             id: identity.id(),
             net,
         })
+    }
+
+    /// A transport key for one session, belonging to no identity.
+    ///
+    /// Generated from the OS entropy source and never written down. Pair it
+    /// with [`bind_as`](Self::bind_as).
+    pub fn ephemeral_transport_key() -> SecretKey {
+        SecretKey::generate()
     }
 
     pub fn id(&self) -> RotelyxId {

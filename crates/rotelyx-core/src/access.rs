@@ -24,6 +24,8 @@ use std::time::Duration;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
+use rotelyx_transport_base::SecretKey;
+
 use crate::identity::RotelyxId;
 
 const POW_CONTEXT: &str = "rotelyx contact proof-of-work v1";
@@ -67,6 +69,12 @@ pub enum AccessError {
 
     #[error("caller is blocked")]
     Blocked,
+
+    /// A code that is not the right length, or whose address half is not a
+    /// point on the curve. Said the same way for both, because telling a caller
+    /// which half they got wrong is telling them something about the other.
+    #[error("invitation code is malformed")]
+    Malformed,
 
     #[error("admission evidence is malformed")]
     MalformedAdmission,
@@ -171,6 +179,26 @@ pub fn estimated_cost(difficulty: u8) -> Duration {
 // Invitations
 // ---------------------------------------------------------------------------
 
+/// The identity a group authenticated, as opposed to the key a transport did.
+///
+/// # Why these are two different values
+///
+/// An endpoint bound under its identity authenticates that identity, and a
+/// transport peer and a person were the same thing. An endpoint bound under an
+/// invitation's own key authenticates that key, which belongs to one
+/// conversation and says nothing about who is behind it.
+///
+/// A safety number over the second verifies that nobody swapped a single-use
+/// key. Nobody reads digits out loud for that. This is the value to compare.
+pub fn peer_identity(roster: &[Vec<u8>], me: RotelyxId) -> Option<RotelyxId> {
+    roster
+        .iter()
+        .filter_map(|raw| <[u8; 32]>::try_from(raw.as_slice()).ok())
+        .filter_map(|b| rotelyx_transport_base::EndpointId::from_bytes(&b).ok())
+        .map(RotelyxId::from)
+        .find(|id| *id != me)
+}
+
 /// A capability issued by one identity so another can reach it.
 ///
 /// Shared out of band: a QR code, a link, a spoken string. Possession is the
@@ -179,24 +207,127 @@ pub fn estimated_cost(difficulty: u8) -> Duration {
 pub struct Invitation {
     secret: Zeroizing<[u8; 32]>,
     expires_at_epoch: u64,
+    /// The address this invitation is answered on.
+    ///
+    /// # Why an invitation carries an address at all
+    ///
+    /// An identity that listens under its own key is reachable at one address
+    /// for everybody, and a relay carrying that traffic learns which endpoint
+    /// talks to which however little it can read. That disclosure exists only
+    /// because the transport key and the identity key are the same key.
+    ///
+    /// Giving each invitation a key of its own removes it. Every contact
+    /// reaches a different address, none of which is the identity, and a relay
+    /// sees values that say nothing about who is behind them.
+    ///
+    /// It also replaces blocking with something stronger. A blocklist refuses a
+    /// caller who still reached you; **discarding an invitation's key means the
+    /// address stops existing.** There is nothing to refuse and nothing to
+    /// probe.
+    ///
+    /// # Why the secret half is not derived from the invitation secret
+    ///
+    /// Deriving it would be tidier: the holder of the code could work out the
+    /// address without being told. It would also hand the holder the private
+    /// key of the endpoint they are calling, which is an impersonation of the
+    /// host to its own relay. The public half travels in the code; the private
+    /// half never leaves the issuer.
+    transport: Zeroizing<[u8; 32]>,
 }
 
 impl Invitation {
     /// Issue an invitation valid until `expires_at_epoch`.
+    ///
+    /// Generates both halves: the secret that authorises, and the transport key
+    /// this invitation will be answered on.
     pub fn issue(expires_at_epoch: u64) -> Self {
         let mut secret = [0u8; 32];
         getrandom::fill(&mut secret).expect("OS CSPRNG unavailable");
+        let mut transport = [0u8; 32];
+        getrandom::fill(&mut transport).expect("OS CSPRNG unavailable");
         Self {
             secret: Zeroizing::new(secret),
             expires_at_epoch,
+            transport: Zeroizing::new(transport),
         }
     }
 
-    pub fn from_secret(secret: [u8; 32], expires_at_epoch: u64) -> Self {
+    /// Rebuild one that was stored.
+    pub fn from_parts(secret: [u8; 32], transport: [u8; 32], expires_at_epoch: u64) -> Self {
         Self {
             secret: Zeroizing::new(secret),
             expires_at_epoch,
+            transport: Zeroizing::new(transport),
         }
+    }
+
+    /// Rebuild one stored before invitations had an address of their own.
+    ///
+    /// The transport key is generated fresh, which is correct rather than a
+    /// fallback: an invitation that had no address was answered on the
+    /// identity's, and giving it one now is the whole improvement. The holder
+    /// of the old code needs the new one, and that is a real migration cost
+    /// rather than something to paper over.
+    pub fn from_secret(secret: [u8; 32], expires_at_epoch: u64) -> Self {
+        let mut transport = [0u8; 32];
+        getrandom::fill(&mut transport).expect("OS CSPRNG unavailable");
+        Self {
+            secret: Zeroizing::new(secret),
+            expires_at_epoch,
+            transport: Zeroizing::new(transport),
+        }
+    }
+
+    /// The transport key this invitation is answered on. Issuer only.
+    pub fn transport_bytes(&self) -> Zeroizing<[u8; 32]> {
+        self.transport.clone()
+    }
+
+    /// The address a holder of this invitation should call.
+    ///
+    /// Derived from the transport key, so it is the same value the issuer will
+    /// be listening on and nothing has to be carried alongside the code.
+    pub fn address(&self) -> RotelyxId {
+        RotelyxId::from(SecretKey::from_bytes(&self.transport).public())
+    }
+
+    /// The whole thing as one string to hand over: the secret that authorises,
+    /// and the address to call.
+    ///
+    /// # Why both travel together
+    ///
+    /// Before this, reaching somebody took two strings: an address and an
+    /// invitation code, and the address was the identity, the same one for
+    /// everybody. One string now, and the address in it belongs to this
+    /// invitation alone. Handing somebody a way in stopped being the same as
+    /// handing them your name.
+    ///
+    /// The secret half is a password. The address half is not, and is useless
+    /// without it: calling that address without the proof is refused like any
+    /// other stranger.
+    pub fn code(&self) -> Zeroizing<[u8; 64]> {
+        let mut out = [0u8; 64];
+        out[..32].copy_from_slice(&self.secret[..]);
+        out[32..].copy_from_slice(self.address().as_bytes());
+        Zeroizing::new(out)
+    }
+
+    /// Read a code handed over by an issuer: the secret, and where to call.
+    ///
+    /// Returns the two halves rather than an `Invitation`, because a caller
+    /// holds neither the transport secret nor the expiry and must not be able
+    /// to pretend it does.
+    pub fn read_code(code: &[u8]) -> Result<([u8; 32], RotelyxId), AccessError> {
+        if code.len() != 64 {
+            return Err(AccessError::Malformed);
+        }
+        let mut secret = [0u8; 32];
+        secret.copy_from_slice(&code[..32]);
+        let mut addr = [0u8; 32];
+        addr.copy_from_slice(&code[32..]);
+        let id = rotelyx_transport_base::EndpointId::from_bytes(&addr)
+            .map_err(|_| AccessError::Malformed)?;
+        Ok((secret, RotelyxId::from(id)))
     }
 
     /// The bytes to encode into a QR code or link. Treat as a password.
@@ -293,6 +424,125 @@ impl ReachabilityPolicy {
 mod tests {
     use super::*;
     use crate::identity::Identity;
+
+    /// Blocking survives the transport key no longer being the identity.
+    ///
+    /// # The hole this closes
+    ///
+    /// `admit` checks the blocklist against whatever the transport
+    /// authenticated. Once an endpoint answers on an invitation's own key, that
+    /// is a value the blocklist can never contain, so every blocked caller
+    /// passes the check. The failure is silent, which makes it worse than
+    /// having no blocking: somebody is told the block worked and is reachable
+    /// anyway.
+    ///
+    /// This is the check that runs on the identity the group authenticated,
+    /// which is the value a person actually blocked.
+    #[test]
+    fn a_blocked_identity_is_found_behind_an_ephemeral_key() {
+        let blocked = Identity::generate();
+        let allowed = Identity::generate();
+
+        let mut gate = Gate::invitation_only();
+        gate.block(blocked.id());
+
+        // What the transport would authenticate: a key belonging to nobody.
+        let ephemeral = Identity::generate().id();
+        assert!(
+            !gate.is_blocked(&ephemeral),
+            "the transport check cannot see through an ephemeral key, which is the point"
+        );
+
+        // What the group authenticates.
+        let roster = vec![
+            allowed.id().as_bytes().to_vec(),
+            blocked.id().as_bytes().to_vec(),
+        ];
+        assert_eq!(
+            gate.blocked_member(&roster),
+            Some(blocked.id()),
+            "a blocked identity got through behind an ephemeral key"
+        );
+
+        let clean = vec![allowed.id().as_bytes().to_vec()];
+        assert_eq!(gate.blocked_member(&clean), None, "refused somebody not blocked");
+    }
+
+    /// Two invitations from one identity are answered at two addresses, and
+    /// neither is the identity.
+    ///
+    /// This is the property the whole change exists for. A relay carrying both
+    /// conversations sees two unrelated values, and nothing that ties either to
+    /// the person behind them.
+    #[test]
+    fn every_invitation_has_an_address_of_its_own() {
+        let me = Identity::generate();
+        let a = Invitation::issue(100);
+        let b = Invitation::issue(100);
+
+        assert_ne!(a.address(), b.address(), "two invitations share an address");
+        assert_ne!(a.address(), me.id(), "an invitation is answered on the identity");
+        assert_ne!(b.address(), me.id(), "an invitation is answered on the identity");
+    }
+
+    /// The code carries both halves and survives the round trip.
+    #[test]
+    fn a_code_carries_the_secret_and_the_address() {
+        let inv = Invitation::issue(100);
+        let code = inv.code();
+
+        let (secret, addr) = Invitation::read_code(&code[..]).expect("a code we just made");
+        assert_eq!(secret, *inv.secret_bytes(), "the secret did not survive");
+        assert_eq!(addr, inv.address(), "the address did not survive");
+    }
+
+    /// The address in a code is the public half, never the private one.
+    ///
+    /// Deriving the transport key from the invitation secret would have been
+    /// tidier and would have handed every holder the private key of the
+    /// endpoint they are calling. This pins that it did not happen: the code
+    /// contains the address and the transport secret is not recoverable from
+    /// anything in it.
+    #[test]
+    fn a_code_does_not_carry_the_private_half() {
+        let inv = Invitation::issue(100);
+        let code = inv.code();
+        let transport = inv.transport_bytes();
+
+        assert!(
+            !code.windows(32).any(|w| w == &transport[..]),
+            "the transport secret is inside the code that gets handed out"
+        );
+    }
+
+    /// A malformed code is an error, never a panic.
+    ///
+    /// This parser is fed by whatever somebody pasted, so the contract is the
+    /// same as every other parser in this project: reject anything, panic at
+    /// nothing.
+    ///
+    /// Note what is **not** claimed. Most 32-byte values decompress to a valid
+    /// curve point, so a wrong address half usually parses and then fails at
+    /// the handshake instead. The length check is the only structural one there
+    /// is, and pretending otherwise would be a test that reads stronger than it
+    /// is.
+    #[test]
+    fn a_malformed_code_is_refused_and_never_panics() {
+        for len in [0usize, 1, 31, 32, 63, 65, 128, 4096] {
+            assert!(Invitation::read_code(&vec![0x41; len]).is_err(), "accepted {len} bytes");
+        }
+
+        // Exhaustive over one byte at every position of a real code, which is
+        // where a parser that indexes without checking is found.
+        let code = Invitation::issue(100).code();
+        for position in 0..code.len() {
+            for byte in 0u16..=255 {
+                let mut mutated = *code;
+                mutated[position] = byte as u8;
+                let _ = Invitation::read_code(&mutated);
+            }
+        }
+    }
 
     fn ids() -> (RotelyxId, RotelyxId) {
         (Identity::generate().id(), Identity::generate().id())
@@ -727,6 +977,34 @@ impl Gate {
 
     pub fn is_blocked(&self, id: &RotelyxId) -> bool {
         self.blocked.contains(id)
+    }
+
+    /// Whether any identity in a group is blocked.
+    ///
+    /// # Why a second check exists at all
+    ///
+    /// [`Gate::admit`] checks the blocklist against whatever the transport
+    /// authenticated. That was the identity and now need not be: an endpoint
+    /// bound under an invitation's own key authenticates that key, and a
+    /// blocklist of identities cannot match one.
+    ///
+    /// Left there, blocking would fail **silently**, which is worse than not
+    /// having it: somebody would block a person, be told it worked, and be
+    /// reachable by them anyway. The identity is available once the group
+    /// handshake completes, and this is the check that uses it.
+    ///
+    /// It refuses later than the transport check does, so a blocked caller
+    /// still completes a handshake before being dropped and learns that
+    /// something answered. Discarding the invitation they hold is the stronger
+    /// answer, because an address that is not bound cannot be reached at all.
+    /// This is the one that keeps `block <identity>` meaning what it says.
+    pub fn blocked_member(&self, identities: &[Vec<u8>]) -> Option<RotelyxId> {
+        identities
+            .iter()
+            .filter_map(|raw| <[u8; 32]>::try_from(raw.as_slice()).ok())
+            .filter_map(|b| rotelyx_transport_base::EndpointId::from_bytes(&b).ok())
+            .map(RotelyxId::from)
+            .find(|id| self.blocked.contains(id))
     }
 
     /// Decide whether `caller` may open a session.

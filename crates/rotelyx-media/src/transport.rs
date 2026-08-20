@@ -25,7 +25,7 @@
 //! refused, because on a call the address a direct path reveals goes to the
 //! other participants rather than to an operator.
 
-use rotelyx_net::PathPolicy;
+use rotelyx_path::PathPolicy;
 
 use std::collections::BTreeMap;
 
