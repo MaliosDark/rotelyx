@@ -352,12 +352,19 @@ be replayed onto another connection, and the relay refuses an address that is
 already somebody's connection or already answered elsewhere. Taking someone's
 address needs their invitation's secret key.
 
-A permission is for one address. Admission checks which address the caller
-actually dialled, taken from the TLS server name, and only the invitation
-answered there may admit it. Without that the separation would survive being
-looked at but not being tested: a holder who came across an address it suspected
-belonged to the same host could call it, present its own invitation, and read
-the answer.
+A permission is for one address. Admission checks which address the call was
+answered at, and only the invitation answered there may admit it. Without that
+the separation would survive being looked at but not being tested: a holder who
+came across an address it suspected belonged to the same host could call it,
+present its own invitation, and read the answer.
+
+**Answered at, not asked for.** The caller writes the address it is dialling
+into the TLS server name, and a name the endpoint does not hold is answered by
+the key it was bound with regardless. An honest caller rejects a key it did not
+ask for; a hostile one keeps the connection. Reading the caller's own word would
+therefore let it choose: name an address nobody answers at, and the check finds
+no invitation to hold you to. So the endpoint reports what it presented, which
+is the one of the two a caller does not pick.
 
 **What this does not do.** It does not hide the addresses from the relay
 carrying them. They are answered on one connection and the relay holds the table

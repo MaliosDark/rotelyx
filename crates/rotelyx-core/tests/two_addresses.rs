@@ -132,3 +132,51 @@ async fn neither_caller_learns_the_other_address() {
     assert_eq!(seen.len(), 2);
     assert_ne!(seen[0].as_bytes(), seen[1].as_bytes());
 }
+
+/// A caller does not get to name the address it reached.
+///
+/// # The hole this closes
+///
+/// Admission asks which address a call arrived at, so that a permission issued
+/// for one address is worthless at another. The address was read from the TLS
+/// server name, which is written by whoever is dialling, and a name this
+/// endpoint does not hold is answered by the key it was bound with regardless.
+///
+/// An honest caller then rejects a key it did not ask for. A hostile one keeps
+/// the connection, and used to arrive holding a claim of its own choosing:
+/// send a name nobody answers at, and admission saw an address belonging to no
+/// invitation, which is the branch where every invitation is eligible. Present
+/// any live invitation and you are in, whichever address you actually reached,
+/// which is exactly the test the separation exists to prevent.
+///
+/// So the question is what answered, never what was asked for.
+#[tokio::test]
+async fn an_unrecognised_name_is_answered_by_the_endpoints_own_address() {
+    let (host, primary, alias) = host_with_two_addresses().await;
+    let net = host.transport();
+
+    // A name nobody holds. Not the primary, not the alias.
+    let stranger = RotelyxEndpoint::ephemeral_transport_key().public();
+    assert_ne!(stranger, primary.id);
+    assert_ne!(stranger, alias.id);
+
+    assert_eq!(
+        net.answered_as(Some(stranger)),
+        primary.id,
+        "a name this endpoint does not hold must resolve to the key it was bound with",
+    );
+    assert_eq!(
+        net.answered_as(None),
+        primary.id,
+        "saying nothing must not mean saying any address at all",
+    );
+
+    // And the names it does hold still resolve to themselves, or the whole
+    // arrangement would collapse into one address again.
+    assert_eq!(net.answered_as(Some(primary.id)), primary.id);
+    assert_eq!(
+        net.answered_as(Some(alias.id)),
+        alias.id,
+        "an address this endpoint answers at must resolve to itself",
+    );
+}

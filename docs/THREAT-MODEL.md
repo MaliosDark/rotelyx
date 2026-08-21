@@ -144,6 +144,15 @@ timing and volume across the whole network.
 *Capability:* sees that a device received a wake signal, and when.
 
 - **Defended:** A1: pushes carry no content.
+- **Defended:** asking a mailbox whether it wakes a given device. This adversary
+  holds every push token, so a registration that could be refused was a
+  membership oracle pointed straight at it: present a token, and a refusal meant
+  the device is registered here. A wake row is now identified by the token *and*
+  the secret that registered it, so any well formed registration is accepted and
+  gets a row of its own. The owner's row is untouched and still only theirs to
+  revoke, wakes go one per distinct token so extra rows are not extra pushes,
+  and the per-token bound is reached silently. The only refusal left is a
+  malformed token, which depends on what the caller sent and nothing else.
 - **Not defended:** A5, and partially A2 by timing correlation with a mailbox.
 - **Mitigations:** content-free silent wakes, jittered delivery windows, decoy
   pushes. None of these is a solution and all cost battery.
@@ -176,9 +185,13 @@ are just keypairs.
   - **Revocation.** Expiry is a promise about the future; a leaked invitation is
     a problem now, so `Gate::revoke` retires one immediately without affecting
     holders of the others.
-    - **A permission is for one address.** Admission reads the address the
-      caller actually dialled from the TLS server name and admits only on the
-      invitation answered there. Checking the proof alone would let a holder
+    - **A permission is for one address.** Admission reads the address the call
+      was *answered at*, never the one the caller asked for, and admits only on
+      the invitation answered there. The distinction is the whole check: a
+      server name the endpoint does not hold is answered by its own key anyway,
+      so a hostile caller reading its own request back would simply name an
+      address belonging to no invitation and land in the branch where any of
+      them admits. Checking the proof alone would let a holder
       take an address it suspected of belonging to the same identity, call it,
       present its own invitation, and learn from being admitted that the guess
       was right. That would give back by testing what per-invitation addresses

@@ -256,9 +256,30 @@ Everything needed for this is built.
       row was registered with, and the reinstall case is unaffected because a
       reinstalled app is issued a new token and the old row dies on Apple's 410.
       Six tests, two of them end to end over the WebSocket
-- [ ] A refused registration still tells whoever holds a token that this server
-      has a row for it. Closing that would mean reporting success without
-      registering, which leaves a real device believing it will be woken
+- [x] **A refused registration told whoever holds a token that this server had
+      a row for it**, and the parties holding every push token are Apple and
+      Google. The way out was not to lie about registering: a row is now
+      identified by the token **and** the secret, so a caller with a secret of
+      its own gets a row of its own instead of an answer about somebody else's.
+      The owner's row is untouched and still only theirs to revoke, which is
+      what the refusal was protecting. Wakes are sent one per distinct token so
+      extra rows are not extra pushes, and a token holds at most four rows,
+      reached silently because a reply that changed at the bound would be the
+      same oracle a few registrations later
+- [x] **A wake secret had no floor.** `revokeWake` needs no capability and no
+      rate limit, and it removes every row whose secret hashes to what it was
+      given, so a guessable secret was a device anybody could silence. The same
+      measurement that forced the vault cache put that path at thousands of
+      attempts a second. A secret is now absent or at least 32 characters. No
+      client implements `registerWake` yet, which is why this cost nothing to
+      add and why it had to be added before one did
+- [x] **The sweep never removed anything.** It handed each token Apple reported
+      dead to `revoke`, which hashes what it is given and compares it against
+      hashes of secrets. A token is not a secret, so nothing matched: dead rows
+      stayed forever and were pushed to forever, while the log said they had
+      been forgotten. It also meant the reinstall case that justified requiring
+      a secret rested on a mechanism that did nothing. `forget_token` removes by
+      token, with a test
 - [x] **The published systemd units carried the operator's account name and
       home directory**, in files meant to be read by other people. The same
       class of leak the build scripts already refuse in binaries, which slipped

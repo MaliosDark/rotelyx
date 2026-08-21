@@ -8,6 +8,9 @@ pub(super) struct ResolveRawPublicKeyCert {
     /// The key this endpoint was built with, and what an unrecognised caller
     /// is offered.
     key: Arc<rustls::sign::CertifiedKey>,
+    /// The id of `key`, kept so the endpoint can say which address it answered
+    /// at without going back through a certificate.
+    primary: rotelyx_transport_base::EndpointId,
     /// Additional keys this endpoint will also answer as, by the id a caller
     /// names in the TLS server name.
     ///
@@ -21,6 +24,7 @@ impl ResolveRawPublicKeyCert {
     pub(super) fn new(secret_key: &SecretKey) -> Self {
         Self {
             key: Self::certified(secret_key),
+            primary: secret_key.public(),
             extra: Default::default(),
         }
     }
@@ -56,6 +60,26 @@ impl ResolveRawPublicKeyCert {
             .write()
             .expect("resolver lock")
             .insert(secret_key.public(), Self::certified(secret_key));
+    }
+
+    /// The endpoint id actually presented for a given server name.
+    ///
+    /// # Why a caller's word is not enough
+    ///
+    /// The server name is chosen by whoever is dialling, and an unknown one
+    /// falls back to the key this endpoint was built with. An honest caller
+    /// then rejects a key it did not ask for; a hostile one does not, and is
+    /// left holding a connection whose *claimed* address is anything it liked.
+    /// Anything deciding what a caller may do has to ask what was answered,
+    /// never what was asked for.
+    pub(super) fn answered_as(
+        &self,
+        wanted: Option<rotelyx_transport_base::EndpointId>,
+    ) -> rotelyx_transport_base::EndpointId {
+        match wanted {
+            Some(id) if self.extra.read().expect("resolver lock").contains_key(&id) => id,
+            _ => self.primary,
+        }
     }
 
     /// The key to present for a ClientHello, by the name it asked for.

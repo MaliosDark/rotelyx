@@ -79,6 +79,17 @@ impl TlsConfig {
         self.cert_resolver.also_answer_as(secret_key);
     }
 
+    /// Which of this endpoint's addresses answered a caller that asked for
+    /// `wanted`. See [`ResolveRawPublicKeyCert::answered_as`]: a name this
+    /// endpoint does not hold is answered by the key it was built with, so that
+    /// is the address, whatever the caller wrote.
+    pub(crate) fn answered_as(
+        &self,
+        wanted: Option<rotelyx_transport_base::EndpointId>,
+    ) -> rotelyx_transport_base::EndpointId {
+        self.cert_resolver.answered_as(wanted)
+    }
+
     /// Create a TLS client configuration.
     ///
     /// If *keylog* is `true` this will enable logging of the pre-master key to the file in the

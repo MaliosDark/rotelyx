@@ -749,16 +749,29 @@ async fn handle_request(
                 });
             };
 
+            if !wake::secret_is_long_enough(&secret) {
+                // Depends only on what the caller sent, so it is safe to say
+                // exactly what is wrong. See `wake::MIN_SECRET_LEN`.
+                return Some(Reply::Error {
+                    message: format!(
+                        "a wake secret must be absent or at least {} characters: \
+                         revocation needs no capability, so a guessable secret is \
+                         a device anybody can silence",
+                        wake::MIN_SECRET_LEN
+                    ),
+                });
+            }
+
             let device = wake::Device::registering(token, kind, &secret);
             let accepted = server.wake_registry.lock().await.register(device);
 
             if !accepted {
-                // One message for two different refusals: a token this server
-                // will not store, and a token already registered under a secret
-                // the caller could not produce. Naming which would tell whoever
-                // holds a token whether this mailbox has a row for it, and a
-                // token is not a secret. The refusal itself still reveals that
-                // much, which is recorded on `wake::Registry::register`.
+                // The only refusal left is a token this server will not store:
+                // wrong length, or not hexadecimal. That answer depends on what
+                // the caller sent and on nothing this server holds, so it says
+                // nothing about anybody else. A token already registered under
+                // a secret the caller cannot produce is *not* refused, and the
+                // reason is in `wake::Registry::register`.
                 return Some(Reply::Error {
                     message: "that is not a push token this server will accept".into(),
                 });
@@ -1263,7 +1276,7 @@ fn router_stateful(
             loop {
                 ticker.tick().await;
 
-                let devices = waker.wake_registry.lock().await.all();
+                let devices = waker.wake_registry.lock().await.to_wake();
                 if devices.is_empty() {
                     continue;
                 }
@@ -1278,7 +1291,7 @@ fn router_stateful(
                 // counts that against the sender.
                 let mut registry = waker.wake_registry.lock().await;
                 for token in &dead {
-                    registry.revoke(token);
+                    registry.forget_token(token);
                 }
                 drop(registry);
                 info!(gone = dead.len(), "forgot devices Apple says no longer exist");
@@ -1684,7 +1697,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
                     "op": "registerWake",
                     "token": "ab".repeat(32),
                     "kind": "apns",
-                    "secret": "a-secret",
+                    "secret": "11".repeat(32).as_str(),
                 })
                 .to_string(),
             ))
@@ -1720,7 +1733,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
                     "op": "registerWake",
                     "token": "cd".repeat(32),
                     "kind": "apns",
-                    "secret": "a-secret",
+                    "secret": "11".repeat(32).as_str(),
                 })
                 .to_string(),
             ))
@@ -1743,10 +1756,15 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     ///
     /// Requiring a secret to revoke achieved nothing on its own, because
     /// registration replaced any row with a matching token without asking for
-    /// anything. So the attack ran in two steps instead of one: register the
-    /// victim's token with a secret of your own, then revoke it. This is the
-    /// end to end check that the second step can no longer be reached, because
-    /// the first is refused.
+    /// anything. So the attack ran in two steps: register the victim's token
+    /// with a secret of your own, then revoke it.
+    ///
+    /// Both steps are now allowed to run, and neither reaches the victim. The
+    /// attacker's registration gets a row of its own rather than the owner's,
+    /// and its revocation takes only that row away. Letting the first step run
+    /// is deliberate: refusing it told whoever held a token that this server had
+    /// a row for it, and the parties holding every push token are Apple and
+    /// Google.
     #[tokio::test]
     async fn a_stolen_token_cannot_take_over_a_registration_over_the_wire() {
         let (url, server) = spawn_waking_server().await;
@@ -1757,7 +1775,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .send(WsMessage::text(
                 serde_json::json!({
                     "op": "registerWake", "token": token, "kind": "apns",
-                    "secret": "the-owners-secret",
+                    "secret": "22".repeat(32).as_str(),
                 })
                 .to_string(),
             ))
@@ -1771,28 +1789,38 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .send(WsMessage::text(
                 serde_json::json!({
                     "op": "registerWake", "token": token, "kind": "apns",
-                    "secret": "the-attackers-secret",
+                    "secret": "33".repeat(32).as_str(),
                 })
                 .to_string(),
             ))
             .await
             .expect("registerWake");
         let reply = recv_step(&mut attacker, "registerWake").await;
-        assert_eq!(reply["op"], "error", "the takeover was accepted: {reply}");
+        assert_eq!(
+            reply["op"], "wakeRegistered",
+            "a well formed registration answered differently for a token this \
+             server already knew, which answers a question about its owner: {reply}"
+        );
 
         attacker
             .send(WsMessage::text(
-                serde_json::json!({"op": "revokeWake", "secret": "the-attackers-secret"})
+                serde_json::json!({"op": "revokeWake", "secret": "33".repeat(32).as_str()})
                     .to_string(),
             ))
             .await
             .expect("revokeWake");
         recv_step(&mut attacker, "wakeRegistered").await;
 
+        let registry = server.wake_registry.lock().await;
         assert_eq!(
-            server.wake_registry.lock().await.len(),
+            registry.len(),
             1,
             "the device was silenced by somebody who only had its token"
+        );
+        assert_eq!(
+            registry.to_wake().len(),
+            1,
+            "the phone stopped being woken, which is what the takeover was for"
         );
     }
 
@@ -1806,7 +1834,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .send(WsMessage::text(
                 serde_json::json!({
                     "op": "registerWake", "token": "ef".repeat(32), "kind": "apns",
-                    "secret": "mine",
+                    "secret": "44".repeat(32).as_str(),
                 })
                 .to_string(),
             ))
@@ -1816,7 +1844,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
         client
             .send(WsMessage::text(
-                serde_json::json!({"op": "revokeWake", "secret": "mine"}).to_string(),
+                serde_json::json!({"op": "revokeWake", "secret": "44".repeat(32).as_str()}).to_string(),
             ))
             .await
             .expect("revokeWake");
@@ -1889,7 +1917,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
                 "op": "registerWake",
                 "token": "ab".repeat(32),
                 "kind": "apns",
-                "secret": "only-this-phone-knows-this",
+                "secret": "55".repeat(32).as_str(),
             }),
             // Naming the token is not enough, and that is the point: a stranger
             // who learned it could otherwise silence this phone.
@@ -1912,7 +1940,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .send(WsMessage::text(
                 serde_json::json!({
                     "op": "revokeWake",
-                    "secret": "only-this-phone-knows-this",
+                    "secret": "55".repeat(32).as_str(),
                 })
                 .to_string(),
             ))

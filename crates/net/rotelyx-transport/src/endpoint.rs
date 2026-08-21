@@ -1209,6 +1209,19 @@ impl Endpoint {
         self.inner.bind_relay_alias(secret_key.clone())
     }
 
+    /// Which of this endpoint's addresses answered a caller that asked for
+    /// `wanted`, where `wanted` is what the caller put in the TLS server name.
+    ///
+    /// A name this endpoint does not hold is answered by the key it was built
+    /// with, so that is the address. Use this rather than the caller's own
+    /// words anywhere the answer decides what the caller may do: an honest
+    /// caller rejects a key it did not ask for, a hostile one keeps the
+    /// connection, and asking what was *requested* lets it name its own
+    /// address.
+    pub fn answered_as(&self, wanted: Option<EndpointId>) -> EndpointId {
+        self.inner.static_config.tls_config.answered_as(wanted)
+    }
+
     /// Returns the endpoint id of this endpoint.
     ///
     /// This ID is the unique addressing information of this endpoint and other peers must know

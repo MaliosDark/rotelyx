@@ -172,7 +172,16 @@ impl RotelyxEndpoint {
         }
 
         let evidence = Admission::from_bytes(&frame.payload)?;
-        let dialled = session.dialled();
+
+        // Which address answered, not which one the caller says it wanted.
+        //
+        // The caller writes the address it is dialling into the TLS server
+        // name, and a name this endpoint does not hold is answered by the key
+        // it was bound with anyway. An honest caller rejects a key it did not
+        // ask for. A hostile one keeps the connection, and if admission read
+        // the caller's own word it could claim any address it liked, including
+        // none, which is the branch where every invitation is eligible.
+        let dialled = Some(RotelyxId::from(self.net.answered_at(&session.net)));
         if let Err(e) = gate.admit(&session.peer(), &self.id, &evidence, current_epoch, dialled)
         {
             session.close().await;
@@ -224,13 +233,7 @@ impl Session {
         self.peer
     }
 
-    /// Which of this identity's addresses the caller dialled, if it said.
-    ///
-    /// An identity answering one invitation per address needs this to check
-    /// that a caller's permission is for the address it actually used.
-    pub fn dialled(&self) -> Option<RotelyxId> {
-        self.net.dialled().map(RotelyxId::from)
-    }
+
 
     pub async fn send(&mut self, frame: &Frame) -> Result<(), WireError> {
         frame.write(self.net.send_stream()).await

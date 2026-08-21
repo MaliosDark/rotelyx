@@ -84,6 +84,25 @@ impl NetEndpoint {
         self.inner.also_answer_as(key)
     }
 
+    /// Which of this endpoint's addresses answered `session`.
+    ///
+    /// The caller names an address in the TLS server name, and one it does not
+    /// hold is answered by this endpoint's own key. This reports what was
+    /// answered rather than what was asked, which is the only one of the two a
+    /// hostile caller does not choose.
+    pub fn answered_at(&self, session: &NetSession) -> EndpointId {
+        self.answered_as(session.asked_for())
+    }
+
+    /// Which address answers a caller that asked for `wanted`.
+    ///
+    /// `None`, or a name this endpoint does not hold, is answered by the key it
+    /// was bound with. Exposed so the rule can be tested for what it is: the
+    /// point where a caller's claim stops being taken at face value.
+    pub fn answered_as(&self, wanted: Option<EndpointId>) -> EndpointId {
+        self.inner.answered_as(wanted)
+    }
+
     pub fn id(&self) -> EndpointId {
         self.inner.id()
     }
@@ -177,11 +196,13 @@ impl NetSession {
         self.peer
     }
 
-    /// Which of this endpoint's addresses the caller dialled, if it said.
+    /// What the caller *asked* for in the TLS server name, if anything.
     ///
-    /// `None` on a session this endpoint opened, and on an accepted one whose
-    /// caller sent no TLS server name.
-    pub fn dialled(&self) -> Option<EndpointId> {
+    /// Not to be trusted on its own: it is the caller's own word, and an
+    /// unknown name is answered by this endpoint's built-in key anyway. Pass it
+    /// to [`NetEndpoint::answered_at`] to find out which address really
+    /// answered.
+    pub fn asked_for(&self) -> Option<EndpointId> {
         self.conn.dialled_id()
     }
 

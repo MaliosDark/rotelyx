@@ -1100,10 +1100,19 @@ impl Gate {
     /// being let in that the suspicion was right. Requiring the permission to
     /// match the address turns that test into an ordinary refusal.
     ///
-    /// `None`, or an address that is no invitation's, leaves every invitation
-    /// eligible. That covers an identity listening under its own key, which
-    /// gives nothing away: a caller could derive that address from the identity
-    /// on its own.
+    /// # It must be the address that answered
+    ///
+    /// Not the one the caller asked for. The caller writes an address into the
+    /// TLS server name, and a name the endpoint does not hold is answered by
+    /// the key it was bound with anyway. Reading the caller's own word would
+    /// hand it the choice: name an address nobody answers at, land in the
+    /// branch below where every invitation is eligible, and the check is gone.
+    /// [`rotelyx_net::NetEndpoint::answered_at`] is the value to pass.
+    ///
+    /// An address that is no invitation's leaves every invitation eligible.
+    /// That covers an identity listening under its own key, which gives nothing
+    /// away: a caller could derive that address from the identity on its own.
+    /// `None` is accepted for tests and means the same.
     pub fn admit(
         &self,
         caller: &RotelyxId,

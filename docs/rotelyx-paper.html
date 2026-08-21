@@ -1182,10 +1182,15 @@
     </p>
 
     <p>
-      Admission is bound to the address as well as to the permission. The
-      endpoint reads the server name the caller sent and admits only on the
-      invitation answered there, so a proof issued for one address is worthless
-      at another. Omitting that check would leave the separation observable but
+      Admission is bound to the address as well as to the permission: the
+      endpoint admits only on the invitation answered at the address the call
+      arrived on, so a proof issued for one address is worthless at another. The
+      address is the one the endpoint <em>presented</em>, not the one the caller
+      requested in the TLS server name. A requested name the endpoint does not
+      hold is answered by its own key regardless, and an honest caller rejects
+      that while a hostile one keeps the connection; reading the request would
+      therefore let a caller select an address belonging to no invitation and
+      escape the check entirely. Omitting that check would leave the separation observable but
       not testable: a holder encountering an address it suspected of belonging to
       the same host could dial it, present its own invitation, and learn the
       answer from whether it was let in.

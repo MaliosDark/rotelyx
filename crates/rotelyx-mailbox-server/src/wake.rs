@@ -93,6 +93,38 @@ pub const WAKE_EVERY_DEFAULT: u64 = 300;
 /// make this server spend the rest of its life calling Apple.
 pub const MAX_DEVICES: usize = 100_000;
 
+/// The shortest revocation secret this server will store.
+///
+/// # Why there is a floor at all
+///
+/// `revokeWake` needs no capability and no rate limit, and it removes every row
+/// whose secret hashes to what it was given. So a secret somebody can guess is
+/// a device somebody can silence, and guessing is cheap: the same measurement
+/// that made the vault cache necessary put this path at thousands of attempts a
+/// second. The server cannot judge entropy, but it can refuse a length no
+/// random value would have.
+///
+/// A client should send 32 random bytes rendered as hex or base64, which is
+/// comfortably past this. The refusal depends only on what the caller sent, so
+/// it says nothing about anyone else.
+pub const MIN_SECRET_LEN: usize = 32;
+
+/// Whether a secret is long enough to store.
+///
+/// An empty secret is allowed and means a row nobody can revoke, which is a
+/// deliberate choice recorded on [`Registry::register`]. What is refused is a
+/// secret short enough to be reached by guessing.
+pub fn secret_is_long_enough(secret: &str) -> bool {
+    secret.is_empty() || secret.len() >= MIN_SECRET_LEN
+}
+
+/// How many rows one push token may hold.
+///
+/// A row belongs to a secret, so a token gathers a row per party that
+/// registered it. A device needs one. The rest is somebody holding a token it
+/// was not given, and this is what bounds them without letting a refusal say so.
+pub const MAX_ROWS_PER_TOKEN: usize = 4;
+
 /// A push token is hex from Apple. Long enough to be one, short enough not to
 /// be a payload somebody is smuggling through.
 const TOKEN_MIN: usize = 32;
@@ -221,35 +253,91 @@ impl Registry {
     /// its own the next time Apple answers 410 for it. See [`Apns::is_gone`]
     /// and [`sweep`].
     ///
-    /// # What a refusal still reveals
+    /// # Why a token can hold more than one row
     ///
-    /// Refusing tells whoever holds a token that this server has a row for it.
-    /// That is a membership oracle and it is not closed here, because the
-    /// alternative is reporting success without registering, which would leave a
-    /// real device believing it will be woken when it will not. Stated rather
-    /// than hidden: someone who already holds a device token can learn that the
-    /// device uses this mailbox.
+    /// Refusing used to answer a question nobody should be able to ask. A
+    /// caller presenting a token that was already registered under a different
+    /// secret was told no, and that no meant *this server has a row for this
+    /// token* to anybody holding one. The people who hold every push token are
+    /// Apple and Google, so the oracle was open to exactly the party the wake
+    /// design is most careful about.
+    ///
+    /// A row is now identified by the token **and** the secret, so a caller
+    /// with a secret of its own gets a row of its own instead of an answer
+    /// about somebody else's. The owner's row is not touched, not replaced and
+    /// not revocable by anyone who cannot produce its secret, which is the
+    /// protection the refusal was there for in the first place. What is given
+    /// up is the refusal, and the refusal was the leak.
+    ///
+    /// Well formed registrations therefore all look alike from outside. A
+    /// malformed token is still refused, and that reveals nothing: the answer
+    /// depends only on what the caller sent.
+    ///
+    /// # What an extra row costs
+    ///
+    /// Nothing that was not already possible. Somebody holding a token could
+    /// always register it when this server had no row, and a wake carries no
+    /// content: it says only that a mailbox has something. Wakes are sent one
+    /// per distinct token, so extra rows do not mean extra pushes, and
+    /// [`MAX_ROWS_PER_TOKEN`] bounds how many a token can accumulate. At the
+    /// bound the row is dropped and the reply is unchanged, because a reply
+    /// that changed there would be the same oracle again, reached by paying for
+    /// a few registrations first.
     pub fn register(&mut self, device: Device) -> bool {
         if !device.valid() {
             return false;
         }
 
-        match self.devices.iter().find(|d| d.token == device.token) {
-            Some(existing) => {
-                if !secrets_match(&existing.revoke_hash, &device.revoke_hash) {
-                    return false;
-                }
-            }
-            None => {
-                if self.devices.len() >= MAX_DEVICES {
-                    return false;
-                }
-            }
+        // The caller's own row, if it has one: same token, and a secret it can
+        // produce. Replaced rather than duplicated, so a device that registers
+        // again is one row and one wake.
+        let mine = self
+            .devices
+            .iter()
+            .any(|d| d.token == device.token && secrets_match(&d.revoke_hash, &device.revoke_hash));
+        if mine {
+            self.devices.retain(|d| {
+                !(d.token == device.token && secrets_match(&d.revoke_hash, &device.revoke_hash))
+            });
+            self.devices.insert(device);
+            return true;
         }
 
-        self.devices.retain(|d| d.token != device.token);
+        let for_this_token = self
+            .devices
+            .iter()
+            .filter(|d| d.token == device.token)
+            .count();
+        if for_this_token >= MAX_ROWS_PER_TOKEN || self.devices.len() >= MAX_DEVICES {
+            // Not stored, and not reported. See the note above: the only caller
+            // that reaches this has already registered this token several times
+            // over, which a device does not do.
+            return true;
+        }
+
         self.devices.insert(device);
         true
+    }
+
+    /// Forget every row for a token, because the push service says it is gone.
+    ///
+    /// Separate from [`Registry::revoke`] on purpose, and not reachable from
+    /// the wire. Revocation is something a device asks for and proves with a
+    /// secret; this is the server acting on what Apple told it, where the only
+    /// name it has is the token.
+    ///
+    /// # The bug this replaces
+    ///
+    /// The sweep used to hand each dead **token** to `revoke`, which hashes
+    /// what it is given and compares it against hashes of **secrets**. Those
+    /// never match, so nothing was ever removed while the log said devices had
+    /// been forgotten. Dead tokens accumulated and were pushed to forever,
+    /// which Apple counts against the sender, and the reinstall story in
+    /// [`Registry::register`] rested on a sweep that did nothing.
+    pub fn forget_token(&mut self, token: &str) -> bool {
+        let before = self.devices.len();
+        self.devices.retain(|d| d.token != token);
+        before != self.devices.len()
     }
 
     /// Remove one, given the secret it was registered with.
@@ -273,6 +361,27 @@ impl Registry {
 
     pub fn all(&self) -> Vec<Device> {
         self.devices.iter().cloned().collect()
+    }
+
+    /// One row per distinct token, for sending wakes.
+    ///
+    /// A token can hold a row per secret that registered it, and a phone should
+    /// be woken once however many rows name it.
+    ///
+    /// # Why this is not only tidiness
+    ///
+    /// Every registered device is woken on the same schedule on purpose,
+    /// because a device woken on its own rhythm is a device distinguishable by
+    /// it. Waking once per row would break that with volume instead of timing:
+    /// somebody holding a token could give that one device two pushes a cycle
+    /// where everybody else gets one, and the push service can count.
+    pub fn to_wake(&self) -> Vec<Device> {
+        let mut seen = std::collections::BTreeSet::new();
+        self.devices
+            .iter()
+            .filter(|d| seen.insert(d.token.clone()))
+            .cloned()
+            .collect()
     }
 
     pub fn snapshot(&self) -> Vec<Device> {
@@ -624,21 +733,128 @@ mod tests {
         let token = "cd".repeat(32);
         assert!(r.register(Device::registering(token.clone(), "apns".into(), "owner")));
 
-        // The attacker has the token and nothing else.
+        // The attacker has the token and nothing else. It is not told no,
+        // because being told no is being told the row exists, and the parties
+        // holding every push token are the push services themselves. It gets a
+        // row of its own instead of an answer about somebody else's.
         assert!(
-            !r.register(Device::registering(token.clone(), "apns".into(), "attacker")),
-            "a registration with the wrong secret was accepted"
+            r.register(Device::registering(token.clone(), "apns".into(), "attacker")),
+            "a well formed registration must look the same whoever sent it"
         );
 
-        assert!(
-            !r.revoke("attacker"),
-            "the attacker's secret revoked a device it never registered"
+        // The phone is one phone, so it is still woken once.
+        assert_eq!(
+            r.to_wake().len(),
+            1,
+            "an extra row turned into an extra push"
         );
-        assert_eq!(r.len(), 1, "the row was removed or duplicated");
 
-        // And the owner still has control, which is the other half of the
-        // failure: a takeover also locks the real owner out.
+        // What the attacker gained is control of what it registered, and
+        // nothing else. The owner's row is not its to remove.
+        assert!(r.revoke("attacker"));
+        assert_eq!(
+            r.len(),
+            1,
+            "revoking the attacker's row took the owner's with it"
+        );
         assert!(r.revoke("owner"), "the owner lost control of their own device");
+        assert_eq!(r.len(), 0);
+    }
+
+    /// The reply must not depend on what this server already holds.
+    ///
+    /// This is the whole reason a token may hold more than one row. A caller
+    /// that can tell a taken token from a free one can ask, for any device
+    /// token it holds, whether that device uses this mailbox.
+    #[test]
+    fn a_registration_does_not_say_whether_the_token_was_known() {
+        let taken = "cd".repeat(32);
+        let free = "ef".repeat(32);
+
+        let mut r = Registry::new();
+        assert!(r.register(Device::registering(taken.clone(), "apns".into(), "owner")));
+
+        let on_taken = r.register(Device::registering(taken, "apns".into(), "probe"));
+        let on_free = r.register(Device::registering(free, "apns".into(), "probe"));
+        assert_eq!(
+            on_taken, on_free,
+            "the answer differed, so it answered a question about the owner"
+        );
+    }
+
+    /// A token gathers rows, but not without end.
+    ///
+    /// And the bound is reached silently: a reply that changed at the bound
+    /// would be the same oracle, reached by paying for a few registrations
+    /// first.
+    #[test]
+    fn a_token_cannot_gather_rows_without_bound() {
+        let mut r = Registry::new();
+        let token = "cd".repeat(32);
+
+        for n in 0..MAX_ROWS_PER_TOKEN + 3 {
+            assert!(
+                r.register(Device::registering(
+                    token.clone(),
+                    "apns".into(),
+                    &format!("secret-{n}")
+                )),
+                "registration {n} was refused, which says the bound was reached"
+            );
+        }
+
+        assert_eq!(r.len(), MAX_ROWS_PER_TOKEN, "the bound did not hold");
+        assert_eq!(r.to_wake().len(), 1, "one phone, one push");
+    }
+
+    /// A token Apple says is gone must actually leave.
+    ///
+    /// # The bug this catches
+    ///
+    /// The sweep handed each dead token to `revoke`, which hashes what it is
+    /// given and compares it against hashes of secrets. A token is not a
+    /// secret, so nothing ever matched: dead rows stayed forever, were pushed
+    /// to forever, and the log said they had been forgotten.
+    #[test]
+    fn a_token_the_push_service_calls_dead_is_forgotten() {
+        let mut r = Registry::new();
+        let dead = "ab".repeat(32);
+        let alive = "cd".repeat(32);
+        assert!(r.register(Device::registering(dead.clone(), "apns".into(), "one")));
+        assert!(r.register(Device::registering(alive, "apns".into(), "two")));
+
+        assert!(r.forget_token(&dead), "nothing was removed");
+        assert_eq!(r.len(), 1, "the wrong number of rows survived");
+        assert!(!r.forget_token(&dead), "removing it twice reported work");
+
+        // Every row for that token goes, not only the first.
+        let mut r = Registry::new();
+        let token = "ab".repeat(32);
+        r.register(Device::registering(token.clone(), "apns".into(), "one"));
+        r.register(Device::registering(token.clone(), "apns".into(), "two"));
+        assert_eq!(r.len(), 2);
+        assert!(r.forget_token(&token));
+        assert_eq!(r.len(), 0, "a dead token left rows behind");
+    }
+
+    /// A secret short enough to guess is not stored.
+    ///
+    /// Revocation needs no capability and no rate limit, and it removes every
+    /// row whose secret hashes to what it was handed. A short secret is
+    /// therefore a device anybody willing to spend a few seconds can silence.
+    #[test]
+    fn a_secret_must_be_long_enough_to_be_worth_having() {
+        assert!(!secret_is_long_enough("hunter2"));
+        assert!(!secret_is_long_enough(&"a".repeat(MIN_SECRET_LEN - 1)));
+        assert!(secret_is_long_enough(&"a".repeat(MIN_SECRET_LEN)));
+
+        // What a real client sends: 32 random bytes as hex.
+        assert!(secret_is_long_enough(&"ab".repeat(32)));
+
+        // Absent is not short. A row with no secret is one nobody can revoke,
+        // which is a decision recorded on `Registry::register`, not an
+        // accident of length.
+        assert!(secret_is_long_enough(""));
     }
 
     /// A token nobody has claimed still registers freely. Requiring a secret to
@@ -663,11 +879,13 @@ mod tests {
         assert!(r.register(Device::registering(token.clone(), "apns".into(), "")));
 
         assert!(!r.revoke(""), "an empty secret revoked something");
-        assert!(
-            !r.register(Device::registering(token, "apns".into(), "attacker")),
-            "a row with no secret was claimed by supplying one"
-        );
-        assert_eq!(r.len(), 1);
+
+        // The attacker is not told no. It gets a row of its own, and the row
+        // with no secret stays exactly where it was.
+        assert!(r.register(Device::registering(token, "apns".into(), "attacker")));
+        assert!(r.revoke("attacker"));
+        assert_eq!(r.len(), 1, "the row with no secret did not survive");
+        assert!(!r.revoke(""), "the row with no secret became revocable");
     }
 
     #[test]
