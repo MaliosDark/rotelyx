@@ -464,9 +464,18 @@
         break;
 
       // MLS makes membership changes visible. A silent UI discards that.
-      case "group_changed":
-        log(`the group changed, ${m.members} members`, "sys");
+      case "group_changed": {
+        // Who, not how many. One commit can remove a member and add another,
+        // which leaves the count where it was: a line reporting only a number
+        // says "2 members" while the person on the other side has been replaced.
+        const named = [
+          ...(m.added || []).map((id) => `joined ${id}`),
+          ...(m.removed || []).map((id) => `left ${id}`),
+        ];
+        for (const line of named) log(line, "warn");
+        log(`the group is now ${m.members} members`, "sys");
         break;
+      }
 
       case "disconnected":
         log("peer disconnected: " + m.reason, "sys");
