@@ -1,0 +1,72 @@
+# A second pair of ears, and what it found instead
+
+# 21 August 2026. The same three clips, four versions each, blind and in random
+# order, rated by a second listener. The first session is
+# `listening-2026-08-20.txt` and is unchanged.
+#
+# READ THIS BEFORE THE NUMBERS. It is the result of the session.
+#
+#   The rating scale was never shown to anybody. It lived in a comment at the
+#   top of `scripts/listen`, which a listener has no reason to open. What the
+#   script actually printed was "Rate 0-100", with no statement of what the
+#   number meant, so each listener privately decided.
+#
+#   The second listener says they rated on whether the speech was intelligible
+#   and free of noise, and gave 95 to versions that "sounded robotic but you
+#   could still understand everything". On the MUSHRA scale the script claims to
+#   use, audibly robotic is 60 to 40. Speech stays intelligible long after it
+#   stops sounding like the speaker, so rating that way puts everything near 100
+#   and separates nothing: this listener's lowest score of twelve was 87.
+#
+#   The first listener ran the same script and was shown the same nothing.
+#
+#   So these two sessions were rated against two unstated scales. Their means
+#   are not comparable and must not be pooled, and the pooled figures that were
+#   briefly published here have been withdrawn. The script now prints the scale
+#   before every session.
+#
+# The raw ratings, kept because they are real data about something:
+#
+#   rate           A      B
+#   reference   100.0  100.0
+#   24 kbit/s    93.3   96.7
+#   16 kbit/s    88.3   98.3
+#   12 kbit/s    83.3   90.7
+#
+# What survives, being scale independent:
+#
+#   The untouched reference was scored 100 six times out of six, across two
+#   people. Both listeners could pick the original every time, so neither
+#   session is an inattentive one.
+#
+#   By the second listener's own criterion, every rate was fully intelligible on
+#   every clip, 12 kbit/s included. That is worth having and it is not a quality
+#   measurement: it says the words survive, not that the voice does.
+#
+# What does not survive:
+#
+#   Any statement about one rate sounding better than another. That was already
+#   weak with one listener and is now unsupported, because the two sessions
+#   answer different questions.
+#
+#   The second listener also wrote the codec. That was recorded before the
+#   session as a caution and it is still true, but it is now the smaller of the
+#   two problems.
+#
+# To get a first usable measurement: the three clips nobody has heard,
+# nasals_libritts, sibilants_lessac and transients_amy, rated with the scale on
+# screen. Ideally by somebody who did not write the codec.
+
+
+digits_alan_gtvngp 100
+digits_alan_zmpdcp 95
+digits_alan_gyxure 95
+digits_alan_vsuwcu 90
+fricatives_jenny_ertccv 100
+fricatives_jenny_jmxdpn 100
+fricatives_jenny_byxmyu 95
+fricatives_jenny_jknkbq 95
+plosives_ryan_ccpydu 100
+plosives_ryan_rbhrnx 100
+plosives_ryan_twqqfa 100
+plosives_ryan_vwbyms 87

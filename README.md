@@ -91,10 +91,12 @@ forget. That is not a network preference: over a direct path the other side
 sees your address, so a call refuses to start on one.
 
 Measured between two processes through a relay: 991 frames sent and 944
-received in twenty seconds, 79 ms of audio queued, nothing dropped. Somebody
-has also listened to it, once, and that is written down in
-[`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) including what
-it does not show.
+received in twenty seconds, 79 ms of audio queued, nothing dropped. Two people
+have also listened to it, and what that found is written down in
+[`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) and
+[`docs/listening-2026-08-21.txt`](docs/listening-2026-08-21.txt). What it found
+was a broken test: the rating scale was never shown to either listener, so there
+is no perceptual measurement of this codec yet, only the objective one.
 
 **There is no echo cancellation.** On a speakerphone you send the other person
 back to themselves. Use headphones.

@@ -11,8 +11,14 @@
 #   scripts/listen <clip>       a specific clip
 #   scripts/listen --reveal     scores so far, with the mapping
 #
-# The rating scale is the MUSHRA one, so the numbers mean the same thing to
-# everyone who has run one of these:
+# The rating scale is the MUSHRA one, and it is printed at the start of every
+# session. It used to live only in this comment, where no listener ever saw it:
+# the script asked for "a number from 0 to 100" and said nothing about what the
+# number meant, so each listener privately decided. One of them rated on whether
+# the words were intelligible, which they are at every rate, and scored nothing
+# below 87. Two sessions rated against two unstated scales cannot be pooled, and
+# the failure was invisible because the numbers still looked like numbers.
+#
 #
 #   100-80  excellent, cannot tell it from the original
 #    80-60  good, a difference you have to listen for
@@ -29,7 +35,20 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/listening"
-RESULTS="$DIR/ratings.txt"
+
+# Who is listening.
+#
+# One file for everybody pools two people into an average that describes
+# neither, and the pooling cannot be undone: the ratings are the only record,
+# and a rating with no name on it belongs to nobody. The whole reason to want a
+# second listener is to see whether two people agree, so the name is required
+# rather than defaulted.
+LISTENER="${LISTENER:-}"
+if [ "${1:-}" = "--as" ]; then
+    LISTENER="${2:-}"
+    shift 2
+fi
+RESULTS="$DIR/ratings-${LISTENER}.txt"
 
 if [ ! -d "$DIR" ]; then
     echo "No files. Build them first:"
@@ -51,18 +70,9 @@ for p in paplay aplay ffplay; do
 done
 [ -z "$PLAYER" ] && { echo "No audio player found (tried paplay, aplay, ffplay)."; exit 1; }
 
-reveal() {
-    if [ ! -s "$RESULTS" ]; then
-        echo "No ratings yet."
-        exit 0
-    fi
-    echo
-    echo "  system                     n   mean   ratings"
-    echo "  ------------------------------------------------------"
-    # Join each rating to what the file actually was. The two files are split
-    # differently, so the separator is applied by hand rather than with -F:
-    # doing it globally silently made every rating unmatchable.
-    awk 'NR==FNR {
+# Turn one ratings file into "listener <tab> system <tab> rating" lines.
+attribute() {
+    awk -v who="$2" 'NR==FNR {
               # The name, then two or more spaces, then a system name that
               # itself contains spaces ("telyx 12 kbit/s"). Splitting on single
               # spaces truncates every system name. Looking for a fixed arrow
@@ -75,20 +85,89 @@ reveal() {
                   rest = substr($0, RLENGTH + 1); gsub(/^ +| +$/, "", rest)
                   if (rest != "") key[name] = rest
               }
-            next
-         }
-         NF == 2 {
-            sys = key[$1]; if (sys == "") sys = "unknown"
-            sum[sys] += $2; n[sys]++; list[sys] = list[sys] " " $2
-         }
-         END { for (s in sum) printf "  %-24s %3d  %5.1f  %s\n", s, n[s], sum[s]/n[s], list[s] }' \
-        "$DIR/key.txt" "$RESULTS" | sort
+              next
+           }
+           NF == 2 {
+              sys = key[$1]; if (sys == "") sys = "unknown"
+              printf "%s\t%s\t%s\n", who, sys, $2
+           }' "$DIR/key.txt" "$1"
+}
+
+reveal() {
+    shopt -s nullglob
+    local files=("$DIR"/ratings-*.txt)
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "No ratings yet."
+        exit 0
+    fi
+
+    local stream
+    stream="$(mktemp)"
+    trap 'rm -f "$stream"' EXIT
+    local f who
+    for f in "${files[@]}"; do
+        who="$(basename "$f" .txt)"; who="${who#ratings-}"
+        attribute "$f" "$who" >> "$stream"
+    done
+
+    awk -F'\t' '
+        { sum[$1 SUBSEP $2] += $3; n[$1 SUBSEP $2]++
+          list[$1 SUBSEP $2] = list[$1 SUBSEP $2] " " $3
+          who[$1] = 1; sys[$2] = 1 }
+        END {
+            for (w in who) {
+                printf "\n  listener: %s\n", w
+                printf "  system                     n   mean   ratings\n"
+                printf "  ------------------------------------------------------\n"
+                for (s in sys)
+                    if ((w SUBSEP s) in sum)
+                        printf "  %-24s %3d  %5.1f  %s\n", s, n[w SUBSEP s],
+                               sum[w SUBSEP s] / n[w SUBSEP s], list[w SUBSEP s]
+            }
+
+            listeners = 0
+            for (w in who) listeners++
+            if (listeners < 2) exit
+
+            # Two people who disagree about one rate by more than the gap
+            # between rates are two people whose average describes neither.
+            printf "\n  where they disagree\n"
+            printf "  ------------------------------------------------------\n"
+            for (s in sys) {
+                line = ""; seen = 0; lo = 0; hi = 0
+                for (w in who) {
+                    if (!((w SUBSEP s) in sum)) continue
+                    m = sum[w SUBSEP s] / n[w SUBSEP s]
+                    line = line sprintf(" %s %.1f", w, m)
+                    if (!seen) { lo = m; hi = m; seen = 1 }
+                    if (m < lo) lo = m
+                    if (m > hi) hi = m
+                }
+                if (seen) printf "  %-24s spread %5.1f %s\n", s, hi - lo, line
+            }
+        }' "$stream"
+
     echo
     echo "  If 'reference (untouched)' is not near 100, the session is not usable."
     exit 0
 }
 
 [ "${1:-}" = "--reveal" ] && reveal
+
+if [ -z "$LISTENER" ]; then
+    cat <<'EOF'
+
+  Say who is listening:
+
+    scripts/listen --as <name> [clip]
+
+  Ratings are written per listener. Two people writing to one file become an
+  average that describes neither, and there is no way to separate them
+  afterwards, because the ratings are the only record of who said what.
+
+EOF
+    exit 1
+fi
 
 # Pick a clip.
 mapfile -t CLIPS < <(ls "$DIR"/*.wav 2>/dev/null | xargs -n1 basename | sed 's/_[a-z]\{6\}\.wav$//' | sort -u)
@@ -121,7 +200,20 @@ fi
 
 echo
 echo "  Clip: $CLIP     ${#FILES[@]} versions, random order"
-echo "  Rate 0-100. Enter replays. 's' skips. 'q' quits and saves."
+cat <<'EOF'
+  Rate how far each one is from the original, not how well you can follow it.
+  Speech stays intelligible long after it stops sounding like the speaker, so
+  rating on whether you understood the words puts everything near 100 and
+  measures nothing.
+
+    100-80  cannot tell it from the original
+     80-60  a difference you have to listen for
+     60-40  clearly different, but not annoying. "robotic" lives here
+     40-20  annoying
+      20-0  bad
+
+  Enter replays. 's' skips. 'q' quits and saves.
+EOF
 echo
 
 for f in "${FILES[@]}"; do

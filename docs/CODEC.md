@@ -307,38 +307,56 @@ largest remaining saving and needs a speech corpus.
 
 ---
 
-## Somebody listened
+## Two people listened, and the test was the thing that failed
 
 Every number above is signal to noise, and signal to noise does not say whether
-a codec sounds good. On 20 August 2026 one listener rated three clips blind and
-in random order against the untouched original.
+a codec sounds good. On 20 and 21 August 2026 two listeners rated the same three
+clips blind and in random order against the untouched original.
 
-| rate | mean | spread | range |
-|---|---:|---:|---|
-| reference | 100.0 | 0.0 | 100-100 |
-| 24 kbit/s | 93.3 | 2.4 | 90-95 |
-| 16 kbit/s | 88.3 | 13.1 | 70-100 |
-| 12 kbit/s | 83.3 | 4.7 | 80-90 |
+**The rating scale was never shown to either of them.** It lived in a comment at
+the top of `scripts/listen`, which a listener has no reason to open. What the
+script printed was "Rate 0-100", with no statement of what the number meant, so
+each listener privately decided what they were judging.
 
-The measured error orders the same way and separates the rates cleanly: 12 is
-1855 RMS from the original, 16 is 1374, 24 is 1023.
+The second listener says they rated on intelligibility and absence of noise, and
+gave 95 to versions that sounded robotic but remained fully understandable. On
+the MUSHRA scale the script claims to use, audibly robotic is 60 to 40. Speech
+stays intelligible long after it stops sounding like the speaker, so rating that
+way puts everything near the top and separates nothing: their lowest score of
+twelve was 87.
 
-**What it supports.** The reference was identified as untouched on all three
-clips, so the session is valid, and no rate scored below 80 against it,
-including 12 kbit/s.
+| rate | listener A | listener B |
+|---|---:|---:|
+| reference | 100.0 | 100.0 |
+| 24 kbit/s | 93.3 | 96.7 |
+| 16 kbit/s | 88.3 | 98.3 |
+| 12 kbit/s | 83.3 | 90.7 |
 
-**What it does not.** The spread within one rate is 13.1 and the largest gap
-between rates is 10.0. With one listener the three rates are not distinguishable
-from each other, and this must not be quoted as though they were.
+**These are not pooled and must not be.** Two sessions rated against two
+unstated scales answer different questions, and averaging them produces a number
+describing neither. The measured error is unaffected and still separates the
+rates cleanly: 12 kbit/s is 1855 RMS from the original, 16 is 1374, 24 is 1023.
 
-One clip rated 16 kbit/s below 12, inverted against both the measurement and the
-other two clips. It did not hold up. Recorded so it is not rediscovered as a
-finding.
+**What survives, being scale independent.** The untouched reference was scored
+100 six times out of six across two people, so neither session was an
+inattentive one. And by the second listener's own criterion every rate was fully
+intelligible on every clip, 12 kbit/s included. That says the words survive. It
+does not say the voice does.
 
-The raw ratings and the full note are in
-[`listening-2026-08-20.txt`](listening-2026-08-20.txt). Rebuild the files with
-`cargo run --release -p rotelyx-codec --example bake_listening_test` and run
-`scripts/listen`.
+**What does not survive.** Any claim that one rate sounds better than another.
+That was weak with one listener and is unsupported now, because the two sessions
+are not measuring the same thing. Listener B also wrote the codec, which was
+recorded as a caution before the session and is now the smaller of the two
+problems.
+
+The script prints the scale before every session now. A first usable measurement
+needs the three clips nobody has heard, rated with it on screen, ideally by
+somebody who did not write the codec.
+
+The raw ratings are in [`listening-2026-08-20.txt`](listening-2026-08-20.txt)
+and [`listening-2026-08-21.txt`](listening-2026-08-21.txt). Rebuild the files
+with `cargo run --release -p rotelyx-codec --example bake_listening_test` and run
+`scripts/listen --as <name>`.
 
 ## A call, end to end
 

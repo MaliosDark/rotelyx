@@ -5,8 +5,10 @@ Status as of 20 August 2026. 459 tests passing.
 **Calls work.** Two processes, real devices, real datagrams, through a relay:
 991 frames sent and 944 received in twenty seconds, 79 ms queued, nothing
 dropped. `/call` in the terminal client, a Call button in the desktop window.
-Somebody has listened to the codec, once, and `docs/listening-2026-08-20.txt`
-records both what that supports and what it does not.
+Two people have listened to the codec, and what that found was a broken test:
+the rating scale was never shown to either of them. There is no perceptual
+measurement of this codec yet, only the objective one.
+`docs/listening-2026-08-21.txt` records how it was found.
 
 **What a call still lacks:** echo cancellation, congestion control, more than
 two participants, and any measurement across a real network rather than a
@@ -366,9 +368,51 @@ wide margin the largest single task remaining in the project.
       are not distinguishable from each other. It says the codec is usable at
       12 kbit/s; it does not say how much better 24 is, and must not be quoted
       as though it did
-- [ ] **A second pair of ears.** Worth more than the remaining three clips from
-      the first one. Until then every rate comparison here is one person's
-      afternoon
+- [x] **Figure 5 drew one statistic and its caption quoted another.** The bar is
+      the full range, 70 to 100 for 16 kbit/s, and the caption cited the spread,
+      13.1, without saying they were different measures. A reader who measured
+      the bar got 30 and read 13.1. In a figure whose whole purpose is being
+      honest about weak data that is the wrong defect to leave in. Both now name
+      what they are, checked by rendering it rather than by reading the source
+- [x] **Every rating went into one file with no name on it.** A second listener
+      would have been pooled into an average describing neither person, and the
+      pooling could not be undone afterwards, because the ratings are the only
+      record of who said what. Since the entire value of a second listener is
+      seeing whether two people agree, that would have wasted the session the way
+      the orphan-file bug already wasted one. `scripts/listen --as <name>` now
+      writes per listener, and `--reveal` prints each listener separately plus
+      where they disagree. The first session was moved to `ratings-2026-08-20.txt`
+      unchanged, and reproduces its published means exactly
+- [!] **The rating scale was never shown to a listener.** It lived in a comment
+      at the top of `scripts/listen`, which nobody opens to run it. What the
+      script printed was "Rate 0-100" and nothing else, so each listener decided
+      privately what the number meant. The second one rated intelligibility and
+      gave 95 to versions they described as robotic, where the scale the script
+      *claims* to use puts audibly robotic at 60 to 40. Speech stays intelligible
+      long after it stops sounding like the speaker, so that criterion puts
+      everything near the top: their lowest of twelve was 87. Both sessions were
+      therefore rated against unstated and different scales and cannot be pooled.
+      The header asserted the numbers "mean the same thing to everyone who has
+      run one of these" while the script showed nobody the scale, which is the
+      same failure this project keeps finding: a guarantee written down and
+      nothing enforcing it. The script prints the scale now
+- [x] **A second pair of ears, 21 August 2026.** Same three clips, blind and
+      random. It did not settle the rate comparison, it closed it: pooled,
+      24 kbit/s and 16 kbit/s differ by 1.7 points while the spread within one
+      rate is 11.7, so adding a listener made the gap *smaller*. The second
+      listener scored 16 kbit/s above 24, inverted against the measurement, and
+      the first had produced an inverted point of its own. Both disagree with the
+      measurement about 16 kbit/s, in opposite directions, which is where the
+      instability lives. What is now supported by two people: the reference was
+      identified as untouched six times out of six, and nothing scored below 70
+- [!] **The second listener wrote the codec.** Recorded beside the numbers
+      rather than in a footnote, because the bias is visible in them: every coded
+      rate scored higher than listener A gave it, by 3.3, 10.0 and 7.3 points.
+      Blind randomised order stops a listener knowing which file is which, and
+      stops nothing else
+- [ ] **A listener with no stake in the answer.** Two people, one of whom wrote
+      the codec, is not two independent measurements. This is what the rate
+      comparison is actually blocked on, and more clips will not substitute
 - [x] A rate-distortion allocator: reverse water-filling. The curve no longer
       goes backwards. A band's next increment is worth `E² · 4^-r`, which does
       not scale with width while its cost does, so a wide high band can no
