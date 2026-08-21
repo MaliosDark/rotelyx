@@ -290,6 +290,59 @@ Everything needed for this is built.
 
       Writing this entry reintroduced it: the first version quoted the real
       account name and path as evidence. A note about a leak is published too
+- [x] **One free caller could take the free tier away from everybody.** The
+      free capability used a constant meter id, so every unauthenticated caller
+      on a mailbox drew from one 64 MiB bucket that resets once a day. Filling it
+      needed no token, no payment and no identity, and at the free fanout of 25
+      with 64 KiB envelopes that is 41 deposits. The metering built to stop abuse
+      was the cheapest way to commit it. Each free caller now gets a fresh random
+      id. The tests that existed covered two *bought* tokens, which have
+      different ids by construction, so none of them ever reached the free path;
+      the new one fails without the fix
+- [ ] **Nothing rate limits a mailbox connection.** The fix above stops one
+      caller silencing the rest while staying inside its own limits. It does not
+      stop somebody opening connections in a loop, and the relay has a limiter
+      while the mailbox has none
+- [!] **A bought token links its holder's deposits to each other.** The id names
+      nobody, which is not the same as linking nothing: the meter counts against
+      it, so the mailbox sees a stable pseudonym with a usage history across
+      every deposit made under that token. Blind issuance solves the issuer
+      recognising what it signed, which is a different problem. Sealed sender
+      hides the sender inside the envelope; the token is outside it. Recorded in
+      ADV-4 rather than fixed, because fixing it means one token per deposit and
+      that is a design decision, not a patch
+- [x] **Section 6 claimed a complete review of a set that had grown.** "Every
+      comparison ... was located and classified" was true when written and
+      nothing kept it true: the vault's passphrase check and the wake registry's
+      revocation secret were added afterwards and neither reached the table. Both
+      are listed now, and
+      `crates/rotelyx-crypto/tests/secret_comparisons.rs` fails the build on a
+      comparison the table does not mention, or a row describing code that is
+      gone. The same shape as the guard on foreign infrastructure, which already
+      says in its own header that a promise in a document does not enforce itself
+- [x] **A membership change was reported as "something happened".**
+      `Conversation::receive` returned the same value for a commit that added a
+      member, a routine rekey, and a message it did not recognise, so the clients
+      announced "the group changed" for all three and could show only a count.
+      One commit can remove a member and add another, which leaves the count
+      where it was: a client reading only the number says "2 members" while the
+      person on the other side has been replaced. It now reports who joined and
+      who left, and the terminal, desktop and browser clients name them. The
+      browser page already read the whole roster aloud, which is why it was the
+      only one this did not affect
+- [ ] **The wasm binding still collapses all three cases into `undefined`**, so
+      `chat.html` says "the group changed" on a routine rekey. It reads the
+      roster by name when it does, so this is a false positive rather than a
+      hole. Left for the same pass as opening the page in a browser, because
+      changing the shape of that return means changing the deployed page
+- [x] **A timing test measured the machine's spare capacity.** The MDCT speed
+      bound averaged one run and failed at 10.6% against a 10% limit while a
+      build was running, then passed three times in a row a minute later on the
+      same machine. A test that fails for reasons the code did not cause is one
+      people learn to re-run, and a test people re-run guards nothing. It takes
+      the fastest of five batches now: stolen time only ever makes a batch
+      slower, so the minimum reads the transform rather than the load, and a
+      real regression slows every batch including that one
 - [ ] Watch the refusal counters in production. Limits chosen from reasoning
       rather than from traffic, and the first real load will say whether they
       are in the right place

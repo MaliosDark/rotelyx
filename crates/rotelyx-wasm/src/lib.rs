@@ -473,11 +473,26 @@ impl Session {
         // A commit moves the epoch, so the tag key must follow it.
         self.sync_tag_keys()?;
 
+        // Mapped back to "plaintext or nothing" for the browser binding.
+        //
+        // The core now distinguishes a membership change from a rekey and from
+        // a message it did not recognise, which the Rust clients use to say who
+        // joined or left rather than only how many people are here. This
+        // binding still collapses all three into `undefined`, so `chat.html`
+        // announces "the group changed" on a routine rekey too. It reads the
+        // whole roster by name when it does, which is why this is a false
+        // positive rather than a hole, and it is recorded in TODO.md rather
+        // than fixed in the same pass as the core: changing the shape of this
+        // return means changing the deployed page, and that wants a browser to
+        // test it in.
         match outcome {
-            Some(plaintext) => Ok(Some(String::from_utf8(plaintext).map_err(|_| {
-                Error::new("decrypted payload is not valid UTF-8")
-            })?)),
-            None => Ok(None),
+            rotelyx_crypto::Received::Message(plaintext) => Ok(Some(
+                String::from_utf8(plaintext)
+                    .map_err(|_| Error::new("decrypted payload is not valid UTF-8"))?,
+            )),
+            rotelyx_crypto::Received::MembershipChanged(_) | rotelyx_crypto::Received::Nothing => {
+                Ok(None)
+            }
         }
     }
 

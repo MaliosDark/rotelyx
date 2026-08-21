@@ -517,6 +517,20 @@ mod fast_tests {
     /// right, so this asserts the speed too. The bound is loose because it runs
     /// on whatever machine happens to be building, and still an order of
     /// magnitude below where the naive one sat.
+    ///
+    /// # Why the fastest batch and not the average
+    ///
+    /// A single averaged run measures this machine's spare capacity as much as
+    /// the transform, and fails when something else is compiling: it was seen
+    /// at 10.6% against a 10% bound during a parallel build, and passed three
+    /// times in a row on the same machine a minute later. A timing test that
+    /// fails for reasons the code did not cause is one people learn to re-run,
+    /// and a test people re-run has stopped guarding anything.
+    ///
+    /// The best of several batches is what the question actually asks. Time
+    /// stolen by the scheduler only ever makes a batch slower, so the minimum is
+    /// the closest reading of the transform itself, and a real regression slows
+    /// every batch including that one.
     #[test]
     fn the_fast_transform_is_fast_enough_to_hold_a_call() {
         use std::time::Instant;
@@ -524,14 +538,18 @@ mod fast_tests {
         let w = window();
         let audio = signal(WINDOW, 9);
         let rounds = 200;
+        let batches = 5;
 
-        let t = Instant::now();
         let mut sink = 0.0f32;
-        for _ in 0..rounds {
-            let c = forward(&audio, &w);
-            sink += inverse(&c, &w)[0];
+        let mut each = f64::INFINITY;
+        for _ in 0..batches {
+            let t = Instant::now();
+            for _ in 0..rounds {
+                let c = forward(&audio, &w);
+                sink += inverse(&c, &w)[0];
+            }
+            each = each.min(t.elapsed().as_secs_f64() / rounds as f64);
         }
-        let each = t.elapsed().as_secs_f64() / rounds as f64;
         let frame_period = FRAME as f64 / SAMPLE_RATE as f64;
         let load = each / frame_period;
 

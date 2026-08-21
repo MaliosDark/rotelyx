@@ -59,6 +59,7 @@ fn a_message_survives_the_offline_path() {
     let recovered = b
         .receive(&bob, collected[0].payload())
         .expect("receive")
+        .message()
         .expect("application message");
 
     assert_eq!(recovered, plaintext);
@@ -147,11 +148,21 @@ fn the_post_quantum_commit_survives_the_mailbox() {
     let collected = mailbox.collect_many(&recipient_tags.polling_tags(5, 1), 1);
     assert_eq!(collected.len(), 1);
 
-    assert!(
-        b.receive(&bob, collected[0].payload())
-            .expect("process commit")
-            .is_none(),
-        "a commit is not an application message"
+    // A rekey is not a membership change, and must not be announced as one.
+    //
+    // This commit mixes in a post-quantum secret. Nobody joined and nobody
+    // left. It used to return the same value as a commit that adds a member,
+    // so every client said "the group changed" here, and a warning that fires
+    // on routine traffic is a warning people learn to dismiss. See ADV-7 in the
+    // threat model: surfacing membership changes is a security control, and a
+    // control that cries wolf is not one.
+    let outcome = b
+        .receive(&bob, collected[0].payload())
+        .expect("process commit");
+    assert_eq!(
+        outcome,
+        rotelyx_crypto::Received::Nothing,
+        "a rekey was reported as something a person needs told about"
     );
 
     assert!(a.epoch() > epoch_before);
@@ -159,7 +170,7 @@ fn the_post_quantum_commit_survives_the_mailbox() {
 
     // And the conversation continues, now post-quantum protected.
     let msg = a.send(&alice, b"after the commit").expect("send");
-    let got = b.receive(&bob, &msg).expect("receive").expect("application");
+    let got = b.receive(&bob, &msg).expect("receive").message().expect("application");
     assert_eq!(got, b"after the commit");
 }
 

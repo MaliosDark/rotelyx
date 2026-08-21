@@ -2159,6 +2159,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let plaintext = b
             .receive(&bob, received.payload())
             .expect("decrypt")
+            .message()
             .expect("application message");
         assert_eq!(plaintext, b"hello by way of the mailbox");
     }

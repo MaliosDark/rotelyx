@@ -31,7 +31,7 @@ pub mod group;
 pub mod hybrid;
 
 pub use group::{
-    MemberState, Participant,
+    MembershipChange, MemberState, Participant, Received,
     deserialize_key_package, serialize_key_package, Conversation, GroupError, Member, CIPHERSUITE,
 };
 pub use hybrid::{

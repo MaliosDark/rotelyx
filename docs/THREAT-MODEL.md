@@ -86,11 +86,28 @@ read all stored envelopes, retain them past TTL, and correlate timing.
 - **Defended:** A1: envelopes are L2 ciphertext, sealed, and the mailbox has no
   keys.
 - **Defended:** sender identity: sealed sender means the envelope carries no
-  sender field.
+  sender field, and a caller presenting nothing is given a fresh capability id
+  per connection, so the mailbox has no value tying its deposits together.
+- **Not defended for a paying sender:** a bought token carries a random 16 byte
+  id, and the meter counts against it, so the mailbox can tie together every
+  deposit made under one token. The id names nobody, which is not the same as
+  linking nothing: it is a stable pseudonym with a usage history. Blind issuance
+  keeps the *issuer* from recognising the token it signed, which is a different
+  problem from the mailbox recognising a token it has already served. **Design
+  consequence:** paying for a tier costs the holder unlinkability at the
+  mailbox, and that trade should be visible to whoever makes it.
 - **Partially defended:** A2: the recipient is addressed by a rotating
   pseudonymous tag rather than an identity key, and all envelopes are padded to
   fixed size buckets. A mailbox that logs everything can still perform timing
   correlation between a deposit and a collection.
+- **Defended:** taking the free tier away from everybody else. The free
+  capability used a constant meter id, so every unauthenticated caller in the
+  world shared one 64 MiB bucket that resets once a day. Filling it needed no
+  token, no payment and no identity, and at the free fanout that is 41 deposits:
+  the metering built to stop abuse was the cheapest way to commit it. Each free
+  caller now gets its own id. It does not stop somebody opening many connections,
+  which is the ordinary flooding question and is **still not defended**, but one
+  caller can no longer silence the rest by behaving within its own limits.
 - **Not defended:** A6, and deletion. "Deleted on delivery" is a promise the
   operator makes, not one the protocol enforces. **Design consequence:** the
   mailbox must never be the only copy, and clients must not treat mailbox
@@ -129,6 +146,14 @@ jailbroken/rooted device, malware, forensic extraction of an unlocked device.
   attacks rely on, and MLS makes it visible: **provided the client actually
   surfaces membership changes.** That UI obligation is a security control, not
   a nicety.
+- **How that obligation is met.** `Conversation::receive` reports who joined and
+  who left, rather than reporting that something happened. It used to return the
+  same value for a membership change, a routine rekey and a message it did not
+  recognise, so the clients announced "the group changed" for all three and could
+  report only a count. A count is not enough on its own: one commit can remove a
+  member and add another, leaving the number where it was, so a client reading
+  only the count says "2 members" while the person on the other side has been
+  replaced. The terminal, desktop and browser clients now name them.
 
 ### ADV-8: Global passive adversary
 *Capability:* observes traffic at many points simultaneously, correlates by
@@ -264,9 +289,20 @@ No public security claim is made before all of these are met.
 
 ## 6. Side channels: what was checked
 
-Reviewed once, in full, and recorded so it does not have to be re-derived. Every
-comparison in the first-party crates that touches key material, a tag, a token,
-a proof or a passphrase was located and classified.
+Every comparison in the first-party crates that touches key material, a tag, a
+token, a proof or a passphrase is located and classified below.
+
+That sentence was first written after a single review, in the past tense, and
+went stale within weeks: the vault's passphrase check and the wake registry's
+revocation secret were both added afterwards and neither reached the table,
+while the section went on describing itself as complete. The two rows naming
+them were added when that was noticed.
+
+It is now enforced rather than asserted.
+`crates/rotelyx-crypto/tests/secret_comparisons.rs` scans the first-party crates
+and fails the build on a comparison this table does not mention, and on a row
+here describing code that no longer exists. Same reasoning as the guard on
+foreign infrastructure: a promise in a document does not enforce itself.
 
 **Already constant time, and correct to be:**
 
@@ -275,6 +311,8 @@ a proof or a passphrase was located and classified.
 | `PqSecret::ct_eq` | Two post-quantum shared secrets |
 | `access.rs` contact proof | An arriving proof against the expected one |
 | `access.rs` invitation revocation | An invitation secret against the revoked list |
+| `vault.rs` passphrase binding | A passphrase against the one a cached key was derived from |
+| `wake.rs` `secrets_match` | A device's revocation secret against the stored hash |
 
 **Variable time and correct to be, because the values are public:**
 

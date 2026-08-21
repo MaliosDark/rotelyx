@@ -106,6 +106,42 @@ fn separate_tokens_are_metered_separately() {
     assert!(matches!(meter.charge(&a, 1, 0), Charge::OverQuota { .. }));
 }
 
+/// One free caller must not be able to spend another one's allowance.
+///
+/// # The hole this closes
+///
+/// The meter counts against a capability's id, and the free capability used a
+/// constant one. Every unauthenticated client on a mailbox therefore shared a
+/// single 64 MiB bucket that resets once a day. Filling it took no token, no
+/// payment and no identity: connect, deposit 64 MiB, and every other free user
+/// is refused until the period rolls over. At the free fanout of 25 and 64 KiB
+/// an envelope, that is 41 deposits.
+///
+/// The tests above cover two *bought* tokens, which have different ids by
+/// construction, so none of them ever reached the free path. The machinery that
+/// exists to stop abuse was the cheapest way to commit it.
+#[test]
+fn one_free_caller_cannot_spend_another_ones_quota() {
+    let (a, b) = (Capability::free(), Capability::free());
+    assert_ne!(a.id, b.id, "two free callers were given one meter bucket");
+
+    let limit = Tier::Free.limits().bytes_per_period;
+    let mut meter = Meter::default();
+
+    // The first spends everything it is allowed, and no more.
+    assert!(matches!(meter.charge(&a, limit, 0), Charge::Allowed { .. }));
+    assert!(
+        matches!(meter.charge(&a, 1, 0), Charge::OverQuota { .. }),
+        "a free caller kept spending past its own limit"
+    );
+
+    // The second has spent nothing, and must be unaffected by the first.
+    assert!(
+        matches!(meter.charge(&b, limit, 0), Charge::Allowed { .. }),
+        "one free caller filling its bucket refused an unrelated one"
+    );
+}
+
 /// A quota that only resets on restart is not a subscription.
 #[test]
 fn the_allowance_returns_next_period() {

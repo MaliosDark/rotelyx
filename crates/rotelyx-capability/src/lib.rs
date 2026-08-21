@@ -173,9 +173,27 @@ pub struct Capability {
 
 impl Capability {
     /// What an unauthenticated client gets.
+    /// The tier a caller gets before it presents anything.
+    ///
+    /// # Why the id is random rather than zero
+    ///
+    /// The meter counts against `id`, so a constant here puts every
+    /// unauthenticated client in the world into one bucket. The free tier allows
+    /// 64 MiB a period and a period is a day, so one client depositing 64 MiB
+    /// took the whole free allowance away from everybody else on that mailbox
+    /// until the period rolled over. At a fanout of 25 and 64 KiB an envelope
+    /// that is 41 deposits, needing no token, no payment and no identity: the
+    /// metering that exists to stop abuse was the way to do it.
+    ///
+    /// A fresh id per caller gives each one its own allowance. It is generated
+    /// here and never leaves this process, so it identifies nobody and links
+    /// nothing: two connections from one client get different ids, which is
+    /// weaker linkage than a bought token, not stronger.
     pub fn free() -> Self {
+        let mut id = [0u8; 16];
+        getrandom::fill(&mut id).expect("OS CSPRNG unavailable");
         Self {
-            id: [0u8; 16],
+            id,
             tier: Tier::Free,
             limits: Tier::Free.limits(),
         }

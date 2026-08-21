@@ -22,7 +22,7 @@ use rotelyx_core::{
     epoch_at, Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, Session,
     RotelyxEndpoint, RotelyxId,
 };
-use rotelyx_crypto::{Conversation, Member};
+use rotelyx_crypto::{Conversation, Member, Received};
 use rotelyx_net::{EndpointAddr, NetConfig, PathPolicy, RelayPolicy, RelayUrl, SecretKey};
 use rotelyx_audio::Call;
 
@@ -112,6 +112,17 @@ enum Command {
         #[arg(long, value_name = "URL")]
         relay: Option<String>,
     },
+}
+
+/// A member's identity, short enough to read aloud and long enough to mean
+/// something. Eight bytes: a person comparing two of these is not relying on it
+/// for authentication, which the safety number is for.
+fn short_id(identity: &[u8]) -> String {
+    identity
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
 }
 
 /// Wall-clock epoch. The library takes time as a parameter so it stays
@@ -317,13 +328,26 @@ async fn chat(
                 match frame.kind {
                     FrameKind::Message => {
                         match conversation.receive(&me, &frame.payload).context("decrypting")? {
-                            Some(plaintext) => {
+                            Received::Message(plaintext) => {
                                 println!("peer: {}", String::from_utf8_lossy(&plaintext));
                             }
-                            // A commit: the group changed. A real client must
-                            // surface this: silent membership changes are how
-                            // ghost-member attacks stay invisible.
-                            None => println!("[the group changed: {} members]", conversation.member_count()),
+                            // Who, not how many. A commit can remove one member
+                            // and add another at once, which leaves the count
+                            // where it was: a client that reports only a number
+                            // says "2 members" while you are talking to
+                            // somebody else. Silent membership changes are how
+                            // ghost-member attacks stay invisible, and so are
+                            // membership changes announced without names.
+                            Received::MembershipChanged(change) => {
+                                for who in &change.added {
+                                    println!("[joined: {}]", short_id(&who.identity));
+                                }
+                                for who in &change.removed {
+                                    println!("[left: {}]", short_id(&who.identity));
+                                }
+                                println!("[the group is now {} members]", conversation.member_count());
+                            }
+                            Received::Nothing => {}
                         }
                     }
                     other => println!("[ignoring {other:?} frame]"),

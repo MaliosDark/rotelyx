@@ -15,7 +15,7 @@ use rotelyx_core::{
     Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, Session,
     RotelyxEndpoint,
 };
-use rotelyx_crypto::{Conversation, Member};
+use rotelyx_crypto::{Received, Conversation, Member};
 use rotelyx_net::NetConfig;
 
 /// What the page can ask for.
@@ -31,6 +31,18 @@ pub enum Command {
     },
     /// Send a chat line.
     Send { text: String },
+}
+
+/// A member's identity, short enough to read and long enough to mean something.
+///
+/// Eight bytes. Somebody comparing two of these is not relying on it for
+/// authentication, which is what the safety number is for.
+fn hex_id(identity: &[u8]) -> String {
+    identity
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()
 }
 
 /// What the page is told.
@@ -50,7 +62,18 @@ pub enum Event {
     /// A message arrived from the peer.
     Message { text: String },
     /// The group changed: membership must never change silently.
-    GroupChanged { members: usize },
+    /// The membership changed, with who rather than only how many.
+    ///
+    /// A commit can remove one member and add another at once, which leaves the
+    /// count where it was. An event carrying only a number then reports "2
+    /// members" while the person on the other side has been replaced. See ADV-7
+    /// in the threat model: surfacing membership changes is a security control,
+    /// and a change without names is not surfaced.
+    GroupChanged {
+        members: usize,
+        added: Vec<String>,
+        removed: Vec<String>,
+    },
     /// Something failed. Shown to the user as-is.
     Error { text: String },
     /// The peer went away.
@@ -270,15 +293,24 @@ impl Driver {
                     }
 
                     match conversation.receive(&me, &frame.payload) {
-                        Ok(Some(plaintext)) => self.emit(Event::Message {
+                        Ok(Received::Message(plaintext)) => self.emit(Event::Message {
                             text: String::from_utf8_lossy(&plaintext).into_owned(),
                         }),
                         // A commit. Surfacing this is a security control: MLS
                         // makes membership changes visible, and that is worth
                         // nothing if the UI stays quiet.
-                        Ok(None) => self.emit(Event::GroupChanged {
-                            members: conversation.member_count(),
-                        }),
+                        Ok(Received::MembershipChanged(change)) => {
+                            self.emit(Event::GroupChanged {
+                                members: conversation.member_count(),
+                                added: change.added.iter().map(|p| hex_id(&p.identity)).collect(),
+                                removed: change
+                                    .removed
+                                    .iter()
+                                    .map(|p| hex_id(&p.identity))
+                                    .collect(),
+                            })
+                        }
+                        Ok(Received::Nothing) => {}
                         Err(e) => self.emit(Event::Error { text: format!("decrypt failed: {e}") }),
                     }
                 }

@@ -309,6 +309,60 @@ pub struct Participant {
     pub signature_key: Vec<u8>,
 }
 
+/// Who joined or left, when a commit changed the membership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembershipChange {
+    pub added: Vec<Participant>,
+    pub removed: Vec<Participant>,
+}
+
+/// What arrived.
+///
+/// # Why this is not `Option<Vec<u8>>`
+///
+/// It was. A commit that added a member merged and returned `None`, which is
+/// also what an unrecognised message returns, so no caller could tell a third
+/// party being added to a conversation from nothing having happened.
+///
+/// MLS makes a silent addition impossible at the protocol level: every member
+/// processes the commit. That is the whole defence against a "ghost user", and
+/// it is only worth anything if the client can tell somebody. Returning `None`
+/// threw the visibility away one layer below the client, so the obligation the
+/// threat model puts on the UI could not be met however carefully the UI was
+/// written.
+///
+/// A caller that does not care can still say so, and has to say it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Received {
+    /// Decrypted application data.
+    Message(Vec<u8>),
+    /// The membership changed. Show this to the user: see ADV-7 in the threat
+    /// model, where surfacing it is a security control rather than a nicety.
+    MembershipChanged(MembershipChange),
+    /// Handled, and nothing for the caller to do.
+    Nothing,
+}
+
+impl Received {
+    /// The application data, if that is what this was.
+    ///
+    /// For callers that have already dealt with the other cases, and for tests.
+    pub fn message(self) -> Option<Vec<u8>> {
+        match self {
+            Self::Message(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// The membership change, if that is what this was.
+    pub fn membership_change(&self) -> Option<&MembershipChange> {
+        match self {
+            Self::MembershipChanged(change) => Some(change),
+            _ => None,
+        }
+    }
+}
+
 pub struct Conversation {
     group: MlsGroup,
 }
@@ -634,7 +688,7 @@ impl Conversation {
         &mut self,
         receiver: &Member,
         bytes: &[u8],
-    ) -> Result<Option<Vec<u8>>, GroupError> {
+    ) -> Result<Received, GroupError> {
         let msg = MlsMessageIn::tls_deserialize(&mut &bytes[..]).map_err(codec)?;
         let protocol = msg.try_into_protocol_message().map_err(mls)?;
 
@@ -644,14 +698,42 @@ impl Conversation {
             .map_err(mls)?;
 
         match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app) => Ok(Some(app.into_bytes())),
+            ProcessedMessageContent::ApplicationMessage(app) => {
+                Ok(Received::Message(app.into_bytes()))
+            }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
+                // Read the roster on both sides of the merge rather than asking
+                // the staged commit what it contains. A commit can add, remove
+                // and update at once, and the difference between who was in the
+                // group and who is in it now is the thing a person needs told.
+                let before = self.roster();
                 self.group
                     .merge_staged_commit(&receiver.provider, *staged)
                     .map_err(mls)?;
-                Ok(None)
+                let after = self.roster();
+
+                let added: Vec<Participant> = after
+                    .iter()
+                    .filter(|p| !before.iter().any(|q| q.identity == p.identity))
+                    .cloned()
+                    .collect();
+                let removed: Vec<Participant> = before
+                    .iter()
+                    .filter(|p| !after.iter().any(|q| q.identity == p.identity))
+                    .cloned()
+                    .collect();
+
+                if added.is_empty() && removed.is_empty() {
+                    // A rekey, which is routine and not worth interrupting
+                    // anybody about.
+                    return Ok(Received::Nothing);
+                }
+                Ok(Received::MembershipChanged(MembershipChange {
+                    added,
+                    removed,
+                }))
             }
-            _ => Ok(None),
+            _ => Ok(Received::Nothing),
         }
     }
 }
@@ -683,8 +765,50 @@ mod tests {
         assert_eq!(b.member_count(), 2);
 
         let ct = a.send(&alice, b"nadie mas puede leer esto").expect("send");
-        let pt = b.receive(&bob, &ct).expect("receive").expect("application");
+        let pt = b.receive(&bob, &ct).expect("receive").message().expect("application");
         assert_eq!(pt, b"nadie mas puede leer esto");
+    }
+
+    /// Somebody arriving must be reported to the people already there, by name.
+    ///
+    /// # The hole this closes
+    ///
+    /// A silent addition is what a "ghost user" attack needs, and MLS makes it
+    /// impossible: every member processes the commit. That guarantee is only
+    /// worth something if it reaches a person, and this layer used to hand the
+    /// client the same value for an addition, a rekey and a message it did not
+    /// recognise. The clients could report a count and nothing else, and one
+    /// commit can remove a member and add another, which leaves the count where
+    /// it was.
+    #[test]
+    fn a_member_arriving_is_reported_by_name() {
+        let (alice, bob) = pair();
+        let carol = Member::new(b"carol-device-1").expect("carol");
+
+        let mut a = Conversation::create(&alice).expect("create");
+        let (_commit, welcome) = a
+            .invite(&alice, bob.key_package().expect("kp").key_package())
+            .expect("invite bob");
+        let tree = a.ratchet_tree().expect("tree");
+        let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
+        assert_eq!(b.member_count(), 2);
+
+        // Alice adds Carol. Bob has to find out, and find out who.
+        let (commit, _welcome) = a
+            .invite(&alice, carol.key_package().expect("kp").key_package())
+            .expect("invite carol");
+        let outcome = b.receive(&bob, &commit).expect("process the commit");
+
+        let change = outcome
+            .membership_change()
+            .expect("Bob was not told that somebody joined his conversation");
+        assert!(change.removed.is_empty());
+        assert_eq!(change.added.len(), 1, "the wrong number of arrivals");
+        assert_eq!(
+            change.added[0].identity, b"carol-device-1",
+            "the arrival was reported without saying who it was"
+        );
+        assert_eq!(b.member_count(), 3);
     }
 
     #[test]
@@ -789,7 +913,9 @@ mod tests {
         b.stage_pq_secret(&bob, &bob_secret).expect("stage");
 
         let commit = a.commit_pq_secret(&alice, &alice_secret).expect("commit");
-        assert!(b.receive(&bob, &commit).expect("process commit").is_none());
+        assert!(b.receive(&bob, &commit).expect("process commit")
+            .message()
+            .is_none());
 
         assert!(a.epoch() > epoch_before, "the PSK commit advances the epoch");
         assert_eq!(a.epoch(), b.epoch(), "both landed on the same epoch");
@@ -797,7 +923,7 @@ mod tests {
         // And the conversation still works, now with post-quantum material
         // mixed into the key schedule.
         let msg = a.send(&alice, b"protegido post-cuanticamente").expect("send");
-        let got = b.receive(&bob, &msg).expect("receive").expect("application");
+        let got = b.receive(&bob, &msg).expect("receive").message().expect("application");
         assert_eq!(got, b"protegido post-cuanticamente");
     }
 
