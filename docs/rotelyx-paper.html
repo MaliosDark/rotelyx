@@ -846,7 +846,7 @@
         <text x="46" y="136" font-size="11">pad to a bucket</text>
         <text x="46" y="160" font-size="11">derive tag from</text>
         <text x="46" y="176" font-size="11">shared MLS secret</text>
-        <text x="46" y="198" font-size="10.5" fill-opacity=".6">tag never transmitted</text>
+        <text x="46" y="198" font-size="10.5" fill-opacity=".6">tag key never transmitted</text>
 
         <line x1="204" y1="135" x2="272" y2="135" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar4)"/>
 
@@ -905,9 +905,13 @@
       remove.
     </p>
     <p>
-      <strong>Addressing is never transmitted.</strong> Both parties derive the
-      tag key from the MLS exporter secret, so no addressing information crosses
-      the network. The derivation must be pinned at a mutually known epoch: the
+      <strong>The addressing key is never transmitted.</strong> Both parties
+      derive the tag key from the MLS exporter secret, so the key itself never
+      crosses the network and no operator holds it. The tag derived from it does
+      cross, and must: it is what the mailbox routes on, and what §7 describes an
+      operator as seeing. It carries a value drawn from a secret only the
+      conversation has, rotated every epoch and unrelated between recipients.
+      The derivation must be pinned at a mutually known epoch: the
       exporter changes with every MLS epoch, and a sender one commit ahead of a
       recipient would otherwise deposit under a tag the recipient cannot compute,
       producing silent undeliverability.
@@ -2035,10 +2039,13 @@
     <p>
       Mobile platforms will not permit a background socket, so waking a device
       requires the platform push service. Apple and Google therefore observe that
-      a device received a wake signal and when. Content free silent pushes,
-      jittered delivery, and decoy pushes raise the cost of correlating a push
-      with a mailbox deposit, but none of them solves the problem, and all cost
-      battery. This is inherent to the platforms rather than to the protocol.
+      a device received a wake signal and when. Content free silent pushes marked
+      as decoys, and one fixed schedule shared by every registered device, raise
+      the cost of correlating a push with a mailbox deposit. Not jitter, which an
+      earlier version of this paragraph named: a device woken on a rhythm of its
+      own is a device identifiable by that rhythm, so an identical schedule for
+      everybody is the stronger arrangement and is the one built. None of it
+      solves the problem, and all of it costs battery. This is inherent to the platforms rather than to the protocol.
     </p>
 
     <h3>Relay observation is inherent</h3>

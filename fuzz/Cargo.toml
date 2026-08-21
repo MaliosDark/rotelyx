@@ -11,6 +11,11 @@
 # machine-specific and grows without bound. What is worth committing is a case
 # that found something, which belongs in the ordinary test suite as a
 # regression rather than in a corpus nobody re-runs.
+#
+# Do not run these alongside a build. libFuzzer times a case by the clock on the
+# wall, not by the CPU it used, so a machine busy compiling produces "slow unit"
+# artifacts that are reports about the machine. One turned up here at 44 seconds
+# for 1,761 bytes, which is alarming until you run it on its own and get 78 ms.
 
 [package]
 name = "rotelyx-fuzz"

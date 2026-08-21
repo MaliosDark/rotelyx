@@ -182,6 +182,7 @@ impl RotelyxEndpoint {
         // the caller's own word it could claim any address it liked, including
         // none, which is the branch where every invitation is eligible.
         let dialled = Some(RotelyxId::from(self.net.answered_at(&session.net)));
+        session.answered_at = dialled;
         if let Err(e) = gate.admit(&session.peer(), &self.id, &evidence, current_epoch, dialled)
         {
             session.close().await;
@@ -219,6 +220,9 @@ impl RotelyxEndpoint {
 pub struct Session {
     peer: RotelyxId,
     net: NetSession,
+    /// Which of this identity's addresses the call arrived at, when we accepted
+    /// it. `None` on a session we opened.
+    answered_at: Option<RotelyxId>,
 }
 
 impl Session {
@@ -226,7 +230,21 @@ impl Session {
         Self {
             peer: RotelyxId::from(net.peer()),
             net,
+            answered_at: None,
         }
+    }
+
+    /// Which of this identity's addresses the caller reached.
+    ///
+    /// `None` on a session this identity opened, where the question does not
+    /// apply. On an accepted one it is the address that *answered*, taken from
+    /// the resolver rather than from anything the caller wrote: see
+    /// [`rotelyx_net::NetEndpoint::answered_at`].
+    ///
+    /// Callers use it to find which invitation a conversation belongs to, which
+    /// is what a per-conversation name is derived from.
+    pub fn answered_at(&self) -> Option<RotelyxId> {
+        self.answered_at
     }
 
     pub fn peer(&self) -> RotelyxId {

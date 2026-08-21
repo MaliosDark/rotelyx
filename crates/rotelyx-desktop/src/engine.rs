@@ -20,8 +20,8 @@ use rotelyx_core::{
     Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint,
     Session,
 };
-use rotelyx_crypto::{Received, Conversation, Member};
-use rotelyx_net::{NetConfig, PathPolicy, RelayPolicy, RelayUrl};
+use rotelyx_crypto::{Conversation, Member, Received};
+use rotelyx_net::{NetConfig, PathPolicy, RelayPolicy, RelayUrl, SecretKey};
 use rotelyx_audio::Call;
 use tokio::sync::mpsc;
 
@@ -137,16 +137,15 @@ impl Engine {
     /// Invitations and blocks both come from files, so a restart does not
     /// reopen the door to somebody who was blocked or hand access to somebody
     /// whose invitation expired.
-    fn gate(&self, open: bool) -> Result<Gate> {
+    fn gate(&self, open: bool, invitations: &[store::StoredInvitation]) -> Result<Gate> {
         let mut gate = if open {
             Gate::new(ReachabilityPolicy::Open)
         } else {
-            let invitations = store::load_invitations(&self.paths.invitations, self.epoch)?;
             if invitations.is_empty() {
                 bail!("No live invitations. Issue one first, or choose Open.");
             }
             let mut g = Gate::invitation_only();
-            for inv in &invitations {
+            for inv in invitations {
                 g.add_invitation(inv.to_invitation());
             }
             self.emit(Event::Status {
@@ -163,11 +162,46 @@ impl Engine {
     }
 
     pub async fn listen(&self, open: bool, rx: &mut mpsc::UnboundedReceiver<Command>) -> Result<()> {
-        let gate = self.gate(open)?;
+        let live = store::load_invitations(&self.paths.invitations, self.epoch)?;
+        let gate = self.gate(open, &live)?;
 
-        let endpoint = RotelyxEndpoint::bind(&self.identity, self.net.clone())
+        // Answer on the invitations' own addresses, not on this identity.
+        //
+        // An identity that listens under its own key is reachable at one address
+        // for everybody, and every caller reaches the same one. That hands the
+        // network a name shared by all of somebody's contacts, and it also means
+        // this side cannot tell which invitation a caller used, so it has
+        // nothing to derive a per-conversation name from. The terminal client
+        // has answered per invitation for a while; this is the same arrangement.
+        let newest = live.iter().max_by_key(|i| i.expires_at_epoch);
+        let endpoint = match (newest, open) {
+            (Some(inv), _) => RotelyxEndpoint::bind_as(
+                &self.identity,
+                SecretKey::from_bytes(&inv.transport),
+                self.net.clone(),
+            )
             .await
-            .context("binding endpoint")?;
+            .context("binding endpoint")?,
+            // An open host publishes one address and keeps it. There is nobody
+            // to hide it from.
+            (None, true) => RotelyxEndpoint::bind(&self.identity, self.net.clone())
+                .await
+                .context("binding endpoint")?,
+            (None, false) => bail!("No live invitations. Issue one first, or choose Open."),
+        };
+
+        let primary = newest.map(|i| i.transport);
+        for inv in &live {
+            if Some(inv.transport) == primary {
+                continue;
+            }
+            if !endpoint.also_answer_as(&SecretKey::from_bytes(&inv.transport)) {
+                self.emit(Event::Status {
+                    text: "Could not ask the relay to answer one invitation's address"
+                        .into(),
+                });
+            }
+        }
 
         self.emit(Event::Listening {
             addr: crate::encode_addr(&endpoint.addr())?,
@@ -179,12 +213,21 @@ impl Engine {
             .await
             .context("accepting")?;
 
-        let me = Member::new(self.identity.id().as_bytes()).context("creating member")?;
+        // The name this identity uses in this conversation, derived from the
+        // invitation the caller actually used. Which one that is comes from the
+        // address the call was answered at, which the caller does not choose.
+        let shared = session
+            .answered_at()
+            .and_then(|at| live.iter().find(|inv| inv.to_invitation().address() == at))
+            .map(|inv| inv.secret.to_vec())
+            .unwrap_or_else(|| self.identity.id().as_bytes().to_vec());
+        let my_name = self.identity.in_conversation(&shared);
+        let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
         let conversation = crate::handshake::host(&mut session, &me)
             .await
             .context("MLS handshake")?;
-        self.announce(&endpoint, &conversation).await;
+        self.announce(&endpoint, &conversation, my_name).await;
 
         self.chat(session, conversation, me, rx).await;
         endpoint.close().await;
@@ -199,26 +242,41 @@ impl Engine {
     ) -> Result<()> {
         let addr = crate::decode_addr(addr)?;
 
-        let evidence = match invite.map(str::trim).filter(|s| !s.is_empty()) {
+        // A transport key for this call and nothing else.
+        //
+        // The relay sees this and never the identity, and the proof commits to
+        // it, because the proof has to name the caller the transport
+        // authenticated. This used to bind the identity and prove as the
+        // identity, which put a long-lived name on the wire for every call.
+        let transport = RotelyxEndpoint::ephemeral_transport_key();
+        let calling_as = rotelyx_core::RotelyxId::from(transport.public());
+
+        let (evidence, invitation_secret) = match invite.map(str::trim).filter(|s| !s.is_empty()) {
             Some(code) => {
                 let bytes = data_encoding::BASE64URL_NOPAD
                     .decode(code.as_bytes())
                     .context("invitation is not valid base64")?;
-                let secret: [u8; 32] = bytes
-                    .as_slice()
-                    .try_into()
-                    .context("invitation secret is not 32 bytes")?;
+                // A code is the secret and the address it is answered at. This
+                // read thirty two bytes and refused anything else, so it could
+                // not accept the code this application's own invite command
+                // produces, which has been sixty four for a while.
+                let (secret, host) = Invitation::read_code(&bytes)
+                    .context("that is not an invitation code")?;
                 // Expiry belongs to the issuer; we only prove possession.
-                let invitation = Invitation::from_secret(secret, u64::MAX);
-                Admission::Invitation {
-                    proof: invitation.prove(&self.identity.id(), self.epoch),
-                    epoch: self.epoch,
-                }
+                let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
+                (
+                    Admission::Invitation {
+                        proof: invitation.prove(&calling_as, self.epoch),
+                        epoch: self.epoch,
+                    },
+                    Some(secret.to_vec()),
+                )
             }
-            None => Admission::None,
+            None => (Admission::None, None),
         };
+        let dialled_id = addr.id;
 
-        let endpoint = RotelyxEndpoint::bind(&self.identity, self.net.clone())
+        let endpoint = RotelyxEndpoint::bind_as(&self.identity, transport, self.net.clone())
             .await
             .context("binding endpoint")?;
 
@@ -231,12 +289,17 @@ impl Engine {
             .await
             .context("connecting")?;
 
-        let me = Member::new(self.identity.id().as_bytes()).context("creating member")?;
+        // The same derivation the listening side makes, from the same secret.
+        let shared = invitation_secret
+            .clone()
+            .unwrap_or_else(|| dialled_id.as_bytes().to_vec());
+        let my_name = self.identity.in_conversation(&shared);
+        let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
         let conversation = crate::handshake::join(&mut session, &me)
             .await
             .context("MLS handshake")?;
-        self.announce(&endpoint, &conversation).await;
+        self.announce(&endpoint, &conversation, my_name).await;
 
         self.chat(session, conversation, me, rx).await;
         endpoint.close().await;
@@ -252,9 +315,19 @@ impl Engine {
     ///
     /// Read after the handshake for the same reason. Before it there is no
     /// identity to compare, only an address.
-    async fn announce(&self, endpoint: &RotelyxEndpoint, conversation: &Conversation) {
+    async fn announce(
+        &self,
+        endpoint: &RotelyxEndpoint,
+        conversation: &Conversation,
+        my_name: rotelyx_core::RotelyxId,
+    ) {
         let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
-        let peer = match rotelyx_core::peer_identity(&roster, self.identity.id()) {
+        // Both halves must be names that are in the roster. Passing the
+        // long-lived identity as "me" was consistent only while it was also
+        // what went into the credential; a conversation carries a name derived
+        // for it now, and the two sides would combine different pairs and read
+        // out digits that cannot match.
+        let peer = match rotelyx_core::peer_identity(&roster, my_name) {
             Some(id) => id,
             None => {
                 self.emit(Event::Error {
@@ -270,7 +343,7 @@ impl Engine {
 
         self.emit(Event::Connected {
             peer: peer.to_string(),
-            safety_number: self.identity.safety_number(&peer),
+            safety_number: rotelyx_core::safety_number(&my_name, &peer),
             direct,
         });
     }

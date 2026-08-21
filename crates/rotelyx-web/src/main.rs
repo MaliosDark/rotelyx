@@ -29,6 +29,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
 use tokio::sync::mpsc;
+use rotelyx_core::store;
 use rotelyx_core::{epoch_at, Identity, Invitation};
 use rotelyx_net::EndpointAddr;
 
@@ -87,32 +88,16 @@ fn load_identity(path: &PathBuf) -> Result<Identity> {
     }
 }
 
-fn load_invitations(path: &PathBuf) -> Result<Vec<Invitation>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text = std::fs::read_to_string(path)?;
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((b64, expiry)) = line.split_once(' ') else {
-            continue;
-        };
-        let Ok(bytes) = data_encoding::BASE64URL_NOPAD.decode(b64.as_bytes()) else {
-            continue;
-        };
-        let Ok(secret) = <[u8; 32]>::try_from(bytes.as_slice()) else {
-            continue;
-        };
-        let Ok(expires) = expiry.trim().parse::<u64>() else {
-            continue;
-        };
-        out.push(Invitation::from_secret(secret, expires));
-    }
-    Ok(out)
+/// Invitations, in the format the rest of Rotelyx uses.
+///
+/// This file used to have a format of its own, `<secret> <expiry>`, with no
+/// transport key in it. An invitation needs one: it is the address the holder
+/// calls, and without it this client can only listen under its identity, which
+/// gives every contact the same name to compare. Sharing the store also means
+/// a code issued here is a code the terminal client accepts, and the other way
+/// round, which was not true while the two wrote different things.
+fn load_invitations(path: &PathBuf, epoch: u64) -> Result<Vec<store::StoredInvitation>> {
+    Ok(store::load_invitations(path, epoch)?)
 }
 
 pub(crate) fn encode_addr(addr: &EndpointAddr) -> Result<String> {
@@ -139,11 +124,9 @@ struct StateResponse {
 
 async fn api_state(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let epoch = now_epoch().unwrap_or(0);
-    let live = load_invitations(&invitations_path(&state.identity_path))
+    let live = load_invitations(&invitations_path(&state.identity_path), epoch)
         .unwrap_or_default()
-        .into_iter()
-        .filter(|i| i.expires_at_epoch() >= epoch)
-        .count();
+        .len();
 
     Json(StateResponse {
         id: state.identity.id().to_string(),
@@ -170,22 +153,18 @@ async fn api_invite(
     let epoch = now_epoch().map_err(err)?;
     let expires = epoch + req.hours.max(1);
     let invitation = Invitation::issue(expires);
-    let code = data_encoding::BASE64URL_NOPAD.encode(&*invitation.secret_bytes());
+    let stored = store::StoredInvitation {
+        secret: *invitation.secret_bytes(),
+        transport: *invitation.transport_bytes(),
+        expires_at_epoch: expires,
+    };
+    // The whole code: the secret that authorises and the address to call. The
+    // secret alone is what this used to hand out, and a holder of one cannot
+    // reach the address it belongs to.
+    let code = stored.code();
 
     let path = invitations_path(&state.identity_path);
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| err(e.into()))?;
-    use std::io::Write;
-    writeln!(file, "{code} {expires}").map_err(|e| err(e.into()))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
+    store::add_invitation(&path, stored, epoch).map_err(|e| err(e.into()))?;
 
     Ok(Json(InviteResponse { code }))
 }
@@ -236,7 +215,8 @@ async fn drive(socket: WebSocket, state: Arc<AppState>) {
 
     let epoch = now_epoch().unwrap_or(0);
     let identity = Identity::from_bytes(*state.identity.to_storage_bytes());
-    let invitations = load_invitations(&invitations_path(&state.identity_path)).unwrap_or_default();
+    let invitations =
+        load_invitations(&invitations_path(&state.identity_path), epoch).unwrap_or_default();
     let mut driver = Driver::new(identity, invitations, epoch, event_tx.clone());
 
     // The first command decides the role for the whole session.

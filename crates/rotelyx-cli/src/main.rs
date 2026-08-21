@@ -142,6 +142,23 @@ fn now_epoch() -> Result<u64> {
 /// bound under an invitation's key authenticates that key, and a blocklist
 /// holds identities. Without this, blocking would report success and do
 /// nothing, which is the one outcome worse than not having it.
+/// Refuse a peer on the blocklist.
+///
+/// # This does not work against anybody who does not want it to
+///
+/// It reads the roster, and a roster entry is an MLS credential: a byte string
+/// the member chose. Nothing proves it corresponds to any identity. Measured: a
+/// peer that puts its real identity there is refused, and the same peer putting
+/// anything else is admitted.
+///
+/// It did not work before per-conversation names either, and they make it plain
+/// rather than worse: a name is derived per conversation now, so a blocklist of
+/// identities cannot match one by construction.
+///
+/// The check that does work is revocation. An invitation proof is verified
+/// against a secret the issuer holds, so retiring the invitation refuses the
+/// holder and there is nothing for them to rename. Blocking a person is not a
+/// thing this design can do; ending a conversation is.
 fn refuse_if_blocked(gate: &Gate, conversation: &Conversation) -> Result<()> {
     let identities: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
     if let Some(id) = gate.blocked_member(&identities) {
@@ -150,7 +167,7 @@ fn refuse_if_blocked(gate: &Gate, conversation: &Conversation) -> Result<()> {
     Ok(())
 }
 
-/// The safety number, over the identity the group authenticated.
+/// The safety number, over the names the two sides use in this conversation.
 ///
 /// # Why not over the transport peer
 ///
@@ -164,20 +181,31 @@ fn refuse_if_blocked(gate: &Gate, conversation: &Conversation) -> Result<()> {
 /// The identity is inside, where MLS put it, and that is what this compares.
 /// Read after the handshake rather than before it, which is later than a user
 /// might like and is the only point at which the number means anything.
-fn print_safety_number(me: &Identity, conversation: &Conversation) {
+fn print_safety_number(my_name: RotelyxId, conversation: &Conversation) {
     let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
 
     println!();
-    match rotelyx_core::peer_identity(&roster, me.id()) {
+    // Both halves must be the names that are actually in the roster.
+    //
+    // This used to pass the long-lived identity as "me" while reading the peer
+    // out of the roster. That was consistent while the two were the same value.
+    // They are not any more: a conversation carries a name derived for it, the
+    // identity is in neither roster entry, so each side combined a different
+    // pair and read out digits that could not match.
+    match rotelyx_core::peer_identity(&roster, my_name) {
         Some(peer) => {
             println!("  peer          {peer}");
-            println!("  safety number {}", me.safety_number(&peer));
+            println!("  safety number {}", rotelyx_core::safety_number(&my_name, &peer));
             println!();
             println!("  Read those digits to your peer over a channel Rotelyx does not");
             println!("  control. If they differ, somebody is in the middle.");
             println!();
-            println!("  This is their identity, not the address you called. Those are");
-            println!("  different values now, and only this one is the person.");
+            println!("  This is the name they use in this conversation, and nowhere");
+            println!("  else. It is not the address you called and it is not an");
+            println!("  identity you can look for elsewhere: the same person shows a");
+            println!("  different one to everybody they talk to, so two of their");
+            println!("  contacts cannot compare notes and find each other. What the");
+            println!("  digits verify is this conversation, not a person in general.");
         }
         None => {
             println!("  no peer identity in the group, which should not happen.");
@@ -567,10 +595,30 @@ async fn main() -> Result<()> {
                 .accept_with(&gate, epoch)
                 .await
                 .context("accepting")?;
-            let me = Member::new(identity.id().as_bytes()).context("creating member")?;
+            // The name this identity uses inside this conversation.
+            //
+            // Not the long-lived identity: every contact would be shown the same
+            // value and two of them could compare it. The invitation the caller
+            // actually used is something only the two of us know, so a name
+            // derived from it is stable here and unrelated to the name any other
+            // contact sees. Which invitation that is comes from the address the
+            // call was answered at, which the caller does not choose.
+            let shared = session
+                .answered_at()
+                .and_then(|at| {
+                    live.iter()
+                        .find(|inv| inv.to_invitation().address() == at)
+                })
+                .map(|inv| inv.secret.to_vec())
+                // An identity listening under its own key has nothing to derive
+                // from and nothing to hide: the caller reached an address it
+                // could work out from the identity anyway.
+                .unwrap_or_else(|| identity.id().as_bytes().to_vec());
+            let my_name = identity.in_conversation(&shared);
+            let me = Member::new(my_name.as_bytes()).context("creating member")?;
             let conversation = handshake::host(&mut session, &me).await?;
             refuse_if_blocked(&gate, &conversation)?;
-            print_safety_number(&identity, &conversation);
+            print_safety_number(my_name, &conversation);
             chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
             endpoint.close().await;
         }
@@ -590,7 +638,7 @@ async fn main() -> Result<()> {
             // An invitation code carries where to call as well as permission to.
             // A bare address is still accepted, for a host running --open.
             let code = invite.as_deref().or(Some(addr.as_str()));
-            let (evidence, addr) = match code {
+            let (evidence, addr, invitation_secret) = match code {
                 Some(text) => {
                     let bytes = data_encoding::BASE64URL_NOPAD
                         .decode(text.trim().as_bytes())
@@ -630,14 +678,19 @@ async fn main() -> Result<()> {
                                     epoch,
                                 },
                                 to,
+                                Some(secret.to_vec()),
                             )
                         }
                         // Not an invitation code, so it is a plain address.
-                        Err(_) => (Admission::None, decode_addr(&addr)?),
+                        Err(_) => (Admission::None, decode_addr(&addr)?, None),
                     }
                 }
-                None => (Admission::None, decode_addr(&addr)?),
+                None => (Admission::None, decode_addr(&addr)?, None),
             };
+            // What an open host derives from when there is no invitation: the
+            // address that was dialled, which both sides know and which is the
+            // identity itself in that case.
+            let dialled_id = addr.id;
 
             let endpoint =
                 RotelyxEndpoint::bind_as(&identity, transport, net_config(relay.as_deref())?)
@@ -646,7 +699,15 @@ async fn main() -> Result<()> {
                 .connect_with(addr, &evidence)
                 .await
                 .context("connecting")?;
-            let me = Member::new(identity.id().as_bytes()).context("creating member")?;
+            // The same name derivation as the listening side, from the same
+            // secret: the invitation being used. Both ends must reach the same
+            // conclusion about what to derive from, or the safety numbers stop
+            // matching.
+            let shared = invitation_secret
+                .clone()
+                .unwrap_or_else(|| dialled_id.as_bytes().to_vec());
+            let my_name = identity.in_conversation(&shared);
+            let me = Member::new(my_name.as_bytes()).context("creating member")?;
             let conversation = handshake::join(&mut session, &me).await?;
 
             // The caller checks too. Blocking somebody and then dialling them
@@ -660,7 +721,7 @@ async fn main() -> Result<()> {
                 refuse_if_blocked(&gate, &conversation)?;
             }
 
-            print_safety_number(&identity, &conversation);
+            print_safety_number(my_name, &conversation);
             chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
             endpoint.close().await;
         }

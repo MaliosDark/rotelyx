@@ -257,9 +257,16 @@ delimiting. Writing a length field would have been the natural thing to do and
 would have handed the operator exactly the information the buckets exist to
 hide.
 
-**Addressing is never transmitted.** Both sides derive the tag key from the MLS
-exporter secret. Nothing about where a message is addressed travels over the
-network.
+**The addressing key is never transmitted.** Both sides derive the tag key from
+the MLS exporter secret, so it never travels and the mailbox never holds it.
+
+The tag itself does travel, and has to: it is what the mailbox routes on. What
+it carries is a value derived from a secret only the conversation has, rotated
+every epoch, and unrelated between recipients. An earlier version of this line
+said nothing about where a message is addressed travels over the network, which
+described a mailbox that could not route at all and contradicted ADV-4 of the
+threat model, where the rotating pseudonymous tag is exactly what the operator
+is said to see.
 
 **Collection is destructive.** An envelope handed over is gone. A client that
 crashes mid collection loses those messages. The alternative is a mailbox that

@@ -60,7 +60,9 @@ impl RelayPolicy {
 /// Upstream's default publishes the endpoint's public key and reachability to
 /// a pkarr relay and DNS zone operated by Number 0. For Rotelyx that is a
 /// disclosure of existence and presence to a third party on every startup, so
-/// the only variants here are "nothing" and "our own rendezvous".
+/// there is one variant and it publishes nothing. A rendezvous of our own would
+/// belong here if it ever existed; it does not, and this comment used to say it
+/// did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddressLookup {
     /// Publish nothing, resolve nothing. Peer addresses arrive out of band,

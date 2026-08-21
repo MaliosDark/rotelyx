@@ -34,7 +34,12 @@ no email, no sign up, nothing published anywhere.
 
 When both people are online, messages go **straight between the two devices**
 and touch no server. When one is offline, the message waits in a mailbox that
-cannot read it and does not know who sent it.
+cannot read it and is never told who sent it: an envelope carries no sender, and
+a deposit made without a paid token carries nothing that ties it to any other
+deposit. A paid token does carry a random identifier, because the allowance has
+to be counted against something, and that identifier links one buyer's deposits
+to each other without naming them. It is written up in
+[`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) rather than glossed here.
 
 Everything it runs on is in this repository. It contacts no infrastructure
 belonging to anyone else, and there is a test that fails if that ever changes.

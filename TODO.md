@@ -356,21 +356,16 @@ Everything needed for this is built.
       the fastest of five batches now: stolen time only ever makes a batch
       slower, so the minimum reads the transform rather than the load, and a
       real regression slows every batch including that one
-- [!] **One identity is shown to every contact, so contacts can still link
-      you.** This is the SimpleX property that per-invitation addresses only
-      half deliver. Each contact reaches a different address, and then the group
-      handshake shows all of them the same long-lived identity, because every
-      client does `Member::new(identity.id().as_bytes())`. Two people you
-      invited can compare what their client printed and find the same value.
-      The terminal client hands it to them explicitly: "this is their identity,
-      not the address you called ... only this one is the person".
-      **The threat model and the paper both claimed the opposite for a few
-      hours** and now say what is true.
-      Closing it means a distinct identity per contact, which SimpleX does. The
-      cost is real and is why this is recorded rather than done: a safety number
-      would then verify one relationship instead of one person, so a contact who
-      verified you cannot vouch for you to anybody else, and multi-device sync
-      has to carry a key per contact instead of one. That is a design decision
+- [x] **One identity was shown to every contact, so contacts could link you.**
+      This was the SimpleX property that per-invitation addresses only half
+      delivered: each contact reached a different address, and then the group
+      handshake showed all of them the same long-lived identity. All three
+      clients derive a name per conversation now, from the invitation secret
+      both sides hold. Measured with a real relay: the identity is `ef53e87e`,
+      one contact sees `a82d5b96`, another sees `e875cc93`. It cost no
+      authentication, because an MLS credential is a label the member chooses
+      and never proved anything; what it costs is recognising the same person in
+      two places, which is the point
 - [x] **Swept every "Defended" line in the threat model against what enforces
       it.** Ten adversaries and the side-channel section. Corrected: ADV-3 (the
       relay still links correspondents through the alias table), ADV-4 (a bought
@@ -408,6 +403,74 @@ Everything needed for this is built.
       Confidentiality holds and availability does not, which is the right way
       round, but a client that restores from a backup should force a rekey
       before it trusts its own sending. No client does
+- [x] **Swept the other four documents the same way.** The README, the
+      architecture note, the codec note and the paper. Corrected: "addressing is
+      never transmitted", which said no addressing information crosses the
+      network and described a mailbox that could not route at all, contradicting
+      ADV-4 of this project's own threat model where the rotating tag is exactly
+      what the operator sees. It appeared in the architecture note, in the paper,
+      and inside a paper figure as the label "tag never transmitted", which is
+      the worst place for it because a figure is read at a glance. The key is
+      what never travels; the tag derived from it must. Also corrected: the
+      paper still named jittered delivery as a mitigation, and the README said
+      the mailbox is not told who sent a message without saying that a bought
+      token links one buyer's deposits to each other
+- [x] **`AddressLookup` said it had two variants and has one.** The comment
+      described "nothing" and "our own rendezvous"; only the first exists. What
+      it enforces is stronger than the comment implied, since a single-variant
+      enum cannot be set to anything else
+- [x] **Ran the MLS fuzzer for forty minutes: 8.5M cases, 2,563 coverage
+      points, nothing.** The one artifact was a "slow unit" of 44 seconds for
+      1,761 bytes, which looked like a denial of service worth panicking about
+      and was 78 ms when run on its own. libFuzzer times a case by the clock on
+      the wall, and I had started the full test suite beside it. Same mistake as
+      the MDCT bound. The manifest now says not to
+- [x] **No identifiers, the SimpleX property, in the terminal client.** A client
+      that puts its long-lived identity in every MLS credential shows every
+      contact the same value, which is the linkage per-invitation addresses take
+      away from the network and then hand straight to the contacts. A name is now
+      derived per conversation from the invitation secret, which both sides know
+      and nobody else does. Measured live with a real relay: Alice's identity is
+      `ef53e87e`, Bob sees `a82d5b96`, Carol sees `e875cc93`, and the safety
+      number matches inside each conversation. Two of her contacts cannot compare
+      notes. It costs no authentication, because the credential was a label the
+      member chose and never proved anything; what it costs is recognising the
+      same person in two places, which is the point
+- [!] **Blocking has never worked against anybody unwilling to be blocked.**
+      Measured: a peer that puts its real identity in the credential is refused,
+      and the same peer putting any other bytes there is admitted. The credential
+      is chosen by the member and nothing proves it. The comment above the
+      safety number called it "the identity the group authenticated"; the group
+      binds it to a signature key and authenticates nothing about who it belongs
+      to. `Gate::admit` also checks the blocklist against the transport peer,
+      which is an ephemeral per-invitation key now, so that never matches either.
+      Revocation does work and is verified against a secret the issuer holds.
+      **This needs a decision, not a patch:** either "block" becomes "revoke the
+      invitation", or the command goes. Leaving a command that silently does
+      nothing is the worst of the three
+- [x] **The desktop and web clients bind per invitation now, so they have
+      per-conversation names too.** Both listened under the identity, which put
+      every caller at one address and left the host unable to tell which
+      invitation was used. They bind the newest invitation and answer at the
+      rest, derive the name from whichever address answered, and dial with an
+      ephemeral transport key instead of the identity. Verified by driving two
+      web clients through two conversations in a real browser: each pair's
+      safety number matches on both sides and the two pairs differ
+- [x] **The desktop could not accept the invitation code it issues.** It wrote
+      sixty four bytes, secret and address, and its connect parsed thirty two
+      and refused anything else. Both clients read the whole code now
+- [x] **The web client had an invitation format of its own**, `<secret>
+      <expiry>`, with no transport key in it, so it could only ever listen under
+      its identity and its codes were not the codes anything else issues. It
+      shares `rotelyx-core::store` now. Its gate also rebuilt every invitation
+      through `Invitation::from_secret`, which generates a *fresh* transport
+      key, so every address in the gate was unrelated to the address its holder
+      had been told to call
+- [x] **A client must dial the address inside its code.** Found by driving it:
+      pasting the host's endpoint address and a code belonging to a different
+      invitation is refused, which is the address binding working. The id now
+      comes from the code and the network addresses from what was pasted: one
+      says which key to ask for, the other says where the machine is
 - [ ] Watch the refusal counters in production. Limits chosen from reasoning
       rather than from traffic, and the first real load will say whether they
       are in the right place

@@ -310,11 +310,14 @@ No public security claim is made before all of these are met.
 3. **Fuzzing** of every parser reachable from the network: the L1 frame reader,
    the L3 envelope parser, and MLS message handling.
    *Harness built, gate not closed.* `fuzz/` holds a libFuzzer target for each
-   of the three, run with `cargo +nightly fuzz run <target>`. A first pass found
-   nothing: 15.5M cases against the frame reader, 30.7M against the envelope
-   parser with a seeded corpus, and 1.5M against MLS handling, which reached
-   2,155 coverage points and a corpus of 1,187. No crash, no hang, no artifact.
-   That is a smoke run and not a campaign. Closing this gate wants sustained
+   of the three, run with `cargo +nightly fuzz run <target>`. Nothing found so
+   far: 15.5M cases against the frame reader, 30.7M against the envelope parser
+   with a seeded corpus, and 8.5M against MLS handling, which reached 2,563
+   coverage points and a corpus of 1,635. No crash, no hang.
+   The one artifact produced was a "slow unit" of 44 seconds, which ran in 78 ms
+   on its own: libFuzzer times by the clock on the wall, and the machine was
+   compiling at the time. Do not run these beside a build.
+   That is still a smoke run and not a campaign. Closing this gate wants sustained
    runs and a place they happen without somebody remembering to start them.
    The frame and envelope targets also assert that anything accepted re-encodes
    to the bytes it came from, so a second encoding of one value is a finding

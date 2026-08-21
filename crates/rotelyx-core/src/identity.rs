@@ -103,6 +103,44 @@ impl Identity {
         SecretKey::from_bytes(&self.secret)
     }
 
+    /// The name this identity presents inside one conversation.
+    ///
+    /// # Why not the identity itself
+    ///
+    /// A client that puts its long-lived identity in every conversation hands
+    /// every contact the same value. Two people you invited separately can then
+    /// compare what their screens show and learn they are talking to the same
+    /// person, which is the linkage per-invitation addresses remove from the
+    /// network and then hand straight back to the contacts.
+    ///
+    /// `shared` is something both sides of one conversation know and nobody else
+    /// does: the invitation secret. The result is stable for that conversation,
+    /// so a peer sees one consistent name across reconnections, and unrelated
+    /// between conversations, so two peers see nothing in common.
+    ///
+    /// # What this costs, and what it does not
+    ///
+    /// It does not cost authentication. The value goes into an MLS credential,
+    /// which is a label the member chooses: nothing ever proved it corresponded
+    /// to a real identity, and the safety number authenticates by having both
+    /// sides contribute and be compared out of band, which still works.
+    ///
+    /// What it costs is recognition. Somebody who verified you in one
+    /// conversation cannot recognise you in another, and cannot vouch for you to
+    /// anybody else. That is the same trade SimpleX makes, and it is the point
+    /// rather than a side effect.
+    pub fn in_conversation(&self, shared: &[u8]) -> RotelyxId {
+        let mut hasher = blake3::Hasher::new_derive_key("rotelyx per-conversation name v1");
+        hasher.update(&*self.secret);
+        hasher.update(&(shared.len() as u64).to_be_bytes());
+        hasher.update(shared);
+        // Through a key rather than straight out of the hash: a `RotelyxId` is a
+        // public key, and thirty two arbitrary bytes are not one. Deriving the
+        // secret and taking its public half is deterministic, always valid, and
+        // leaves room for this name to sign for itself later.
+        RotelyxId::from(SecretKey::from_bytes(hasher.finalize().as_bytes()).public())
+    }
+
     /// Export for encrypted at-rest storage. The caller is responsible for
     /// sealing this before it touches a disk.
     pub fn to_storage_bytes(&self) -> Zeroizing<[u8; 32]> {
@@ -156,6 +194,61 @@ pub fn safety_number(a: &RotelyxId, b: &RotelyxId) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// Two contacts must not be shown the same name.
+    ///
+    /// # What this is for
+    ///
+    /// It is the whole point of deriving a name per conversation. Per-invitation
+    /// addresses stop the network seeing one name for all of somebody's
+    /// contacts, and then a client that puts its long-lived identity in every
+    /// MLS credential hands that name to the contacts instead, where they can
+    /// compare it.
+    #[test]
+    fn two_conversations_show_two_different_names() {
+        let me = Identity::generate();
+        let (with_bob, with_carol) = ([1u8; 32], [2u8; 32]);
+
+        let to_bob = me.in_conversation(&with_bob);
+        let to_carol = me.in_conversation(&with_carol);
+
+        assert_ne!(
+            to_bob, to_carol,
+            "two people invited separately were shown the same name and can link them"
+        );
+        assert_ne!(to_bob, me.id(), "the long-lived identity reached a conversation");
+        assert_ne!(to_carol, me.id());
+    }
+
+    /// The same conversation must show the same name every time.
+    ///
+    /// A name that changed between reconnections would be a new stranger every
+    /// time, and the safety number somebody read out loud would stop matching.
+    #[test]
+    fn one_conversation_shows_one_name() {
+        let me = Identity::generate();
+        let shared = b"the invitation secret both sides hold";
+        assert_eq!(me.in_conversation(shared), me.in_conversation(shared));
+    }
+
+    /// Two identities must not derive the same name from one conversation.
+    #[test]
+    fn two_identities_are_not_one_name() {
+        let (a, b) = (Identity::generate(), Identity::generate());
+        let shared = b"the same conversation";
+        assert_ne!(a.in_conversation(shared), b.in_conversation(shared));
+    }
+
+    /// The length of `shared` is part of the derivation.
+    ///
+    /// Without it, two different secrets that concatenate to the same bytes
+    /// would derive the same name.
+    #[test]
+    fn the_shared_secret_cannot_be_split_two_ways() {
+        let me = Identity::generate();
+        assert_ne!(me.in_conversation(b"abc"), me.in_conversation(b"ab"));
+        assert_ne!(me.in_conversation(b"ab"), me.in_conversation(b"a"));
+    }
     use super::*;
 
     #[test]

@@ -11,6 +11,7 @@
 
 use anyhow::{bail, Context, Result};
 use tokio::sync::mpsc;
+use rotelyx_core::store;
 use rotelyx_core::{
     Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, Session,
     RotelyxEndpoint,
@@ -83,7 +84,7 @@ pub enum Event {
 /// Everything one browser tab drives.
 pub struct Driver {
     identity: Identity,
-    invitations: Vec<Invitation>,
+    invitations: Vec<store::StoredInvitation>,
     epoch: u64,
     tx: mpsc::UnboundedSender<Event>,
 }
@@ -91,7 +92,7 @@ pub struct Driver {
 impl Driver {
     pub fn new(
         identity: Identity,
-        invitations: Vec<Invitation>,
+        invitations: Vec<store::StoredInvitation>,
         epoch: u64,
         tx: mpsc::UnboundedSender<Event>,
     ) -> Self {
@@ -118,8 +119,7 @@ impl Driver {
             let live: Vec<_> = self
                 .invitations
                 .iter()
-                .filter(|i| i.expires_at_epoch() >= self.epoch)
-                .map(|i| Invitation::from_secret(*i.secret_bytes(), i.expires_at_epoch()))
+                .filter(|i| i.expires_at_epoch >= self.epoch)
                 .collect();
 
             if live.is_empty() {
@@ -128,8 +128,12 @@ impl Driver {
 
             let mut gate = Gate::invitation_only();
             let count = live.len();
-            for inv in live {
-                gate.add_invitation(inv);
+            for inv in &live {
+                // Rebuilt with its own transport key. This used to go through
+                // `Invitation::from_secret`, which generates a fresh one, so
+                // every invitation in the gate had an address unrelated to the
+                // address its holder was told to call.
+                gate.add_invitation(inv.to_invitation());
             }
             self.emit(Event::Status {
                 text: format!("Admitting holders of {count} invitation(s)"),
@@ -137,9 +141,44 @@ impl Driver {
             gate
         };
 
-        let endpoint = RotelyxEndpoint::bind(&self.identity, NetConfig::direct_only())
+        // Answer on the invitations' own addresses, not on this identity.
+        //
+        // Listening under the identity means every caller reaches one address,
+        // so the network sees a name shared by all of somebody's contacts, and
+        // this side cannot tell which invitation a caller used and so has
+        // nothing to derive a per-conversation name from.
+        let all: Vec<store::StoredInvitation> = self
+            .invitations
+            .iter()
+            .filter(|i| i.expires_at_epoch >= self.epoch)
+            .cloned()
+            .collect();
+        let newest = all.iter().max_by_key(|i| i.expires_at_epoch);
+
+        let endpoint = match (newest, open) {
+            (Some(inv), _) => RotelyxEndpoint::bind_as(
+                &self.identity,
+                rotelyx_net::SecretKey::from_bytes(&inv.transport),
+                NetConfig::direct_only(),
+            )
             .await
-            .context("binding endpoint")?;
+            .context("binding endpoint")?,
+            _ => RotelyxEndpoint::bind(&self.identity, NetConfig::direct_only())
+                .await
+                .context("binding endpoint")?,
+        };
+
+        let primary = newest.map(|i| i.transport);
+        for inv in &all {
+            if Some(inv.transport) == primary {
+                continue;
+            }
+            if !endpoint.also_answer_as(&rotelyx_net::SecretKey::from_bytes(&inv.transport)) {
+                self.emit(Event::Status {
+                    text: "Could not ask the relay to answer one invitation's address".into(),
+                });
+            }
+        }
 
         self.emit(Event::Listening {
             addr: super::encode_addr(&endpoint.addr())?,
@@ -151,12 +190,21 @@ impl Driver {
             .await
             .context("accepting")?;
 
-        let me = Member::new(self.identity.id().as_bytes()).context("creating member")?;
+        // Derived from the invitation the caller actually used, which comes from
+        // the address the call was answered at rather than anything the caller
+        // wrote.
+        let shared = session
+            .answered_at()
+            .and_then(|at| all.iter().find(|inv| inv.to_invitation().address() == at))
+            .map(|inv| inv.secret.to_vec())
+            .unwrap_or_else(|| self.identity.id().as_bytes().to_vec());
+        let my_name = self.identity.in_conversation(&shared);
+        let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
         let conversation = super::handshake::host(&mut session, &me)
             .await
             .context("MLS handshake")?;
-        self.announce(&endpoint, &conversation).await;
+        self.announce(&endpoint, &conversation, my_name).await;
 
         self.chat(session, conversation, me, rx).await;
         endpoint.close().await;
@@ -172,26 +220,49 @@ impl Driver {
     ) -> Result<()> {
         let addr = super::decode_addr(addr)?;
 
-        let evidence = match invite.map(str::trim).filter(|s| !s.is_empty()) {
+        // A transport key for this call and nothing else, and the proof names
+        // it: the proof has to commit to the caller the transport authenticated.
+        let transport = RotelyxEndpoint::ephemeral_transport_key();
+        let calling_as = rotelyx_core::RotelyxId::from(transport.public());
+
+        let (evidence, invitation_secret, addr) = match invite.map(str::trim).filter(|s| !s.is_empty()) {
             Some(code) => {
                 let bytes = data_encoding::BASE64URL_NOPAD
                     .decode(code.as_bytes())
                     .context("invitation is not valid base64")?;
-                let secret: [u8; 32] = bytes
-                    .as_slice()
-                    .try_into()
-                    .context("invitation secret is not 32 bytes")?;
+                // The secret and the address it is answered at. Reading only
+                // thirty two bytes meant refusing the code this application's
+                // own invite produces.
+                let (secret, host) =
+                    Invitation::read_code(&bytes).context("that is not an invitation code")?;
                 // Expiry is the issuer's to enforce; we only prove possession.
-                let invitation = Invitation::from_secret(secret, u64::MAX);
-                Admission::Invitation {
-                    proof: invitation.prove(&self.identity.id(), self.epoch),
-                    epoch: self.epoch,
-                }
+                let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
+                // Call the address in the code, not one pasted beside it.
+                //
+                // Each invitation is answered at an address of its own, so a
+                // holder who dials some other address of the same host is
+                // refused: a permission is for one address. The code carries
+                // the right one, which is the whole reason it is in there.
+                (
+                    Admission::Invitation {
+                        proof: invitation.prove(&calling_as, self.epoch),
+                        epoch: self.epoch,
+                    },
+                    Some(secret.to_vec()),
+                    // The id comes from the code and the network addresses
+                    // from what was pasted: one says which key to ask for, the
+                    // other says where the machine is.
+                    rotelyx_net::EndpointAddr::from_parts(
+                        host.endpoint_id(),
+                        addr.addrs.iter().cloned(),
+                    ),
+                )
             }
-            None => Admission::None,
+            None => (Admission::None, None, addr),
         };
+        let dialled_id = addr.id;
 
-        let endpoint = RotelyxEndpoint::bind(&self.identity, NetConfig::direct_only())
+        let endpoint = RotelyxEndpoint::bind_as(&self.identity, transport, NetConfig::direct_only())
             .await
             .context("binding endpoint")?;
 
@@ -204,12 +275,17 @@ impl Driver {
             .await
             .context("connecting")?;
 
-        let me = Member::new(self.identity.id().as_bytes()).context("creating member")?;
+        // The same derivation the listening side makes, from the same secret.
+        let shared = invitation_secret
+            .clone()
+            .unwrap_or_else(|| dialled_id.as_bytes().to_vec());
+        let my_name = self.identity.in_conversation(&shared);
+        let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
         let conversation = super::handshake::join(&mut session, &me)
             .await
             .context("MLS handshake")?;
-        self.announce(&endpoint, &conversation).await;
+        self.announce(&endpoint, &conversation, my_name).await;
 
         self.chat(session, conversation, me, rx).await;
         endpoint.close().await;
@@ -225,9 +301,18 @@ impl Driver {
     ///
     /// Read after the handshake for the same reason. Before it there is no
     /// identity to compare, only an address.
-    async fn announce(&self, endpoint: &RotelyxEndpoint, conversation: &Conversation) {
+    async fn announce(
+        &self,
+        endpoint: &RotelyxEndpoint,
+        conversation: &Conversation,
+        my_name: rotelyx_core::RotelyxId,
+    ) {
         let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
-        let peer = match rotelyx_core::peer_identity(&roster, self.identity.id()) {
+        // Both halves must be names that are in the roster: a conversation
+        // carries a name derived for it, and the long-lived identity is in
+        // neither entry, so combining it with a roster entry gives each side a
+        // different pair and digits that cannot match.
+        let peer = match rotelyx_core::peer_identity(&roster, my_name) {
             Some(id) => id,
             None => {
                 self.emit(Event::Error {
@@ -242,7 +327,7 @@ impl Driver {
 
         self.emit(Event::Connected {
             peer: peer.to_string(),
-            safety_number: self.identity.safety_number(&peer),
+            safety_number: rotelyx_core::safety_number(&my_name, &peer),
             direct,
         });
     }
