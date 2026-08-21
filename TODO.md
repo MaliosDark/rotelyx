@@ -343,6 +343,37 @@ Everything needed for this is built.
       the fastest of five batches now: stolen time only ever makes a batch
       slower, so the minimum reads the transform rather than the load, and a
       real regression slows every batch including that one
+- [!] **One identity is shown to every contact, so contacts can still link
+      you.** This is the SimpleX property that per-invitation addresses only
+      half deliver. Each contact reaches a different address, and then the group
+      handshake shows all of them the same long-lived identity, because every
+      client does `Member::new(identity.id().as_bytes())`. Two people you
+      invited can compare what their client printed and find the same value.
+      The terminal client hands it to them explicitly: "this is their identity,
+      not the address you called ... only this one is the person".
+      **The threat model and the paper both claimed the opposite for a few
+      hours** and now say what is true.
+      Closing it means a distinct identity per contact, which SimpleX does. The
+      cost is real and is why this is recorded rather than done: a safety number
+      would then verify one relationship instead of one person, so a contact who
+      verified you cannot vouch for you to anybody else, and multi-device sync
+      has to carry a key per contact instead of one. That is a design decision
+- [x] **Swept every "Defended" line in the threat model against what enforces
+      it.** Ten adversaries and the side-channel section. Corrected: ADV-3 (the
+      relay still links correspondents through the alias table), ADV-4 (a bought
+      token links its holder's deposits), ADV-5 ("no key material on any server"
+      was too broad: a mailbox that wakes devices holds the APNs private key and
+      its registry passphrase), ADV-9 (named jitter as a mitigation, which the
+      design deliberately rejects in favour of one fixed schedule for every
+      device), ADV-7 (the count-only reporting above). ADV-1, ADV-2 and ADV-10
+      hold up; ADV-6 and ADV-8 claim nothing
+- [x] **ADV-2 had no test at L2.** It claims injection and modification fail
+      authentication at both layers and that replay is rejected. What existed was
+      `no_single_byte_corruption_panics`, which discards the result: it asserts
+      nothing crashes, not that anything is refused. An implementation that
+      quietly accepted a tampered ciphertext passed the whole suite. Two tests
+      now refuse a modified message across eight positions and refuse a replayed
+      one
 - [ ] Watch the refusal counters in production. Limits chosen from reasoning
       rather than from traffic, and the first real load will say whether they
       are in the right place
@@ -753,8 +784,19 @@ wide margin the largest single task remaining in the project.
       played it. Found only because the clamp above started cutting them. Scaled
       to 0.25, and every published figure is unchanged, so the overshoot was
       never what the numbers rested on
-- [ ] Fuzzing every parser reachable from the network with a real fuzzer: the frame reader, the
-      envelope parser, the admission decoder and MLS message handling
+- [x] **Fuzzing, with a real fuzzer.** `fuzz/` has a libFuzzer target for each
+      of the three parsers the threat model names, run on nightly with
+      `cargo +nightly fuzz run <target>`. First pass: 15.5M cases on the frame
+      reader, 30.7M on the envelope parser once its corpus was seeded, and 1.5M
+      on MLS handling, which got to 2,155 coverage points and a 1,187 case
+      corpus. Nothing crashed, hung, or left an artifact. The envelope target
+      found nothing at 29 coverage points until it was seeded with real
+      envelopes and reached 39: a fuzzer that never gets past the length check
+      proves nothing, and the number to watch is coverage rather than executions
+- [ ] **Run the fuzzers for longer than 90 seconds, somewhere that does not need
+      somebody to remember.** What ran is a smoke test. The corpus is gitignored
+      because it is machine-specific; a case that finds something belongs in the
+      ordinary suite as a regression
 - [x] **Constant time review**, recorded in `docs/THREAT-MODEL.md` section 6.
       Every comparison in the first-party crates touching a key, tag, token,
       proof or passphrase was located and classified. Three were already

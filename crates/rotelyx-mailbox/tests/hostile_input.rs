@@ -163,3 +163,45 @@ fn tag_equality_is_still_equality() {
         assert_ne!(a, different, "tags differing at byte {position} compared equal");
     }
 }
+
+/// An envelope the parser accepts must write back to the bytes it came from.
+///
+/// # What this pins, that the mutation above does not
+///
+/// The tests here ask that nothing crashes. That is the loud failure. The quiet
+/// one is a parser that accepts two different byte strings as the same envelope:
+/// an attacker who can produce a second encoding of an envelope somebody already
+/// has can deposit it under the same tag and be treated as a different message,
+/// or slip past anything that deduplicates or compares on bytes.
+///
+/// The envelope is padded to fixed buckets, so a second encoding also means a
+/// second size, which is the padding promise breaking rather than the parser
+/// merely being untidy.
+#[test]
+fn every_accepted_envelope_re_encodes_to_itself() {
+    let valid = specimen();
+    let mut checked = 0;
+
+    for position in 0..valid.len() {
+        for byte in [0x00u8, 0x01, 0x7f, 0x80, 0xff] {
+            let mut mutated = valid.clone();
+            mutated[position] = byte;
+
+            let Ok(envelope) = Envelope::from_bytes(&mutated) else {
+                continue;
+            };
+            assert_eq!(
+                envelope.to_bytes(),
+                mutated,
+                "byte {position} set to {byte:#04x} parsed and wrote back differently, \
+                 so this envelope has more than one encoding"
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "no mutation parsed, so this asserted nothing at all"
+    );
+}

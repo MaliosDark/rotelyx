@@ -69,8 +69,13 @@ hole-punch.
 - **What per-invitation addresses do and do not change here.** The identity key
   never reaches the wire, and each invitation carries a transport key of its
   own, so the relay never sees a long-lived name and no two people you invited
-  are given a name in common. That defeats **correspondents comparing notes**
-  and a **passive observer**. It does **not** defeat this adversary: all of one
+  are given the same **address**. That defeats a **passive observer**.
+  It does **not** defeat **correspondents comparing notes**, which an earlier
+  draft of this line claimed: two people invited by the same identity are shown
+  the same identity once the group handshake completes, because a client
+  presents one long-lived key to everybody. The addresses differ, the identity
+  does not, and the identity is the value the clients print. See the open design
+  item in `TODO.md`. It does **not** defeat this adversary either: all of one
   endpoint's addresses are answered on a single relay connection, and the relay
   holds the table mapping them to it, so it can still see that the parties
   reaching those addresses are reaching the same host. Correspondent
@@ -117,8 +122,19 @@ read all stored envelopes, retain them past TTL, and correlate timing.
 *Capability:* obtains everything ADV-3 and ADV-4 hold, plus future traffic,
 plus the ability to compel silence.
 
-- **Defended:** A1, A4 retroactively. There is no plaintext, and no key
-  material, on any server.
+- **Defended:** A1, A4 retroactively. No server holds anything that can read a
+  message: envelopes are L2 ciphertext, relays forward QUIC ciphertext, and the
+  capability keys a mailbox holds are the **public** halves, so seizing one
+  cannot mint tokens either. The private halves live with the issuer, which is a
+  separate service.
+- **Not defended, and a stronger claim used to be made here.** "No key material
+  on any server" was too broad. A mailbox configured to wake devices holds the
+  APNs `.p8`, which is a private key, and the passphrase to its wake registry.
+  Seizing it therefore yields the ability to push to every device registered
+  with that mailbox, and the list of which devices those are. It reads nothing,
+  and it is not nothing. **Design consequence:** a mailbox that wakes devices is
+  a more valuable thing to seize than one that does not, and an operator should
+  know that before configuring one.
 - **Not defended:** A2 for the period of retention. TTL and no-log policy limit
   but do not eliminate this.
 - **Design consequence:** the mailbox must be trivially self-hostable, so that
@@ -179,8 +195,15 @@ timing and volume across the whole network.
   and the per-token bound is reached silently. The only refusal left is a
   malformed token, which depends on what the caller sent and nothing else.
 - **Not defended:** A5, and partially A2 by timing correlation with a mailbox.
-- **Mitigations:** content-free silent wakes, jittered delivery windows, decoy
-  pushes. None of these is a solution and all cost battery.
+- **Mitigations, as built:** wakes carry no content and are marked as decoys, so
+  a device cannot tell from the push whether anything is waiting, and neither
+  can Apple. Every registered device is woken on **one fixed schedule**,
+  identical for all of them and regardless of whether anything arrived.
+  **Not jitter, and deliberately not.** An earlier version of this line named
+  jittered delivery windows as a mitigation, which would be a weakening: a
+  device woken on a rhythm of its own is a device identifiable by that rhythm.
+  Anybody tempted to add jitter here should read the comment above the wake loop
+  first. None of this is a solution and all of it costs battery.
 - This is an unsolved problem inherent to mobile platforms. It is listed here
   rather than hidden because a threat model that only lists solved problems is
   marketing.
@@ -279,6 +302,16 @@ No public security claim is made before all of these are met.
    review as its primary business.
 3. **Fuzzing** of every parser reachable from the network: the L1 frame reader,
    the L3 envelope parser, and MLS message handling.
+   *Harness built, gate not closed.* `fuzz/` holds a libFuzzer target for each
+   of the three, run with `cargo +nightly fuzz run <target>`. A first pass found
+   nothing: 15.5M cases against the frame reader, 30.7M against the envelope
+   parser with a seeded corpus, and 1.5M against MLS handling, which reached
+   2,155 coverage points and a corpus of 1,187. No crash, no hang, no artifact.
+   That is a smoke run and not a campaign. Closing this gate wants sustained
+   runs and a place they happen without somebody remembering to start them.
+   The frame and envelope targets also assert that anything accepted re-encodes
+   to the bytes it came from, so a second encoding of one value is a finding
+   rather than something the fuzzer would pass over.
 4. **Documented handling** of the state-corruption class that kills hand-written
    ratchets, and which MLS does not automatically solve for us:
    nonce reuse under concurrency, state rollback after backup restore,

@@ -1,0 +1,52 @@
+# Fuzz targets for every parser an attacker reaches from the network.
+#
+# Its own workspace, which is why `[workspace]` is empty below: these targets
+# build with a sanitizer and a nightly toolchain, and dragging that into the
+# main build would make every ordinary `cargo test` slower for no gain.
+#
+#   cargo +nightly fuzz list
+#   cargo +nightly fuzz run frame_reader -- -max_total_time=60
+#
+# The corpus lives under `fuzz/corpus/<target>` and is not committed: it is
+# machine-specific and grows without bound. What is worth committing is a case
+# that found something, which belongs in the ordinary test suite as a
+# regression rather than in a corpus nobody re-runs.
+
+[package]
+name = "rotelyx-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+futures-lite = "2"
+rotelyx-core = { path = "../crates/rotelyx-core" }
+rotelyx-mailbox = { path = "../crates/rotelyx-mailbox" }
+rotelyx-crypto = { path = "../crates/rotelyx-crypto" }
+
+[[bin]]
+name = "frame_reader"
+path = "fuzz_targets/frame_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope_parser"
+path = "fuzz_targets/envelope_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mls_message"
+path = "fuzz_targets/mls_message.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

@@ -1197,11 +1197,18 @@
     </p>
 
     <p>
-      The property obtained is unlinkability between an endpoint&rsquo;s
-      correspondents with respect to each other and to a passive observer: no two
-      are given a name in common, nothing on the wire relates the names, and no
-      holder can test a name it did not receive. It is <em>not</em> obtained with
-      respect to the relay. All of an endpoint&rsquo;s addresses are answered on
+      The property obtained is unlinkability of an endpoint&rsquo;s
+      <em>addresses</em>: no two correspondents are given the same one, nothing on
+      the wire relates them, and no holder can test one it did not receive. That
+      is unlinkability with respect to a passive observer. It is <em>not</em>
+      unlinkability between the correspondents themselves. A client presents one
+      long-lived identity key to everybody, so two people invited by the same
+      host are shown the same identity once the group handshake completes, and
+      that identity is the value the clients display. Separating it would mean a
+      distinct identity per contact, in the manner of SimpleX, at the cost of a
+      safety number that verifies one relationship rather than one person; that
+      is a design decision and is recorded as open rather than claimed. Nor is it
+      obtained with respect to the relay. All of an endpoint&rsquo;s addresses are answered on
       one relay connection, and the relay holds the table mapping them to it, so
       it can see that the parties reaching those addresses reach the same host.
       Withholding that would require a relay connection per invitation,

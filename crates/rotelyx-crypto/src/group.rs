@@ -769,6 +769,83 @@ mod tests {
         assert_eq!(pt, b"nadie mas puede leer esto");
     }
 
+    /// Two members, ready to exchange messages.
+    fn conversation_of_two() -> (Member, Member, Conversation, Conversation) {
+        let (alice, bob) = pair();
+        let mut a = Conversation::create(&alice).expect("create");
+        let (_commit, welcome) = a
+            .invite(&alice, bob.key_package().expect("kp").key_package())
+            .expect("invite");
+        let tree = a.ratchet_tree().expect("tree");
+        let b = Conversation::join(&bob, &welcome, &tree).expect("join");
+        (alice, bob, a, b)
+    }
+
+    /// A modified message must be refused, not merely survived.
+    ///
+    /// # What this pins
+    ///
+    /// ADV-2 in the threat model says injection and modification fail
+    /// authentication at L1 and L2 independently. The L2 half had no test. What
+    /// existed was `no_single_byte_corruption_panics`, which feeds corrupted
+    /// bytes to the parsers and discards the result: it asserts that nothing
+    /// crashes, which is a different and much weaker property. An implementation
+    /// that quietly accepted a tampered ciphertext passed the whole suite.
+    #[test]
+    fn a_modified_message_is_refused() {
+        let (alice, _bob, mut a, _b) = conversation_of_two();
+        let plaintext = b"the text an attacker wants to change";
+        let valid = a.send(&alice, plaintext).expect("send");
+
+        // Spread across the message rather than one convenient byte: framing,
+        // header and ciphertext all have to refuse.
+        let positions: Vec<usize> = (0..8).map(|n| valid.len() * n / 8).collect();
+        for position in positions {
+            for flip in [0x01u8, 0x80, 0xff] {
+                let (_alice2, bob2, _a2, mut b2) = conversation_of_two();
+                let mut corrupted = valid.clone();
+                corrupted[position] ^= flip;
+                if corrupted == valid {
+                    continue;
+                }
+
+                match b2.receive(&bob2, &corrupted) {
+                    Err(_) => {}
+                    Ok(other) => assert_ne!(
+                        other,
+                        Received::Message(plaintext.to_vec()),
+                        "a message with byte {position} altered was accepted as the original"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// The same message delivered twice must not be accepted twice.
+    ///
+    /// # What this pins
+    ///
+    /// ADV-2 says replay is rejected by MLS epoch and generation tracking. That
+    /// is a property of the library rather than of this code, which is exactly
+    /// why it was worth writing down: nothing here checked that Rotelyx uses it
+    /// in a way that keeps it. An attacker who can record and resend one
+    /// ciphertext could otherwise make a message appear twice.
+    #[test]
+    fn a_replayed_message_is_refused() {
+        let (alice, bob, mut a, mut b) = conversation_of_two();
+        let ct = a.send(&alice, b"only once").expect("send");
+
+        assert_eq!(
+            b.receive(&bob, &ct).expect("first delivery").message(),
+            Some(b"only once".to_vec())
+        );
+
+        assert!(
+            b.receive(&bob, &ct).is_err(),
+            "the same ciphertext was accepted a second time"
+        );
+    }
+
     /// Somebody arriving must be reported to the people already there, by name.
     ///
     /// # The hole this closes
