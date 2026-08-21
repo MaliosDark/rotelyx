@@ -73,3 +73,4 @@ target/listening/
 fuzz/corpus/
 fuzz/artifacts/
 fuzz/target/
+scripts/browser-test/__pycache__/cdp.cpython-310.pyc

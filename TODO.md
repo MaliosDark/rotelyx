@@ -148,9 +148,22 @@ Everything needed for this is built.
 - [x] **The module itself is sound, and that was checked.** Valid module, the 61
       symbols the glue calls all exported, the 31 imports it needs all defined,
       cache stamp matching the binary beside it
-- [ ] **Open the page in a browser and complete a handshake.** Everything above
-      is static analysis. It rules out a broken module and it found the header;
-      it is not the same as the page working
+- [x] **Opened the page in a browser and completed a conversation.** Two tabs
+      against the deployed site: both loaded their WebAssembly and reached ready,
+      met on a random rendezvous phrase, established a conversation, showed the
+      *same* safety number on both sides, and delivered a message each way
+      through the real mailbox. Nothing was wrong, which is worth as much as a
+      failure would have been: before this, nobody had ever opened it.
+      `scripts/browser-test/run` does the whole thing again in one command, with
+      a DevTools client small enough to need no packages. Not in CI: it needs a
+      browser and a deployed site, and a test that fails when the network is slow
+      is one people learn to re-run
+- [x] **The page will not let you send until the safety number is confirmed.**
+      Found by driving it: the input and the button stay disabled through
+      "conversation established" and only enable on "Numbers match". Worth
+      recording because it is the kind of thing a later change could drop
+      without anybody noticing, and `scripts/browser-test/run` now fails if it
+      does
 
 - [ ] Measure hole punch success rate across NAT types
 - [ ] Measure how often `PreferDirect` costs a connection that `Fastest` would

@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Drive the deployed browser client through a whole conversation.
+
+See README.md. Exits non-zero on the first thing that does not happen.
+"""
+import json, os, secrets, subprocess, sys, tempfile, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cdp import http_json, Page  # noqa: E402
+
+URL = sys.argv[1] if len(sys.argv) > 1 else "https://rotelyx.ideoa.co/chat.html"
+PORT = int(os.environ.get("PORT", "9401"))
+
+
+def step(text):
+    print(f"  {text}", flush=True)
+
+
+def fail(text):
+    print(f"\n  FAILED: {text}", file=sys.stderr)
+    sys.exit(1)
+
+
+def until(predicate, seconds, what):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.5)
+    fail(what)
+
+
+def open_tab(browser, url):
+    tid = browser.call("Target.createTarget", url=url)["targetId"]
+    found = until(
+        lambda: next(
+            (t for t in http_json(PORT, "/json")
+             if t["id"] == tid and t.get("webSocketDebuggerUrl")), None),
+        20, "the tab never appeared")
+    page = Page(found["webSocketDebuggerUrl"])
+    page.call("Runtime.enable")
+    return page
+
+
+def text_of(page, element):
+    return page.js(f"document.getElementById({json.dumps(element)}).textContent")
+
+
+def log_of(page):
+    return page.js("document.getElementById('log').innerText") or ""
+
+
+def set_field(page, element, value):
+    page.js(f"""(() => {{
+      const e = document.getElementById({json.dumps(element)});
+      e.value = {json.dumps(value)};
+      e.dispatchEvent(new Event('input', {{bubbles: true}}));
+    }})()""")
+
+
+def click(page, element):
+    page.js(f"document.getElementById({json.dumps(element)}).click()")
+
+
+def safety_number(page):
+    return page.js(r"""(() => {
+      const e = [...document.querySelectorAll('*')].find(
+        x => /\d{5}[\s ]\d{5}/.test(x.textContent || '') && x.children.length === 0);
+      return e ? e.textContent.trim() : null;
+    })()""")
+
+
+profile = tempfile.mkdtemp(prefix="rotelyx-browser-test-")
+chrome = subprocess.Popen(
+    ["google-chrome", "--headless=new", "--disable-gpu", "--no-sandbox",
+     f"--remote-debugging-port={PORT}", f"--user-data-dir={profile}", "about:blank"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+try:
+    for _ in range(60):
+        try:
+            version = http_json(PORT, "/json/version")
+            break
+        except Exception:
+            time.sleep(0.5)
+    else:
+        fail("chrome never opened its debugging port")
+    step(f"browser {version.get('Browser')}")
+
+    browser = Page(version["webSocketDebuggerUrl"])
+    phrase = "browser-test-" + secrets.token_hex(8)
+    step(f"rendezvous phrase {phrase}")
+
+    a, b = open_tab(browser, URL), open_tab(browser, URL)
+    for page, who in ((a, "host"), (b, "guest")):
+        until(lambda p=page: text_of(p, "status") == "ready", 30,
+              f"the {who} page never finished loading its WebAssembly")
+    step("both pages loaded and reached ready")
+
+    set_field(a, "name", "browser-test-host")
+    set_field(b, "name", "browser-test-guest")
+    set_field(a, "phrase", phrase)
+    set_field(b, "phrase", phrase)
+
+    click(a, "host")
+    time.sleep(3)
+    click(b, "guest")
+
+    for page, who in ((a, "host"), (b, "guest")):
+        until(lambda p=page: "Conversation established" in log_of(p), 90,
+              f"the {who} never established a conversation")
+    step("conversation established on both sides")
+
+    numbers = {}
+    for page, who in ((a, "host"), (b, "guest")):
+        numbers[who] = until(lambda p=page: safety_number(p), 30,
+                             f"the {who} never showed a safety number")
+    if numbers["host"] != numbers["guest"]:
+        fail(f"the safety numbers differ: {numbers['host']!r} against {numbers['guest']!r}")
+    step(f"safety numbers match: {numbers['host']}")
+
+    for page in (a, b):
+        click(page, "confirm")
+    for page, who in ((a, "host"), (b, "guest")):
+        until(lambda p=page: p.js("!document.getElementById('send').disabled"), 20,
+              f"the {who} could not send after confirming")
+    step("both sides can send once the numbers are confirmed")
+
+    for sender, receiver, who, message in (
+        (a, b, "host to guest", "browser test, host speaking"),
+        (b, a, "guest to host", "browser test, guest replying"),
+    ):
+        set_field(sender, "text", message)
+        click(sender, "send")
+        until(lambda: message in log_of(receiver), 60, f"{who} never arrived")
+        step(f"{who}: delivered")
+
+    print("\n  the deployed browser client holds a conversation end to end")
+finally:
+    chrome.terminate()
+    try:
+        chrome.wait(timeout=10)
+    except Exception:
+        chrome.kill()
