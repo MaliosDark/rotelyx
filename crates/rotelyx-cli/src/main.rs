@@ -93,10 +93,16 @@ enum Command {
     /// Dial a peer, then chat.
     Connect {
         /// The address printed by the listening side.
+        ///
+        /// A code is base64url, whose alphabet includes `-`, so roughly one code
+        /// in sixty four begins with one and would otherwise be read as a flag.
+        /// The holder was told to paste what they were given, so it has to be
+        /// taken as a value whatever it starts with.
+        #[arg(allow_hyphen_values = true)]
         addr: String,
 
         /// The invitation code the peer issued.
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         invite: Option<String>,
 
         /// Route through this relay, and never take a direct path.

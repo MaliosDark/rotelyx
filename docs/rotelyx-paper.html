@@ -1182,15 +1182,30 @@
     </p>
 
     <p>
+      Admission is bound to the address as well as to the permission. The
+      endpoint reads the server name the caller sent and admits only on the
+      invitation answered there, so a proof issued for one address is worthless
+      at another. Omitting that check would leave the separation observable but
+      not testable: a holder encountering an address it suspected of belonging to
+      the same host could dial it, present its own invitation, and learn the
+      answer from whether it was let in.
+    </p>
+
+    <p>
       The property obtained is unlinkability between an endpoint&rsquo;s
-      correspondents at the transport layer: no two of them are given a name in
-      common, and nothing on the wire relates the names to each other. Three
-      things fall outside it. The count of addresses is not hidden from the relay
-      carrying them, because they arrive on one connection. The routing lives in
-      the relay&rsquo;s memory, so it is re-established on reconnect but must be
-      requested again by a fresh process. And answering at several addresses is
-      not serving several conversations concurrently, which the present
-      implementation does not do.
+      correspondents with respect to each other and to a passive observer: no two
+      are given a name in common, nothing on the wire relates the names, and no
+      holder can test a name it did not receive. It is <em>not</em> obtained with
+      respect to the relay. All of an endpoint&rsquo;s addresses are answered on
+      one relay connection, and the relay holds the table mapping them to it, so
+      it can see that the parties reaching those addresses reach the same host.
+      Withholding that would require a relay connection per invitation,
+      multiplying connections, handshakes and presence signals by the number of
+      invitations; the present implementation does not do this. Two further
+      limits: the routing lives in the relay&rsquo;s memory, so it is
+      re-established on reconnect but must be requested again by a fresh process,
+      and answering at several addresses is not serving several conversations
+      concurrently.
     </p>
 
   </div>

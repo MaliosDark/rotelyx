@@ -352,8 +352,19 @@ be replayed onto another connection, and the relay refuses an address that is
 already somebody's connection or already answered elsewhere. Taking someone's
 address needs their invitation's secret key.
 
-**What this does not do.** It does not hide the *number* of addresses from the
-relay carrying them, since they arrive on one connection. It does not survive a
+A permission is for one address. Admission checks which address the caller
+actually dialled, taken from the TLS server name, and only the invitation
+answered there may admit it. Without that the separation would survive being
+looked at but not being tested: a holder who came across an address it suspected
+belonged to the same host could call it, present its own invitation, and read
+the answer.
+
+**What this does not do.** It does not hide the addresses from the relay
+carrying them. They are answered on one connection and the relay holds the table
+that maps them to it, so the relay can still see that the parties reaching those
+addresses reach the same host. Hiding that would need a relay connection per
+invitation, which multiplies connections, handshakes and presence signals by the
+number of invitations, and is not built. The arrangement also does not survive a
 restart: the routing lives in the relay's memory and is re-made on reconnect,
 but a fresh process has to ask again. And answering at several addresses is not
 serving several conversations at once, which is a separate thing this endpoint

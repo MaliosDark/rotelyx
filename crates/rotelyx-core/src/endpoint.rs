@@ -172,7 +172,9 @@ impl RotelyxEndpoint {
         }
 
         let evidence = Admission::from_bytes(&frame.payload)?;
-        if let Err(e) = gate.admit(&session.peer(), &self.id, &evidence, current_epoch) {
+        let dialled = session.dialled();
+        if let Err(e) = gate.admit(&session.peer(), &self.id, &evidence, current_epoch, dialled)
+        {
             session.close().await;
             return Err(e.into());
         }
@@ -220,6 +222,14 @@ impl Session {
 
     pub fn peer(&self) -> RotelyxId {
         self.peer
+    }
+
+    /// Which of this identity's addresses the caller dialled, if it said.
+    ///
+    /// An identity answering one invitation per address needs this to check
+    /// that a caller's permission is for the address it actually used.
+    pub fn dialled(&self) -> Option<RotelyxId> {
+        self.net.dialled().map(RotelyxId::from)
     }
 
     pub async fn send(&mut self, frame: &Frame) -> Result<(), WireError> {

@@ -177,6 +177,14 @@ impl NetSession {
         self.peer
     }
 
+    /// Which of this endpoint's addresses the caller dialled, if it said.
+    ///
+    /// `None` on a session this endpoint opened, and on an accepted one whose
+    /// caller sent no TLS server name.
+    pub fn dialled(&self) -> Option<EndpointId> {
+        self.conn.dialled_id()
+    }
+
     pub fn send_stream(&mut self) -> &mut SendStream {
         &mut self.send
     }

@@ -267,6 +267,20 @@ impl Future for IncomingFuture {
     }
 }
 
+/// Extracts the endpoint id the caller asked for, from the TLS server name.
+///
+/// Always `None` on a connection we opened, because the server name is what the
+/// *other* side sent. On an accepted connection it is the address that was
+/// dialled, which an endpoint answering under several keys needs in order to
+/// know which of them this call arrived at.
+fn dialled_id_from_noq_conn(conn: &rotelyx_quic::Connection) -> Option<EndpointId> {
+    let data = conn.handshake_data()?;
+    let data = data
+        .downcast::<rotelyx_quic::crypto::rustls::HandshakeData>()
+        .ok()?;
+    crate::tls::name::decode(data.server_name.as_deref()?)
+}
+
 /// Extracts the ALPN protocol from the peer's handshake data.
 fn alpn_from_noq_conn(conn: &rotelyx_quic::Connection) -> Option<Vec<u8>> {
     let data = conn.handshake_data()?;
@@ -1114,6 +1128,17 @@ impl Connection<HandshakeCompleted> {
     /// Extracts the ALPN protocol from the peer's handshake data.
     pub fn alpn(&self) -> &[u8] {
         &self.data.info.alpn
+    }
+
+    /// The address this call was made to, when this endpoint accepted it.
+    ///
+    /// `None` on a connection this endpoint opened, and on an accepted one
+    /// whose caller sent no server name. An endpoint that answers under several
+    /// keys needs this to tell which of its addresses a caller used, and a
+    /// caller that declines to say has not used any of them in the ordinary
+    /// way: treat `None` as "unknown", never as "the usual one".
+    pub fn dialled_id(&self) -> Option<EndpointId> {
+        dialled_id_from_noq_conn(&self.inner)
     }
 
     /// Returns the [`EndpointId`] from the peer's TLS certificate.

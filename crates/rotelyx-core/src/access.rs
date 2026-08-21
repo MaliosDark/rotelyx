@@ -199,6 +199,11 @@ pub fn peer_identity(roster: &[Vec<u8>], me: RotelyxId) -> Option<RotelyxId> {
         .find(|id| *id != me)
 }
 
+/// The address a transport key is answered at.
+fn address_of(transport: &[u8; 32]) -> RotelyxId {
+    RotelyxId::from(SecretKey::from_bytes(transport).public())
+}
+
 /// A capability issued by one identity so another can reach it.
 ///
 /// Shared out of band: a QR code, a link, a spoken string. Possession is the
@@ -207,6 +212,13 @@ pub fn peer_identity(roster: &[Vec<u8>], me: RotelyxId) -> Option<RotelyxId> {
 pub struct Invitation {
     secret: Zeroizing<[u8; 32]>,
     expires_at_epoch: u64,
+    /// The public half of `transport`, worked out once.
+    ///
+    /// Deriving it costs a scalar multiplication, and admission consults every
+    /// live invitation's address on every attempt to connect, which anybody may
+    /// make. Left to be recomputed, the work an unadmitted caller can ask for
+    /// would grow with the number of invitations the identity holds.
+    address: RotelyxId,
     /// The address this invitation is answered on.
     ///
     /// # Why an invitation carries an address at all
@@ -246,6 +258,7 @@ impl Invitation {
         let mut transport = [0u8; 32];
         getrandom::fill(&mut transport).expect("OS CSPRNG unavailable");
         Self {
+            address: address_of(&transport),
             secret: Zeroizing::new(secret),
             expires_at_epoch,
             transport: Zeroizing::new(transport),
@@ -255,6 +268,7 @@ impl Invitation {
     /// Rebuild one that was stored.
     pub fn from_parts(secret: [u8; 32], transport: [u8; 32], expires_at_epoch: u64) -> Self {
         Self {
+            address: address_of(&transport),
             secret: Zeroizing::new(secret),
             expires_at_epoch,
             transport: Zeroizing::new(transport),
@@ -272,6 +286,7 @@ impl Invitation {
         let mut transport = [0u8; 32];
         getrandom::fill(&mut transport).expect("OS CSPRNG unavailable");
         Self {
+            address: address_of(&transport),
             secret: Zeroizing::new(secret),
             expires_at_epoch,
             transport: Zeroizing::new(transport),
@@ -288,7 +303,7 @@ impl Invitation {
     /// Derived from the transport key, so it is the same value the issuer will
     /// be listening on and nothing has to be carried alongside the code.
     pub fn address(&self) -> RotelyxId {
-        RotelyxId::from(SecretKey::from_bytes(&self.transport).public())
+        self.address
     }
 
     /// The whole thing as one string to hand over: the secret that authorises,
@@ -718,7 +733,7 @@ mod tests {
         gate.add_invitation(inv);
 
         let evidence = Admission::Invitation { proof, epoch: 100 };
-        assert!(gate.admit(&caller, &me, &evidence, 100).is_ok());
+        assert!(gate.admit(&caller, &me, &evidence, 100, None).is_ok());
     }
 
     /// The default posture: a stranger with no evidence gets nowhere.
@@ -727,7 +742,7 @@ mod tests {
         let (caller, me) = ids();
         let gate = Gate::invitation_only();
         assert!(matches!(
-            gate.admit(&caller, &me, &Admission::None, 100),
+            gate.admit(&caller, &me, &Admission::None, 100, None),
             Err(AccessError::BadInvitation)
         ));
     }
@@ -745,9 +760,70 @@ mod tests {
         gate.block(caller);
 
         assert!(matches!(
-            gate.admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100),
+            gate.admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None),
             Err(AccessError::Blocked)
         ));
+    }
+
+    /// A permission is for one address, and worthless at any other.
+    ///
+    /// # The hole this closes
+    ///
+    /// Each invitation is answered at an address of its own precisely so that
+    /// two people invited by the same identity are never handed a name in
+    /// common. Checking the proof and ignoring the address would give that back
+    /// with one extra step: a holder who came across an address it suspected
+    /// belonged to the same host could call it, present its own invitation, and
+    /// read the answer. Being let in would confirm the guess. Refusal has to be
+    /// what an address you were not given returns, whoever you are.
+    #[test]
+    fn a_proof_for_one_address_is_refused_at_another() {
+        let (caller, me) = ids();
+        let mine = Invitation::issue(200);
+        let someone_elses = Invitation::issue(200);
+        let proof = mine.prove(&caller, 100);
+
+        let (at_mine, at_theirs) = (mine.address(), someone_elses.address());
+        assert_ne!(at_mine, at_theirs, "two invitations must differ in address");
+
+        let mut gate = Gate::invitation_only();
+        gate.add_invitation(mine);
+        gate.add_invitation(someone_elses);
+
+        let evidence = Admission::Invitation { proof, epoch: 100 };
+
+        assert!(
+            gate.admit(&caller, &me, &evidence, 100, Some(at_mine)).is_ok(),
+            "the address this invitation is answered at must admit its holder",
+        );
+        assert!(
+            matches!(
+                gate.admit(&caller, &me, &evidence, 100, Some(at_theirs)),
+                Err(AccessError::BadInvitation)
+            ),
+            "another invitation's address must refuse this holder, or the \
+             address tells them the two invitations share a host",
+        );
+    }
+
+    /// An identity listening under its own key still admits every holder.
+    ///
+    /// The desktop and browser clients bind the identity, so the address a
+    /// caller reaches is one it could have derived from the identity itself.
+    /// There is no per-address claim to enforce there, and enforcing one anyway
+    /// would refuse everybody.
+    #[test]
+    fn an_address_that_is_no_invitations_admits_any_of_them() {
+        let (caller, me) = ids();
+        let inv = Invitation::issue(200);
+        let proof = inv.prove(&caller, 100);
+
+        let mut gate = Gate::invitation_only();
+        gate.add_invitation(inv);
+
+        let evidence = Admission::Invitation { proof, epoch: 100 };
+        assert!(gate.admit(&caller, &me, &evidence, 100, Some(me)).is_ok());
+        assert!(gate.admit(&caller, &me, &evidence, 100, None).is_ok());
     }
 
     #[test]
@@ -762,7 +838,7 @@ mod tests {
         assert!(gate.unblock(&caller));
 
         assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100)
+            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
             .is_ok());
     }
 
@@ -778,12 +854,12 @@ mod tests {
         let mut gate = Gate::invitation_only();
         gate.add_invitation(inv);
         assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100)
+            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
             .is_ok());
 
         assert_eq!(gate.revoke(&secret), 1);
         assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100)
+            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
             .is_err());
     }
 
@@ -803,7 +879,7 @@ mod tests {
         assert_eq!(gate.revoke(&drop_secret), 1);
         assert_eq!(gate.invitation_count(), 1);
         assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100)
+            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
             .is_ok());
     }
 
@@ -824,7 +900,7 @@ mod tests {
         let proof = solve(&caller, &me, 100, 8);
 
         assert!(gate
-            .admit(&caller, &me, &Admission::ProofOfWork(proof), 100)
+            .admit(&caller, &me, &Admission::ProofOfWork(proof), 100, None)
             .is_ok());
     }
 
@@ -837,14 +913,14 @@ mod tests {
 
         let pow_gate = Gate::new(ReachabilityPolicy::ProofOfWork { difficulty: 8 });
         assert!(pow_gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100)
+            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
             .is_err());
 
         let mut inv_gate = Gate::invitation_only();
         inv_gate.add_invitation(Invitation::issue(200));
         let work = solve(&caller, &me, 100, 4);
         assert!(inv_gate
-            .admit(&caller, &me, &Admission::ProofOfWork(work), 100)
+            .admit(&caller, &me, &Admission::ProofOfWork(work), 100, None)
             .is_err());
     }
 
@@ -852,11 +928,11 @@ mod tests {
     fn an_open_gate_admits_anyone_but_still_honours_blocks() {
         let (caller, me) = ids();
         let mut gate = Gate::new(ReachabilityPolicy::Open);
-        assert!(gate.admit(&caller, &me, &Admission::None, 100).is_ok());
+        assert!(gate.admit(&caller, &me, &Admission::None, 100, None).is_ok());
 
         gate.block(caller);
         assert!(matches!(
-            gate.admit(&caller, &me, &Admission::None, 100),
+            gate.admit(&caller, &me, &Admission::None, 100, None),
             Err(AccessError::Blocked)
         ));
     }
@@ -1012,12 +1088,29 @@ impl Gate {
     /// The blocklist is checked **first**, before any verification work. A
     /// blocked identity must cost us nothing: otherwise blocking someone hands
     /// them a way to keep spending our CPU.
+    /// `dialled` is the address the caller actually called, from the transport.
+    ///
+    /// # Why the address is part of admission
+    ///
+    /// Each invitation is answered at an address of its own so that two people
+    /// invited by the same identity are never given a name in common. Checking
+    /// the proof alone would undo that: a holder of any live invitation would be
+    /// admitted at *every* address this identity answers, so it could take an
+    /// address it suspects belongs to the same host, call it, and learn from
+    /// being let in that the suspicion was right. Requiring the permission to
+    /// match the address turns that test into an ordinary refusal.
+    ///
+    /// `None`, or an address that is no invitation's, leaves every invitation
+    /// eligible. That covers an identity listening under its own key, which
+    /// gives nothing away: a caller could derive that address from the identity
+    /// on its own.
     pub fn admit(
         &self,
         caller: &RotelyxId,
         me: &RotelyxId,
         evidence: &Admission,
         current_epoch: u64,
+        dialled: Option<RotelyxId>,
     ) -> Result<(), AccessError> {
         if self.is_blocked(caller) {
             return Err(AccessError::Blocked);
@@ -1027,10 +1120,27 @@ impl Gate {
             (ReachabilityPolicy::Open, _) => Ok(()),
 
             (ReachabilityPolicy::InvitationOnly, Admission::Invitation { proof, epoch }) => {
-                // Any live invitation matching is enough; which one it was is
-                // not reported, so a caller cannot probe for which invitations
-                // an identity currently holds.
+                // Which invitation matched is not reported, so a caller
+                // cannot probe for which ones an identity currently holds.
+                //
+                // When the caller named an address that belongs to one of these
+                // invitations, only that invitation's proof will do. A proof
+                // for one address is then worthless at another, which is what
+                // stops a holder from calling an address it suspects and
+                // learning from being let in that it guessed right.
+                //
+                // When the caller named something else, or said nothing, every
+                // invitation is eligible. That is the identity's own address,
+                // which is how the desktop and browser clients listen: an
+                // address the caller could have derived from the identity
+                // anyway, so admitting there reveals nothing it did not have.
+                let named_an_invitation = dialled
+                    .is_some_and(|at| self.invitations.iter().any(|inv| inv.address() == at));
+
                 for inv in &self.invitations {
+                    if named_an_invitation && dialled != Some(inv.address()) {
+                        continue;
+                    }
                     if inv.verify(proof, caller, *epoch, current_epoch).is_ok() {
                         return Ok(());
                     }
