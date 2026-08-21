@@ -603,9 +603,24 @@ impl Conversation {
 
         let tree = RatchetTreeIn::tls_deserialize(&mut &ratchet_tree_bytes[..]).map_err(codec)?;
 
+        // Padding is per member, not per group.
+        //
+        // `MlsGroupCreateConfig` carries `padding_size` for whoever made the
+        // group, and a joiner taking `MlsGroupJoinConfig::default()` gets zero.
+        // With two people that is one direction padded and one not: measured at
+        // 318 bytes for every plaintext from 1 to 100 on the creator's side, and
+        // 146, 155, 195, 246 on the joiner's, which is the plaintext length
+        // with a constant added. On a relayed session the ciphertext travels in
+        // an L1 frame with nothing else around it, so the relay reads the
+        // joiner's message lengths exactly, and the threat model says padding
+        // buckets hide them.
+        let join_config = MlsGroupJoinConfig::builder()
+            .padding_size(PADDING_SIZE)
+            .build();
+
         let staged = StagedWelcome::new_from_welcome(
             &joiner.provider,
-            &MlsGroupJoinConfig::default(),
+            &join_config,
             welcome,
             Some(tree),
         )
@@ -844,6 +859,147 @@ mod tests {
             b.receive(&bob, &ct).is_err(),
             "the same ciphertext was accepted a second time"
         );
+    }
+
+    /// A backup restored twice cannot deliver twice.
+    ///
+    /// # The class this belongs to
+    ///
+    /// Review gate 4 names the state-corruption failures that kill hand-written
+    /// ratchets and that MLS does not solve for us automatically. Two of them
+    /// are the same mechanism: one backup restored onto two devices, and one
+    /// device rolled back to an older backup. Both rewind the generation
+    /// counter, and a rewound sender encrypts under a key it has already used.
+    ///
+    /// What saves it is that the receiver deletes each generation's secret as it
+    /// uses it, so the second message under one generation has nothing left to
+    /// decrypt with. That is inherited from the library rather than chosen here,
+    /// which is why it is pinned.
+    ///
+    /// What it does not save is the sender. `send` succeeds, the message goes
+    /// nowhere, and nothing tells the person holding the restored device. To
+    /// them their messages simply stop arriving.
+    #[test]
+    fn a_rewound_sender_cannot_deliver_under_a_generation_already_used() {
+        let (alice, bob, mut a, mut b) = conversation_of_two();
+
+        let backup = alice.export().expect("export");
+        let first = a.send(&alice, b"the same generation").expect("send");
+        b.receive(&bob, &first).expect("the first arrives");
+
+        // The backup is restored elsewhere, so that copy still believes it is at
+        // the generation just spent.
+        let restored = Member::restore(backup).expect("restore");
+        let mut rewound = Conversation::reopen(&restored, &a.group_id())
+            .expect("reopen")
+            .expect("the group is there");
+
+        let second = rewound
+            .send(&restored, b"the same generation")
+            .expect("a rewound sender is not stopped from sending");
+
+        assert!(
+            b.receive(&bob, &second).is_err(),
+            "a second message under one generation was delivered, so a restored \
+             backup can make the sender encrypt twice under one key and have both \
+             accepted"
+        );
+    }
+
+    /// A receiver will not derive keys without limit for messages it never saw.
+    ///
+    /// # The class this belongs to
+    ///
+    /// The third of gate 4's failures. Out-of-order delivery means a receiver
+    /// derives the keys it skipped, and a sender that jumps far ahead makes it
+    /// derive that many. Unbounded, that is a memory and CPU cost an attacker
+    /// chooses.
+    ///
+    /// It is bounded at a thousand generations, which costs a few milliseconds
+    /// to walk. That bound is the library's default and this crate does not set
+    /// it, so the test is here to notice if it ever moves.
+    #[test]
+    fn a_generation_too_far_ahead_is_refused() {
+        let (alice, bob, mut a, mut b) = conversation_of_two();
+
+        let mut ahead = Vec::new();
+        for n in 0..1_200u32 {
+            ahead = a.send(&alice, &n.to_be_bytes()).expect("send");
+        }
+
+        assert!(
+            b.receive(&bob, &ahead).is_err(),
+            "a receiver walked more than a thousand skipped generations, which is \
+             work an attacker asked for"
+        );
+    }
+
+    /// A message from before a device reinstalled must not land on it after.
+    ///
+    /// # The class this belongs to
+    ///
+    /// The fourth of gate 4's failures. A reinstalled device is a new member
+    /// with a new key package, added by a commit that moves the epoch. Anything
+    /// captured before that belongs to an epoch the new member never had, and
+    /// replaying it must not work.
+    #[test]
+    fn a_message_from_before_a_rejoin_is_refused_after_it() {
+        let (alice, bob, mut a, mut b) = conversation_of_two();
+
+        let before = a.send(&alice, b"sent before the reinstall").expect("send");
+        b.receive(&bob, &before).expect("the original device gets it");
+
+        // The same person, a fresh install: new key package, new join.
+        let reinstalled = Member::new(b"bob-device-1").expect("bob again");
+        let (_commit, welcome) = a
+            .invite(&alice, reinstalled.key_package().expect("kp").key_package())
+            .expect("invite the reinstalled device");
+        let tree = a.ratchet_tree().expect("tree");
+        let mut fresh = Conversation::join(&reinstalled, &welcome, &tree).expect("rejoin");
+
+        assert!(
+            fresh.receive(&reinstalled, &before).is_err(),
+            "a message captured before the reinstall was replayed into the device \
+             that came after it"
+        );
+    }
+
+    /// Both directions must pad, not just the one that made the group.
+    ///
+    /// # The hole this closes
+    ///
+    /// `padding_size` belongs to a member's own config, and only the creator's
+    /// was set: a joiner took `MlsGroupJoinConfig::default()`, which pads to
+    /// nothing. With two people that is one direction padded and one not, and
+    /// the unpadded side's ciphertext grew a byte for every byte of plaintext.
+    ///
+    /// It matters most where there is nothing else around the ciphertext. A
+    /// message sent through the mailbox is sealed into an envelope that pads to
+    /// its own buckets, so the operator sees a bucket either way. A message on a
+    /// live session travels in an L1 frame on its own, so the relay carrying it
+    /// reads the length off the wire, and ADV-1 in the threat model says padding
+    /// buckets hide exactly that.
+    #[test]
+    fn both_sides_of_a_conversation_pad_to_the_same_sizes() {
+        let (alice, bob, mut a, mut b) = conversation_of_two();
+
+        for len in [1usize, 10, 50, 100] {
+            let plaintext = vec![b'x'; len];
+
+            let creator = a.send(&alice, &plaintext).expect("creator send").len();
+            // Keep the receiver in step, so generations stay usable.
+            let carried = a.send(&alice, &plaintext).expect("send");
+            b.receive(&bob, &carried).expect("receive");
+
+            let joiner = b.send(&bob, &plaintext).expect("joiner send").len();
+
+            assert_eq!(
+                creator, joiner,
+                "a {len} byte message was {creator} bytes from the member who made \
+                 the group and {joiner} from the one who joined it, so one side's \
+                 lengths are on the wire"
+            );
+        }
     }
 
     /// Somebody arriving must be reported to the people already there, by name.

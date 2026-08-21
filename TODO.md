@@ -374,6 +374,27 @@ Everything needed for this is built.
       quietly accepted a tampered ciphertext passed the whole suite. Two tests
       now refuse a modified message across eight positions and refuse a replayed
       one
+- [x] **Only one side of a conversation padded its messages.** MLS applies
+      padding per member and only the group's creator had it set; a joiner took
+      the library default of none, so its ciphertext grew a byte for every byte
+      of plaintext. Measured: 318 bytes for every plaintext from 1 to 100 on the
+      creator's side, and 146, 155, 195, 246 on the joiner's. With two people
+      that is one direction whose lengths a relay reads off the wire, and ADV-1
+      says padding buckets hide them. Both sides pad now, with a test that fails
+      if the two ever differ
+- [x] **Review gate 4, the state-corruption class, measured rather than
+      reasoned about.** One backup on two devices and a rollback to an older one
+      both end the same way: the receiver refuses, because it deletes each
+      generation's secret as it uses it. A sender jumping ahead is bounded at a
+      thousand skipped generations. A message replayed into a reinstalled device
+      is refused as too old. Written up in section 5b of the threat model, with a
+      test for each: three of the four hold because of library behaviour this
+      crate never chose, so an upgrade could move them without anybody noticing
+- [!] **A restored device is silently mute.** It is not stopped from sending,
+      the receiver drops what it sends, and nothing tells the person holding it.
+      Confidentiality holds and availability does not, which is the right way
+      round, but a client that restores from a backup should force a rekey
+      before it trusts its own sending. No client does
 - [ ] Watch the refusal counters in production. Limits chosen from reasoning
       rather than from traffic, and the first real load will say whether they
       are in the right place

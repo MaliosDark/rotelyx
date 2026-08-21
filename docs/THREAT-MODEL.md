@@ -42,6 +42,13 @@ against it. Claims are per-asset and use the asset IDs above.
   addresses. Direct P2P paths reveal both peers' IPs to each other and to
   anyone on-path. Padding buckets hide message *length*; they do not hide that
   a flow exists.
+  **Both directions pad, and for a while only one did.** MLS applies padding
+  per member, and only the member who created the group had it configured: a
+  joiner took the library's default of none, so its ciphertext grew a byte for
+  every byte of plaintext. With two people that is one direction on the wire in
+  the clear as far as length goes. It mattered most on a live session, where the
+  ciphertext travels in a frame of its own; a message through the mailbox is
+  sealed into an envelope that pads to its own buckets either way.
 - **Not defended:** A5 for on-path observers.
 
 ### ADV-2: Active network attacker
@@ -316,7 +323,37 @@ No public security claim is made before all of these are met.
    ratchets, and which MLS does not automatically solve for us:
    nonce reuse under concurrency, state rollback after backup restore,
    unbounded skipped-key retention, replay across device re-registration.
+   *Measured and written down in §7. All four hold, three of them because of
+   library behaviour this crate never chose, which is why each now has a test.*
 5. **Constant-time review** of every comparison touching secret material.
+
+---
+
+## 5b. State corruption: what was measured
+
+Review gate 4 names four failures. Each was reproduced rather than reasoned
+about, and each has a test in `rotelyx-crypto` so that a change to the library
+underneath does not move the answer quietly.
+
+| Failure | What actually happens |
+|---|---|
+| One backup restored onto two devices | The receiver refuses the second message: it deletes each generation's secret as it uses it, so there is nothing left to decrypt with |
+| A device rolled back to an older backup | The same. Every message it sends from the rewound state is refused |
+| A sender jumping far ahead of a receiver | Bounded at a thousand skipped generations, about seven milliseconds of derivation, then refused |
+| A message replayed into a reinstalled device | Refused. A reinstall is a new member added by a commit that moves the epoch, and the captured message belongs to an epoch that member never had |
+
+**What this does not protect.** The sender. A restored or rolled-back device is
+not stopped from sending: `send` succeeds, the receiver drops the message, and
+nothing tells the person holding that device. To them their messages stop
+arriving for no reason they can see. Confidentiality holds and availability does
+not, which is the right way round, but a client that restores from a backup
+should force a rekey before it trusts its own sending.
+
+**Three of the four are inherited.** The forward-secrecy deletion, the forward
+distance limit of a thousand and the epoch check are the library's behaviour,
+not decisions this project made or configured. That is why they are pinned by
+tests: an upgrade that changed any of the three would otherwise change what this
+table says without anybody editing it.
 
 ---
 
