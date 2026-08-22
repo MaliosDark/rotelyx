@@ -746,10 +746,15 @@ wide margin the largest single task remaining in the project.
       98%**; only the delay grows, to 4 s
 - [x] **Removed the Spanish that had got into test literals.** 55 string
       literals across seven crates, all passphrases and test messages
-- [ ] Packet loss concealment, for conversational mode where recovery is too
-      late to help. The buffer already reports a gap as `Missing` rather than
-      an error, which is what a decoder needs to extrapolate. The extrapolation
-      itself belongs to the codec
+- [x] **Packet loss concealment.** A gap played as silence, and a hole in the
+      middle of a vowel is heard as a click at each edge rather than as a loss:
+      the overlap-add window is fed a full frame and then nothing, so the signal
+      falls off a cliff and climbs back out. `LayeredDecoder::conceal` carries
+      the last frame's band energies forward as noise at those levels, quieter
+      each time, so a short gap sounds like the same timbre continuing and a
+      long one is inaudible within about a tenth of a second. Concealment that
+      keeps inventing sound for a dead connection is a machine talking to
+      itself, so it fades and the call path stops after eight in a row
 - [ ] Acoustic echo cancellation
 - [ ] Congestion control and bandwidth estimation
 - [x] **Media keys derived from MLS exporters**, so a call is as end to end as
@@ -807,7 +812,11 @@ wide margin the largest single task remaining in the project.
       writing the two-session test; a test that had looped back to itself would
       have shipped it. One receiver per participant now, routed by the sender id
       the datagram claims
-- [ ] Packet loss concealment. A gap plays as silence today
+- [x] **Packet loss concealment in a call.** The receiver counts the frames
+      that never arrived rather than inferring a gap from silence, because a
+      caller that waits to notice has already played the hole, and the call
+      fills them from the codec before playing what did arrive. Reported as
+      `frames_concealed`, which is the loss somebody actually heard
 - [ ] Mixing, for a group call with more than one person speaking
 - [ ] Build for Android on a machine with the NDK, and for iOS on a Mac. The
       Rust targets are installed; `cargo-ndk` is not

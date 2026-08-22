@@ -51,6 +51,11 @@ pub struct Call {
     window: Vec<f32>,
     frames_out: u64,
     frames_in: u64,
+    /// Frames invented to cover ones that never arrived. What a call quality
+    /// indicator should show beside the loss rate: it is the loss somebody
+    /// actually heard smoothed over.
+    frames_concealed: u64,
+
     /// Microphone samples thrown away because the call could not keep up.
     dropped_samples: u64,
 }
@@ -90,6 +95,7 @@ impl Call {
             window: Vec::with_capacity(WINDOW),
             frames_out: 0,
             frames_in: 0,
+            frames_concealed: 0,
             dropped_samples: 0,
         })
     }
@@ -190,6 +196,25 @@ impl Call {
         let Ok(parsed) = LayeredFrame::from_bytes(&payload) else {
             return;
         };
+        // Fill what never arrived before playing what did.
+        //
+        // A lost frame used to leave a hole, and a hole in the middle of a
+        // vowel is heard as a click at each edge rather than as a loss. The
+        // decoder carries the last frame's band energies forward as noise at
+        // those levels, quieter each time, so a short gap sounds like the voice
+        // continuing and a long one fades out instead of holding a note.
+        //
+        // Bounded, because concealment is worth having for a stumble and not
+        // for an outage: past this it is a machine talking to itself, and the
+        // fade has taken it to nothing anyway.
+        const MOST_CONCEALED_IN_A_ROW: u64 = 8;
+        let missing = inbound.skipped().min(MOST_CONCEALED_IN_A_ROW);
+        for _ in 0..missing {
+            let filled = self.decoder.conceal();
+            self.playback.queue(&filled);
+            self.frames_concealed += 1;
+        }
+
         let Ok(audio) = self.decoder.decode(&parsed) else {
             return;
         };
@@ -203,6 +228,11 @@ impl Call {
 impl Call {
     pub fn frames_sent(&self) -> u64 {
         self.frames_out
+    }
+
+    /// Frames invented to cover ones that never arrived.
+    pub fn frames_concealed(&self) -> u64 {
+        self.frames_concealed
     }
 
     pub fn frames_received(&self) -> u64 {

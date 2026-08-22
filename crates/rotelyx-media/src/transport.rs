@@ -185,6 +185,8 @@ pub struct MediaIn {
     /// Counted rather than logged: on a call these are ordinary, and a log line
     /// per lost packet is a denial of service against the operator's disk.
     dropped: u64,
+    /// Frames missing before the one just accepted. See `skipped`.
+    skipped: u64,
 }
 
 impl MediaIn {
@@ -204,6 +206,7 @@ impl MediaIn {
             receiver: Receiver::new(keys)?,
             buffer: JitterBuffer::with_mode(mode),
             dropped: 0,
+            skipped: 0,
         })
     }
 
@@ -271,13 +274,36 @@ impl MediaIn {
     /// For tests and for a caller doing its own buffering. A real call uses
     /// `accept` and `play`.
     pub fn frame(&mut self, datagram: &[u8]) -> Option<Vec<u8>> {
+        let before = self.receiver.highest_accepted();
         match self.receiver.unprotect(datagram) {
-            Ok(audio) => Some(audio),
+            Ok(audio) => {
+                // How many frames the sender sent that never got here.
+                //
+                // Counted rather than inferred from silence, because a caller
+                // that waits to notice a gap has already played the hole. What
+                // it does with the number is its own business: the codec can
+                // conceal that many frames before playing this one.
+                self.skipped = match (before, self.receiver.highest_accepted()) {
+                    (Some(was), Some(now)) if now > was => now - was - 1,
+                    _ => 0,
+                };
+                Some(audio)
+            }
             Err(_) => {
                 self.dropped = self.dropped.saturating_add(1);
+                self.skipped = 0;
                 None
             }
         }
+    }
+
+    /// Frames the sender sent that never arrived, before the one just accepted.
+    ///
+    /// Zero on the first frame, on a frame that failed to authenticate, and on
+    /// a frame that arrived late: a late frame is not a gap, it is a gap that
+    /// closed itself.
+    pub fn skipped(&self) -> u64 {
+        self.skipped
     }
 
     /// The buffer's current target depth, in milliseconds. What a call quality
@@ -295,6 +321,42 @@ impl MediaIn {
 
 #[cfg(test)]
 mod tests {
+
+    /// A receiver must be able to say how many frames it never got.
+    ///
+    /// # What this is for
+    ///
+    /// Concealment. A caller that waits to notice a gap has already played the
+    /// hole, and a hole in the middle of a vowel is heard as a click at each
+    /// edge rather than as a loss. Counting the gap when the next frame arrives
+    /// is what lets the codec fill it before playing what did arrive.
+    #[test]
+    fn a_receiver_counts_the_frames_that_never_arrived() {
+        let mut out = MediaOut::new(PathPolicy::RelayOnly, keys(1)).expect("out");
+        let mut inn = MediaIn::new(PathPolicy::RelayOnly, keys(1)).expect("in");
+
+        let datagrams: Vec<Vec<u8>> = (0..6)
+            .map(|n| out.frame(&[n as u8; 40]).expect("protect"))
+            .collect();
+
+        assert!(inn.frame(&datagrams[0]).is_some());
+        assert_eq!(inn.skipped(), 0, "the first frame cannot follow a gap");
+
+        assert!(inn.frame(&datagrams[1]).is_some());
+        assert_eq!(inn.skipped(), 0, "a frame in sequence is not a gap");
+
+        // Two lost on the way.
+        assert!(inn.frame(&datagrams[4]).is_some());
+        assert_eq!(inn.skipped(), 2, "the gap was miscounted");
+
+        assert!(inn.frame(&datagrams[5]).is_some());
+        assert_eq!(inn.skipped(), 0, "the gap was reported twice");
+
+        // A frame that turns up late closed a gap rather than opening one.
+        let _ = inn.frame(&datagrams[3]);
+        assert_eq!(inn.skipped(), 0, "a late frame was reported as a gap");
+    }
+
     use super::*;
 
     fn keys(id: u8) -> SenderKeys {

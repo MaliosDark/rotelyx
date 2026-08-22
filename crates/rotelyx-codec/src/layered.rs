@@ -565,6 +565,12 @@ pub struct LayeredDecoder {
     budget_bits: usize,
     overlap: mdct::OverlapAdd,
     models: LevelModels,
+    /// Band energies from the last frame that arrived, for concealing the next
+    /// one if it does not. Empty until something has been decoded.
+    last_energies: Vec<f32>,
+    /// How many frames in a row have been concealed, so each one is quieter
+    /// than the last.
+    concealed_in_a_row: u32,
 }
 
 impl LayeredDecoder {
@@ -575,6 +581,8 @@ impl LayeredDecoder {
             budget_bits: bytes_per_frame * 8,
             overlap: mdct::OverlapAdd::new(),
             models: LevelModels::new(),
+            last_energies: Vec::new(),
+            concealed_in_a_row: 0,
         }
     }
 
@@ -582,6 +590,60 @@ impl LayeredDecoder {
     ///
     /// A frame with only its base decodes to coarse audio rather than to
     /// nothing, which is the entire point.
+    /// One frame's worth of output for a frame that never arrived.
+    ///
+    /// # Why not silence
+    ///
+    /// Silence is what a gap sounded like, and a gap in the middle of a vowel
+    /// is a click at each edge: the overlap-add window is fed a full frame and
+    /// then nothing, so the signal falls off a cliff and climbs back up one.
+    /// Somebody hears the discontinuity rather than the loss, and clicks are
+    /// more distracting than a short roughness.
+    ///
+    /// # What it does instead
+    ///
+    /// It holds the band energies of the last frame that did arrive and fills
+    /// the shape with noise at those levels, quieter each time. The energies
+    /// alone say what the voice sounded like across the spectrum without saying
+    /// anything about its fine structure, so a short gap comes out as the same
+    /// timbre continuing rather than as a hole or as a repeat somebody can hear
+    /// looping.
+    ///
+    /// The fade is deliberate and steep enough that a long outage becomes
+    /// silence within about a hundred milliseconds. Concealment that keeps
+    /// inventing sound for a lost connection is a machine talking to itself.
+    ///
+    /// The seed advances every frame, so two concealed frames in a row are not
+    /// the same noise, which would be audible as a buzz.
+    pub fn conceal(&mut self) -> Vec<f32> {
+        self.frames_decoded = self.frames_decoded.wrapping_add(1);
+
+        if self.last_energies.is_empty() {
+            // Nothing has ever arrived, so there is nothing to continue. A
+            // window rather than a frame: `push` takes what `inverse` produces,
+            // which is the overlapping window, and it says so by panicking.
+            return self.overlap.push(&vec![0.0f32; WINDOW]);
+        }
+
+        self.concealed_in_a_row = self.concealed_in_a_row.saturating_add(1);
+        // About a tenth of a second to inaudible at 20 ms a frame.
+        let fade = 0.6f32.powi(self.concealed_in_a_row as i32);
+
+        let mut shape = vec![0.0f32; FRAME];
+        for b in 0..BANDS {
+            let range = bands::range(b);
+            let seed = self
+                .frames_decoded
+                .wrapping_mul(0x9E37_79B9)
+                .wrapping_add(b as u32);
+            fill_with_noise(&mut shape[range], seed);
+        }
+
+        let energies: Vec<f32> = self.last_energies.iter().map(|e| e * fade).collect();
+        let coefficients = bands::denormalise(&shape, &energies);
+        self.overlap.push(&mdct::inverse(&coefficients, &self.window))
+    }
+
     pub fn decode(&mut self, frame: &LayeredFrame) -> Result<Vec<f32>, CodecError> {
         self.frames_decoded = self.frames_decoded.wrapping_add(1);
         if frame.base.is_empty() {
@@ -638,6 +700,10 @@ impl LayeredDecoder {
                 shape[bands::range(b)].copy_from_slice(&rvq::decode(n, &stages));
             }
         }
+
+        // Kept for concealment, in case the next frame does not arrive.
+        self.last_energies = energies.clone();
+        self.concealed_in_a_row = 0;
 
         let coefficients = bands::denormalise(&shape, &energies);
         Ok(self.overlap.push(&mdct::inverse(&coefficients, &self.window)))
@@ -833,6 +899,74 @@ impl ShapeDecoder {
 
 #[cfg(test)]
 mod tests {
+
+    /// A gap must sound like the voice continuing, not like a hole.
+    ///
+    /// # What this pins
+    ///
+    /// A lost frame used to play as silence. The overlap-add window is fed a
+    /// full frame and then nothing, so the signal drops to zero and climbs back
+    /// out, and both edges are clicks: somebody hears the discontinuity rather
+    /// than the loss. This asserts the two properties that stop that. The
+    /// concealed frame carries energy, and it carries less of it than the frame
+    /// before, so a gap fades instead of holding a note or repeating audibly.
+    #[test]
+    fn a_concealed_frame_carries_the_voice_forward_and_fades() {
+        let mut encoder = LayeredEncoder::new(60);
+        let mut decoder = LayeredDecoder::new(60);
+
+        // A vowel-ish signal: something with energy spread over the spectrum.
+        let audio: Vec<f32> = (0..WINDOW)
+            .map(|n| {
+                let t = n as f32 / mdct::SAMPLE_RATE as f32;
+                0.4 * (2.0 * std::f32::consts::PI * 220.0 * t).sin()
+                    + 0.2 * (2.0 * std::f32::consts::PI * 660.0 * t).sin()
+            })
+            .collect();
+
+        let frame = encoder.encode(&audio).expect("encode");
+        let decoded = decoder.decode(&frame).expect("decode");
+        let heard = energy(&decoded);
+
+        let first = energy(&decoder.conceal());
+        let second = energy(&decoder.conceal());
+        let third = energy(&decoder.conceal());
+
+        assert!(
+            first > heard * 0.05,
+            "the first concealed frame was near silence: {first:.5} against {heard:.5}"
+        );
+        assert!(
+            second < first && third < second,
+            "concealment did not fade: {first:.5} then {second:.5} then {third:.5}"
+        );
+
+        // And it gives up rather than talking to itself through an outage.
+        for _ in 0..10 {
+            decoder.conceal();
+        }
+        let much_later = energy(&decoder.conceal());
+        assert!(
+            much_later < heard * 0.001,
+            "a long outage was still making sound: {much_later:.6}"
+        );
+    }
+
+    /// Concealing before anything has arrived must not invent a voice.
+    #[test]
+    fn concealment_before_the_first_frame_is_silence() {
+        let mut decoder = LayeredDecoder::new(60);
+        assert_eq!(
+            energy(&decoder.conceal()),
+            0.0,
+            "a decoder that has heard nothing invented something"
+        );
+    }
+
+    fn energy(samples: &[f32]) -> f32 {
+        samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32
+    }
+
     use super::*;
     use std::f32::consts::PI;
 

@@ -459,6 +459,15 @@ impl Receiver {
         Ok(plain)
     }
 
+    /// The highest counter accepted so far, and whether anything has been.
+    ///
+    /// Exposed so a caller can tell a gap from a quiet moment. The replay
+    /// window already holds this: it is what "is this frame older than the ones
+    /// I have" is decided against.
+    pub fn highest_accepted(&self) -> Option<u64> {
+        self.started.then_some(self.highest)
+    }
+
     fn check_replay(&self, counter: u64) -> Result<(), MediaError> {
         if !self.started {
             return Ok(());
