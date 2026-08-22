@@ -11,6 +11,7 @@
 
 pub mod device;
 
+pub mod denoise;
 pub mod echo;
 pub mod pace;
 
@@ -103,6 +104,18 @@ pub struct Call {
     /// anything.
     pace: pace::Pace,
 
+    /// Takes the room out of the voice, before the codec spends bits on it.
+    ///
+    /// A codec at 12 kbit/s spends its bits on whatever is loudest, which in a
+    /// kitchen is the fan. Removing steady noise first gives those bits back to
+    /// the person talking.
+    ///
+    /// After the echo canceller, not before: the canceller is trying to predict
+    /// what the loudspeaker did to the microphone, and a suppressor in front of
+    /// it changes the microphone in ways the loudspeaker did not, which is the
+    /// one thing that makes the prediction impossible.
+    denoise: denoise::Denoiser,
+
     /// Takes the loudspeaker back out of the microphone.
     ///
     /// # What it is aligned against, and what that costs
@@ -169,6 +182,7 @@ impl Call {
             frames_in: 0,
             frames_concealed: 0,
             echo: echo::EchoCanceller::new(),
+            denoise: denoise::Denoiser::new(),
             pace: pace::Pace::new(),
             mix: Vec::new(),
             started: std::time::Instant::now(),
@@ -258,7 +272,8 @@ impl Call {
                 self.echo.played(&vec![0.0f32; deficit]);
             }
             let cleaned = self.echo.capture(&more);
-            self.window.extend_from_slice(&cleaned);
+            let quieter = self.denoise.process(&cleaned);
+            self.window.extend_from_slice(&quieter);
         }
 
         let frame = self

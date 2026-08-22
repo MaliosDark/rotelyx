@@ -64,50 +64,50 @@ const STEP: f32 = 0.35;
 const FLOOR: f32 = 1e-6;
 
 #[derive(Clone, Copy, Default)]
-struct C {
-    re: f32,
-    im: f32,
+pub(crate) struct C {
+    pub(crate) re: f32,
+    pub(crate) im: f32,
 }
 
 impl C {
-    const ZERO: C = C { re: 0.0, im: 0.0 };
+    pub(crate) const ZERO: C = C { re: 0.0, im: 0.0 };
 
-    fn add(self, o: C) -> C {
+    pub(crate) fn add(self, o: C) -> C {
         C {
             re: self.re + o.re,
             im: self.im + o.im,
         }
     }
 
-    fn sub(self, o: C) -> C {
+    pub(crate) fn sub(self, o: C) -> C {
         C {
             re: self.re - o.re,
             im: self.im - o.im,
         }
     }
 
-    fn mul(self, o: C) -> C {
+    pub(crate) fn mul(self, o: C) -> C {
         C {
             re: self.re * o.re - self.im * o.im,
             im: self.re * o.im + self.im * o.re,
         }
     }
 
-    fn conj(self) -> C {
+    pub(crate) fn conj(self) -> C {
         C {
             re: self.re,
             im: -self.im,
         }
     }
 
-    fn scale(self, k: f32) -> C {
+    pub(crate) fn scale(self, k: f32) -> C {
         C {
             re: self.re * k,
             im: self.im * k,
         }
     }
 
-    fn norm_sq(self) -> f32 {
+    pub(crate) fn norm_sq(self) -> f32 {
         self.re * self.re + self.im * self.im
     }
 }
@@ -117,7 +117,7 @@ impl C {
 /// Written here rather than borrowed from the codec because the codec's is
 /// private to its own transform and shaped for it. This one is thirty lines and
 /// has one caller.
-fn fft(buf: &mut [C], inverse: bool) {
+pub(crate) fn fft(buf: &mut [C], inverse: bool) {
     let n = buf.len();
     debug_assert!(n.is_power_of_two());
 
