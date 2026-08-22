@@ -786,7 +786,23 @@ wide margin the largest single task remaining in the project.
       Adaptation freezes while both ends talk, with a test: a filter that keeps
       learning through double talk learns to predict the near end and starts
       subtracting *them*, which is how a canceller chews words
-- [ ] Congestion control and bandwidth estimation
+- [x] **Congestion control.** A call cannot slow down and arrive later: audio
+      that is late is dropped rather than queued, so congestion is invisible in
+      the ordinary way. Nothing backs up, the sender keeps producing, and what a
+      listener hears is not a slower call but holes. The rate comes down on
+      purpose instead, and the layered codec is what makes that possible without
+      renegotiating anything: a frame cut shorter still decodes, rougher.
+      It watches loss *and* delay, which say different things. Loss is a queue
+      that already overflowed, so somebody has already heard the hole. The round
+      trip climbing above the lowest this connection has managed is the same
+      event a second earlier, and that is the one worth reacting to. The round
+      trip on its own says nothing: a satellite link is slow and empty, and
+      there is a test that distance is not mistaken for congestion.
+      Down fast and up slowly, because a rougher frame for a second is cheap and
+      refilling a queue is not. The floor is 30 bytes, which is 12 kbit/s: the
+      lowest rate anybody has actually listened to this codec at. Going below a
+      rate nobody has heard would be choosing a number because the arithmetic
+      allowed it
 - [x] **Media keys derived from MLS exporters**, so a call is as end to end as
       a message. `rotelyx-media`: per sender frame encryption in the shape of
       SFrame (RFC 9605), with a replay window and a counter that refuses to

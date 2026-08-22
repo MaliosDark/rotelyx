@@ -12,6 +12,7 @@
 pub mod device;
 
 pub mod echo;
+pub mod pace;
 
 use std::collections::HashMap;
 
@@ -53,6 +54,15 @@ pub struct Call {
     window: Vec<f32>,
     frames_out: u64,
     frames_in: u64,
+    /// Decides how many bytes a frame may be, from what the link is doing.
+    ///
+    /// A call cannot slow down and arrive later, so congestion is invisible in
+    /// the ordinary way: nothing backs up, the sender keeps producing, and what
+    /// a listener hears is holes. The rate has to come down on purpose, and the
+    /// layered codec is what makes that possible without renegotiating
+    /// anything.
+    pace: pace::Pace,
+
     /// Takes the loudspeaker back out of the microphone.
     ///
     /// # What it is aligned against, and what that costs
@@ -119,6 +129,7 @@ impl Call {
             frames_in: 0,
             frames_concealed: 0,
             echo: echo::EchoCanceller::new(),
+            pace: pace::Pace::new(),
             dropped_samples: 0,
         })
     }
@@ -198,9 +209,20 @@ impl Call {
         // What the network will carry, which the transport reports rather than
         // this guessing. A frame trimmed to the budget still decodes; it just
         // decodes rougher.
+        // What the link will carry, and what the path will bear.
+        //
+        // The first is a hard limit: a datagram larger than the path allows is
+        // not sent at all. The second is a choice, taken from the loss and the
+        // round trip the transport already tracks, and it is the one that stops
+        // a call punching holes in itself on a link that cannot hold it.
+        let stats = conn.stats();
+        let allowed = self
+            .pace
+            .observe(stats.lost_packets, conn.rtt(rotelyx_net::PathId::ZERO));
         let budget = self
             .out
-            .payload_budget(conn.max_datagram_size().unwrap_or(1200));
+            .payload_budget(conn.max_datagram_size().unwrap_or(1200))
+            .min(allowed);
         let datagram = self
             .out
             .frame(&frame.within(budget).to_bytes())
@@ -283,6 +305,12 @@ impl Call {
     /// that decides whether the other end can bear the call.
     pub fn echo_loss_db(&self) -> f32 {
         self.echo.loss_db()
+    }
+
+    /// What this call has decided the link will bear, in kbit/s. Falls when the
+    /// path starts queueing or losing and climbs back when it stops.
+    pub fn target_kbit_per_second(&self) -> usize {
+        self.pace.kbit_per_second()
     }
 
     pub fn frames_received(&self) -> u64 {
