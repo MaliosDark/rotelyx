@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+#
+# Check what a server is actually handing out against what the source says.
+#
+#   scripts/verify-deployment https://rotelyx.ideoa.co
+#
+# # What this closes, and what it does not
+#
+# `docs/ARTIFACTS.md` holds the SHA-256 of everything that ships, and it lives
+# in git rather than on the server because a hash served by the same origin as
+# the file proves nothing: whoever can replace one can replace the other.
+#
+# That was written down and never run. A published hash nobody compares against
+# a live deployment is a claim, not a check, and this is the difference between
+# the two. It fetches what the server is serving right now and compares.
+#
+# It does not tell a browser anything. Somebody loading the page runs whatever
+# the server sent, and no code inside that page can prove otherwise, because it
+# is code the server chose. This is a check somebody runs from outside, which is
+# the only place the check can honestly live.
+#
+# A signature over these hashes would matter if the manifest travelled apart
+# from the source. It does not: git is the channel, and it is already the thing
+# being trusted. Signing the file would add a key to guard without narrowing the
+# gap this leaves.
+
+set -uo pipefail
+
+BASE="${1:-}"
+if [ -z "$BASE" ]; then
+    echo "usage: scripts/verify-deployment <base-url>" >&2
+    echo "  e.g. scripts/verify-deployment https://rotelyx.ideoa.co" >&2
+    exit 2
+fi
+BASE="${BASE%/}"
+
+cd "$(dirname "$0")/.."
+MANIFEST="docs/ARTIFACTS.md"
+[ -f "$MANIFEST" ] || { echo "no $MANIFEST to check against" >&2; exit 2; }
+
+# Only what a web server serves. The relay and the mailbox are binaries an
+# operator installs, and checking those means checking the machine, not the URL.
+declare -A SERVED=(
+    ["rotelyx_wasm_bg.wasm"]="/rotelyx/rotelyx_wasm_bg.wasm"
+    ["rotelyx_wasm.js"]="/rotelyx/rotelyx_wasm.js"
+)
+
+fail=0
+checked=0
+
+for artifact in "${!SERVED[@]}"; do
+    expected=$(grep -F "\`$artifact\`" "$MANIFEST" | grep -oE '[0-9a-f]{64}' | head -1)
+    if [ -z "$expected" ]; then
+        printf '  %-26s no hash in %s\n' "$artifact" "$MANIFEST"
+        fail=1
+        continue
+    fi
+
+    url="$BASE${SERVED[$artifact]}"
+    got=$(curl -sS --fail --max-time 60 "$url" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    if [ -z "$got" ] || [ "$got" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+        printf '  %-26s could not be fetched from %s\n' "$artifact" "$url"
+        fail=1
+        continue
+    fi
+
+    checked=$((checked + 1))
+    if [ "$got" = "$expected" ]; then
+        printf '  %-26s matches\n' "$artifact"
+    else
+        printf '  %-26s DIFFERS\n' "$artifact"
+        printf '    served %s\n' "$got"
+        printf '    source %s\n' "$expected"
+        fail=1
+    fi
+done
+
+echo
+if [ "$fail" != "0" ]; then
+    echo "What that server is serving is not what this source builds."
+    echo "Either it is running an older build, or somebody changed it."
+    exit 1
+fi
+
+echo "All $checked served artifacts match the source in this repository."
+echo
+echo "This says nothing about what a browser was handed: a page can only run"
+echo "what the server sent it. It is a check from outside, which is the only"
+echo "place it can honestly be made."

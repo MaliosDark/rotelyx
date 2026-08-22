@@ -43,7 +43,19 @@ pub struct Call {
     playback: device::Playback,
     out: MediaOut,
     encoder: LayeredEncoder,
-    decoder: LayeredDecoder,
+    /// One decoder per sender, kept beside that sender's receiver.
+    ///
+    /// # Why it cannot be shared
+    ///
+    /// A decoder carries state that belongs to one stream: half of every window
+    /// is the tail of the previous one, waiting to be added to the next, and
+    /// the band energies it holds for concealment are the last thing *that*
+    /// voice said. Two people speaking through one decoder each get half of the
+    /// other's tail folded into their own output, and a gap in one is concealed
+    /// with the timbre of the other. With two participants only one of them
+    /// ever sends, so nothing showed; with three it would have sounded like
+    /// interference nobody could place.
+    decoders: HashMap<u8, LayeredDecoder>,
     /// One receiver per sender, because a frame is keyed per sender and a single
     /// receiver keyed with the wrong index authenticates nothing. This was got
     /// wrong once already and a loopback test did not catch it.
@@ -54,6 +66,28 @@ pub struct Call {
     window: Vec<f32>,
     frames_out: u64,
     frames_in: u64,
+    /// Everyone who is speaking, added together, waiting to be played.
+    ///
+    /// # Why this is not just queued as it arrives
+    ///
+    /// The playback device takes a queue and plays it in order. Handing it one
+    /// person's frame and then another's plays them one after the other, so two
+    /// people talking at once come out taking turns at twice the speed and the
+    /// call drifts further behind with every frame. Sound does not queue: it
+    /// adds. Two voices in a room are the sum of two pressures, and that is
+    /// what a mixer has to reproduce.
+    ///
+    /// # What this does and does not do
+    ///
+    /// Frames that arrive in the same tick are summed at the same position, so
+    /// people talking over each other are heard over each other. A frame that
+    /// arrives a tick late is summed a tick late, which is a small
+    /// misalignment nobody can hear but is not the same as being right: doing
+    /// it properly needs a jitter buffer for each speaker and one playout clock
+    /// to hang them all on. That is the piece this is short of, and it is worth
+    /// building when a call has three people in it to test with.
+    mix: Vec<f32>,
+
     /// Decides how many bytes a frame may be, from what the link is doing.
     ///
     /// A call cannot slow down and arrive later, so congestion is invisible in
@@ -121,7 +155,7 @@ impl Call {
             playback,
             out,
             encoder: LayeredEncoder::new(BYTES_PER_FRAME),
-            decoder: LayeredDecoder::new(BYTES_PER_FRAME),
+            decoders: HashMap::new(),
             inbound: HashMap::new(),
             base,
             window: Vec::with_capacity(WINDOW),
@@ -130,6 +164,7 @@ impl Call {
             frames_concealed: 0,
             echo: echo::EchoCanceller::new(),
             pace: pace::Pace::new(),
+            mix: Vec::new(),
             dropped_samples: 0,
         })
     }
@@ -149,7 +184,26 @@ impl Call {
     /// case from turning catching up into a stall of its own: past it the
     /// backlog is dropped rather than sent, because audio that late is worth
     /// less than the delay of sending it.
+    /// Hand the mixed audio to the loudspeaker.
+    ///
+    /// Called once a tick, after whatever arrived in that tick has been added.
+    /// Everything complete goes out together, which is what makes two people
+    /// talking at once sound like two people talking at once.
+    fn play_mixed(&mut self) {
+        if self.mix.is_empty() {
+            return;
+        }
+        let mut out = std::mem::take(&mut self.mix);
+        without_clipping(&mut out);
+        // The reference for the canceller is what the loudspeaker is about to
+        // play, which is the sum rather than any one voice in it.
+        self.echo.played(&out);
+        self.playback.queue(&out);
+    }
+
     pub fn send_all_ready(&mut self, conn: &rotelyx_net::Connection) -> Result<()> {
+        self.play_mixed();
+
         /// At most this many frames in one tick. Five is 100 ms, enough to
         /// absorb an ordinary scheduling hiccup and not enough to spend a tick
         /// encoding.
@@ -248,6 +302,10 @@ impl Call {
             MediaIn::new(PathPolicy::RelayOnly, SenderKeys::derive(&self.base, sender))
                 .expect("RelayOnly is the policy this call refused to start without")
         });
+        let decoder = self
+            .decoders
+            .entry(sender)
+            .or_insert_with(|| LayeredDecoder::new(BYTES_PER_FRAME));
 
         // `None` is a frame that failed to authenticate, was replayed, or was
         // too late. All three are the same answer: it is not played.
@@ -270,22 +328,54 @@ impl Call {
         // fade has taken it to nothing anyway.
         const MOST_CONCEALED_IN_A_ROW: u64 = 8;
         let missing = inbound.skipped().min(MOST_CONCEALED_IN_A_ROW);
+        let mut at = 0usize;
         for _ in 0..missing {
-            let filled = self.decoder.conceal();
-            self.echo.played(&filled);
-            self.playback.queue(&filled);
+            let filled = decoder.conceal();
+            add_into(&mut self.mix, at, &filled);
+            at += filled.len();
             self.frames_concealed += 1;
         }
 
-        let Ok(audio) = self.decoder.decode(&parsed) else {
+        let Ok(audio) = decoder.decode(&parsed) else {
             return;
         };
 
-        // The reference for the canceller: what the loudspeaker is about to
-        // play is what the microphone is about to hear.
-        self.echo.played(&audio);
-        self.playback.queue(&audio);
+        add_into(&mut self.mix, at, &audio);
         self.frames_in += 1;
+    }
+}
+
+
+/// Add samples into a mix at an offset, growing it as needed.
+///
+/// Sound adds. Two people speaking at once are the sum of two pressures, not
+/// one queued behind the other, and a mixer that appends plays them in turn at
+/// twice the speed.
+fn add_into(mix: &mut Vec<f32>, at: usize, samples: &[f32]) {
+    if mix.len() < at + samples.len() {
+        mix.resize(at + samples.len(), 0.0);
+    }
+    for (slot, s) in mix[at..].iter_mut().zip(samples) {
+        *slot += s;
+    }
+}
+
+/// Keep a sum of voices inside what a loudspeaker can carry.
+///
+/// # Why not simply divide by the number of speakers
+///
+/// Because most of them are silent most of the time. Dividing by four in a call
+/// of four makes one person talking a quarter as loud as the same person in a
+/// call of two, so the volume drops every time somebody joins. Clipping only
+/// when it would actually clip leaves an ordinary conversation untouched and
+/// catches the moment everybody shouts at once.
+fn without_clipping(mix: &mut [f32]) {
+    let peak = mix.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    if peak > 1.0 {
+        let k = 1.0 / peak;
+        for s in mix.iter_mut() {
+            *s *= k;
+        }
     }
 }
 
@@ -340,5 +430,77 @@ impl Call {
     /// The rate this call sends at, in kbit/s, before framing.
     pub fn kbit_per_second(&self) -> usize {
         BYTES_PER_FRAME * 50 * 8 / 1000
+    }
+}
+
+#[cfg(test)]
+mod mixing_tests {
+    use super::{add_into, without_clipping};
+
+    /// Two people talking at once must be heard at once.
+    ///
+    /// # The failure this catches
+    ///
+    /// The playback device takes a queue and plays it in order, so handing it
+    /// one person's frame and then another's plays them one after the other.
+    /// Two people talking over each other came out taking turns at twice the
+    /// speed, and the call fell a frame further behind every time it happened.
+    /// Sound adds; it does not queue.
+    #[test]
+    fn two_speakers_are_summed_not_queued() {
+        let mut mix = Vec::new();
+        let alice = vec![0.3f32; 960];
+        let bob = vec![-0.1f32; 960];
+
+        add_into(&mut mix, 0, &alice);
+        add_into(&mut mix, 0, &bob);
+
+        assert_eq!(
+            mix.len(),
+            960,
+            "two speakers took twice as long instead of sharing the time"
+        );
+        for s in &mix {
+            assert!((s - 0.2).abs() < 1e-6, "the two voices were not added: {s}");
+        }
+    }
+
+    /// A speaker who starts later is placed later, not at the front.
+    #[test]
+    fn a_later_frame_lands_where_it_belongs() {
+        let mut mix = vec![0.0f32; 480];
+        add_into(&mut mix, 480, &vec![0.5f32; 480]);
+        assert_eq!(mix.len(), 960);
+        assert_eq!(mix[0], 0.0);
+        assert_eq!(mix[959], 0.5);
+    }
+
+    /// Everybody shouting at once must not come out as distortion.
+    #[test]
+    fn a_loud_sum_is_brought_back_rather_than_clipped() {
+        let mut mix = vec![0.4f32; 100];
+        add_into(&mut mix, 0, &vec![0.4f32; 100]);
+        add_into(&mut mix, 0, &vec![0.4f32; 100]);
+        assert!(mix[0] > 1.0, "the test needs a sum that would clip");
+
+        without_clipping(&mut mix);
+        assert!(
+            mix.iter().all(|s| s.abs() <= 1.0 + 1e-6),
+            "the mix was left above what a loudspeaker can carry"
+        );
+        assert!((mix[0] - 1.0).abs() < 1e-6, "it was brought back too far");
+    }
+
+    /// An ordinary conversation must not be turned down.
+    ///
+    /// Dividing by the number of participants is the obvious way to avoid
+    /// clipping and it makes one person talking quieter every time somebody
+    /// else joins, whether or not they say anything.
+    #[test]
+    fn a_conversation_that_does_not_clip_is_left_alone() {
+        let mut mix = vec![0.3f32, -0.45, 0.1, 0.0];
+        let before = mix.clone();
+        without_clipping(&mut mix);
+        assert_eq!(mix, before, "a quiet mix was turned down for no reason");
     }
 }

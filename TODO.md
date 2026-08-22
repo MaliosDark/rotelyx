@@ -863,7 +863,26 @@ wide margin the largest single task remaining in the project.
       caller that waits to notice has already played the hole, and the call
       fills them from the codec before playing what did arrive. Reported as
       `frames_concealed`, which is the loss somebody actually heard
-- [ ] Mixing, for a group call with more than one person speaking
+- [x] **Mixing, for more than one person speaking.** The playback device takes a
+      queue and plays it in order, so handing it one person's frame and then
+      another's played them one after the other: two people talking over each
+      other came out taking turns at twice the speed, and the call fell a frame
+      further behind every time. Sound adds rather than queues. Everything that
+      arrives in a tick is summed at the same position and handed over together,
+      and brought back only if the sum would actually clip, because dividing by
+      the number of participants makes one person talking quieter every time
+      somebody else joins whether or not they say anything.
+      **The decoder was shared between senders too**, which is a worse version
+      of the same mistake: half of every window is the tail of the previous one
+      waiting to be added to the next, so two voices through one decoder each
+      got half of the other folded into their own output, and a gap in one was
+      concealed with the timbre of the other. With two participants only one
+      ever sends, so nothing showed. One decoder per sender now
+- [ ] **A jitter buffer per speaker, hung on one playout clock.** The mixer sums
+      what arrives in the same tick, which is right for people talking at once
+      and a tick out for a speaker whose frame is late. Nobody can hear a tick,
+      and it is not the same as being right. Worth building when there is a call
+      with three people in it to test against
 - [ ] Build for Android on a machine with the NDK, and for iOS on a Mac. The
       Rust targets are installed; `cargo-ndk` is not
 - [ ] UniFFI bindings for Swift and Kotlin, if the C ABI turns out not to be
@@ -933,8 +952,20 @@ wide margin the largest single task remaining in the project.
       served: a hash from the same origin as the file proves nothing, because
       whoever can replace one can replace the other. Verified that the check
       actually fails on a changed hash rather than passing by construction
-- [ ] A signed manifest, so that a page load can be
-      checked against something. It does not close the gap, it narrows it
+- [x] **A way to actually run the check, which is what was missing.**
+      `scripts/verify-deployment <url>` fetches what a server is handing out
+      right now and compares it against `docs/ARTIFACTS.md`. The hashes were
+      published and nobody ever compared them against a live deployment, and a
+      published hash nobody checks is a claim rather than a check. Run against
+      the live site the first time, it found the deployment two builds behind.
+      **A signature was the wrong shape for this.** It would matter if the
+      manifest travelled apart from the source; it does not, because git is the
+      channel and git is already the thing being trusted. Signing would add a
+      key to guard without narrowing the gap that is left.
+      The gap that is left, said plainly in the script: this tells a browser
+      nothing. Somebody loading the page runs whatever the server sent, and no
+      code inside that page can prove otherwise, because it is code the server
+      chose. A check from outside is the only place the check can honestly live
 - [x] **Shrank the wasm from 2.35 MB to 1.51**, 749 KB to 531 gzipped: -35.8%
       and -29.1%. A size profile (`opt-level = "z"`, fat LTO) plus
       `--remove-name-section`, which alone was 397 KB of debugging symbol names.
