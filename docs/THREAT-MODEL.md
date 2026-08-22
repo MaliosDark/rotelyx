@@ -327,8 +327,12 @@ No public security claim is made before all of these are met.
    An earlier pass did produce one artifact, a "slow unit" of 44 seconds, which
    ran in 78 ms on its own: libFuzzer times by the clock on the wall and the
    machine was compiling. Do not run these beside a build.
-   Still not a closed gate. It wants somewhere these run without anybody
-   remembering to start them.
+   They run nightly now, fifteen minutes on each target, one target per job:
+   `.github/workflows/fuzz.yml`. Not on every push, because a fuzzer is not a
+   test: a test says yes or no about a property somebody chose, and a fuzzer
+   looks for the case nobody thought of by running for a long time. What still
+   keeps this gate open is that nothing has come back from it yet, and a gate
+   closes on a review rather than on a schedule.
    The frame and envelope targets also assert that anything accepted re-encodes
    to the bytes it came from, so a second encoding of one value is a finding
    rather than something the fuzzer would pass over.

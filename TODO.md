@@ -878,11 +878,18 @@ wide margin the largest single task remaining in the project.
       got half of the other folded into their own output, and a gap in one was
       concealed with the timbre of the other. With two participants only one
       ever sends, so nothing showed. One decoder per sender now
-- [ ] **A jitter buffer per speaker, hung on one playout clock.** The mixer sums
-      what arrives in the same tick, which is right for people talking at once
-      and a tick out for a speaker whose frame is late. Nobody can hear a tick,
-      and it is not the same as being right. Worth building when there is a call
-      with three people in it to test against
+- [x] **A jitter buffer per speaker, on one playout clock.** It existed and the
+      call was not using it. `MediaIn` has carried one the whole time and says
+      so: `frame` is documented as being for tests and for a caller doing its
+      own buffering, with a real call using `accept` and `play`. The call used
+      `frame`, so it decoded on arrival and played on the *network's* clock,
+      which makes every wobble in arrival time a wobble somebody hears and
+      leaves two speakers interleaved on the way in and interleaved on the way
+      out. It buffers per speaker now and takes one slot from each on the tick,
+      which is one clock for everybody.
+      That also puts the concealment where the design always said it went: a
+      frame that misses its slot is `Missing`, a slot rather than an error, and
+      that is what the decoder extrapolates over
 - [ ] Build for Android on a machine with the NDK, and for iOS on a Mac. The
       Rust targets are installed; `cargo-ndk` is not
 - [ ] UniFFI bindings for Swift and Kotlin, if the C ABI turns out not to be
@@ -1041,9 +1048,15 @@ wide margin the largest single task remaining in the project.
 - [x] **Ran them for twenty five minutes each instead of ninety seconds.** About
       nine hundred million cases across the three targets, one at a time with
       nothing building beside them. Nothing found
-- [ ] **Somewhere the fuzzers run without anybody remembering.** The corpus is
-      gitignored because it is machine-specific; a case that finds something
-      belongs in the ordinary suite as a regression
+- [x] **Somewhere the fuzzers run without anybody remembering.**
+      `.github/workflows/fuzz.yml`, nightly, fifteen minutes on each target, one
+      target per job. Not on every push: twenty seconds of fuzzing on a push is a
+      ritual that passes and proves nothing, and the passing gets mistaken for
+      coverage. One job per target rather than three in a row, because libFuzzer
+      times a case by the clock on the wall and a machine doing something else
+      produces "slow unit" artifacts that are reports about the machine. A crash
+      is kept as an artifact so somebody can replay it, and belongs in the
+      ordinary suite as a regression rather than in a corpus nobody re-runs
 - [x] **Constant time review**, recorded in `docs/THREAT-MODEL.md` section 6.
       Every comparison in the first-party crates touching a key, tag, token,
       proof or passphrase was located and classified. Three were already

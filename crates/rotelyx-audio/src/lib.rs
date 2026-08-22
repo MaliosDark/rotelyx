@@ -22,6 +22,7 @@ use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder, LayeredFrame};
 use rotelyx_codec::mdct::{FRAME, SAMPLE_RATE, WINDOW};
 
 use rotelyx_media::transport::{MediaIn, MediaOut};
+use rotelyx_media::jitter::Playout;
 use rotelyx_media::SenderKeys;
 use rotelyx_net::PathPolicy;
 
@@ -66,6 +67,11 @@ pub struct Call {
     window: Vec<f32>,
     frames_out: u64,
     frames_in: u64,
+    /// When this call started, which is the clock the buffers follow jitter
+    /// against. A monotonic instant rather than a wall clock: a call should not
+    /// stutter because somebody's machine synchronised its time.
+    started: std::time::Instant,
+
     /// Everyone who is speaking, added together, waiting to be played.
     ///
     /// # Why this is not just queued as it arrives
@@ -165,6 +171,7 @@ impl Call {
             echo: echo::EchoCanceller::new(),
             pace: pace::Pace::new(),
             mix: Vec::new(),
+            started: std::time::Instant::now(),
             dropped_samples: 0,
         })
     }
@@ -202,6 +209,8 @@ impl Call {
     }
 
     pub fn send_all_ready(&mut self, conn: &rotelyx_net::Connection) -> Result<()> {
+        // One slot from every speaker, on this clock, before anything is sent.
+        self.play_one_slot();
         self.play_mixed();
 
         /// At most this many frames in one tick. Five is 100 ms, enough to
@@ -291,7 +300,19 @@ impl Call {
         Ok(true)
     }
 
-    /// Authenticate, decode and play one datagram.
+    /// Authenticate one datagram and put it in this speaker's buffer.
+    ///
+    /// # Why it is not played here
+    ///
+    /// It used to be: decode on arrival and hand the result to the loudspeaker.
+    /// That plays audio on the network's clock rather than the device's, so
+    /// every wobble in arrival time is a wobble somebody hears, and two people
+    /// speaking arrive interleaved and come out interleaved.
+    ///
+    /// `MediaIn` has carried a jitter buffer for exactly this the whole time,
+    /// and said so: `frame` is documented as being for tests and for a caller
+    /// doing its own buffering, and a real call using `accept` and `play`. The
+    /// call was using `frame`.
     pub fn receive_one(&mut self, datagram: &[u8]) {
         // Which sender, from the header, before any key is used.
         let Ok(sender) = rotelyx_media::claimed_sender(datagram) else {
@@ -302,46 +323,65 @@ impl Call {
             MediaIn::new(PathPolicy::RelayOnly, SenderKeys::derive(&self.base, sender))
                 .expect("RelayOnly is the policy this call refused to start without")
         });
-        let decoder = self
-            .decoders
-            .entry(sender)
-            .or_insert_with(|| LayeredDecoder::new(BYTES_PER_FRAME));
 
-        // `None` is a frame that failed to authenticate, was replayed, or was
-        // too late. All three are the same answer: it is not played.
-        let Some(payload) = inbound.frame(datagram) else {
-            return;
-        };
-        let Ok(parsed) = LayeredFrame::from_bytes(&payload) else {
-            return;
-        };
-        // Fill what never arrived before playing what did.
-        //
-        // A lost frame used to leave a hole, and a hole in the middle of a
-        // vowel is heard as a click at each edge rather than as a loss. The
-        // decoder carries the last frame's band energies forward as noise at
-        // those levels, quieter each time, so a short gap sounds like the voice
-        // continuing and a long one fades out instead of holding a note.
-        //
-        // Bounded, because concealment is worth having for a stumble and not
-        // for an outage: past this it is a machine talking to itself, and the
-        // fade has taken it to nothing anyway.
-        const MOST_CONCEALED_IN_A_ROW: u64 = 8;
-        let missing = inbound.skipped().min(MOST_CONCEALED_IN_A_ROW);
-        let mut at = 0usize;
-        for _ in 0..missing {
-            let filled = decoder.conceal();
-            add_into(&mut self.mix, at, &filled);
-            at += filled.len();
-            self.frames_concealed += 1;
+        // Arrival time on the local clock, which is what the buffer follows the
+        // network's jitter with.
+        let now_ms = self.started.elapsed().as_millis() as u64;
+        inbound.accept(datagram, now_ms);
+    }
+
+    /// Take one slot from every speaker, mix them, and hand the sum over.
+    ///
+    /// Called once a tick, which is the playout clock: one clock for everybody,
+    /// so people talking at once are heard at once and a frame that arrived
+    /// early waits for its slot rather than jumping the queue.
+    fn play_one_slot(&mut self) {
+        let senders: Vec<u8> = self.inbound.keys().copied().collect();
+        for sender in senders {
+            let Some(inbound) = self.inbound.get_mut(&sender) else {
+                continue;
+            };
+            let decoder = self
+                .decoders
+                .entry(sender)
+                .or_insert_with(|| LayeredDecoder::new(BYTES_PER_FRAME));
+
+            let audio = match inbound.play() {
+                Playout::Frame(payload) => match LayeredFrame::from_bytes(&payload) {
+                    Ok(parsed) => match decoder.decode(&parsed) {
+                        Ok(audio) => {
+                            self.frames_in += 1;
+                            audio
+                        }
+                        // Authenticated and undecodable is not a gap in the
+                        // network, it is a frame this decoder cannot use.
+                        // Concealing it keeps the voice continuous rather than
+                        // punching a hole for a fault on this side.
+                        Err(_) => {
+                            self.frames_concealed += 1;
+                            decoder.conceal()
+                        }
+                    },
+                    Err(_) => {
+                        self.frames_concealed += 1;
+                        decoder.conceal()
+                    }
+                },
+                // The frame did not arrive in time for its slot. This is the
+                // case the concealment exists for, and the buffer reporting it
+                // as a slot rather than as an error is what makes it usable.
+                Playout::Missing => {
+                    self.frames_concealed += 1;
+                    decoder.conceal()
+                }
+                // Nothing buffered at all, or a slot being held for a frame
+                // still expected. Neither is a gap in speech: one is silence at
+                // the far end and the other is the buffer doing its job.
+                Playout::Starved | Playout::Waiting => continue,
+            };
+
+            add_into(&mut self.mix, 0, &audio);
         }
-
-        let Ok(audio) = decoder.decode(&parsed) else {
-            return;
-        };
-
-        add_into(&mut self.mix, at, &audio);
-        self.frames_in += 1;
     }
 }
 

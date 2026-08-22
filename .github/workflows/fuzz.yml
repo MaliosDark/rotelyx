@@ -1,0 +1,65 @@
+name: fuzz
+
+# Nightly, not on every push.
+#
+# A fuzzer is not a test. A test says yes or no about a property somebody chose;
+# a fuzzer looks for the case nobody thought of, and it finds it by running for
+# a long time. Twenty seconds of it on every push would be a ritual: it would
+# pass, and it would prove nothing, and the passing would be mistaken for
+# coverage.
+#
+# So it runs on a schedule, one target at a time, for long enough to matter. The
+# review gates in docs/THREAT-MODEL.md ask for fuzzing of every parser reachable
+# from the network, and the half of that which was missing was not the harness.
+# It was somewhere the harness runs without anybody remembering to start it.
+on:
+  schedule:
+    # 03:00 UTC. Nothing depends on the hour; what matters is that it is not
+    # tied to somebody being at a keyboard.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    # One target per job rather than three in a row.
+    #
+    # libFuzzer times a case by the clock on the wall, not by the processor it
+    # used, so a machine doing something else produces "slow unit" artifacts
+    # that are reports about the machine. Separate jobs keep each one alone.
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [frame_reader, envelope_parser, mls_message]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo-fuzz builds with a sanitizer, which needs nightly.
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: fuzz ${{ matrix.target }}
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- \
+            -max_total_time=900 -rss_limit_mb=2048 -print_final_stats=1
+
+      # A crash is worth more than the log that mentions it. Keeping the input
+      # means somebody can replay it, and a case that found something belongs in
+      # the ordinary suite as a regression rather than in a corpus nobody
+      # re-runs.
+      - name: keep whatever it found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-findings
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
