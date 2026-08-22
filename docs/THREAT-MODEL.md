@@ -355,12 +355,13 @@ underneath does not move the answer quietly.
 | A sender jumping far ahead of a receiver | Bounded at a thousand skipped generations, about seven milliseconds of derivation, then refused |
 | A message replayed into a reinstalled device | Refused. A reinstall is a new member added by a commit that moves the epoch, and the captured message belongs to an epoch that member never had |
 
-**What this does not protect.** The sender. A restored or rolled-back device is
-not stopped from sending: `send` succeeds, the receiver drops the message, and
-nothing tells the person holding that device. To them their messages stop
-arriving for no reason they can see. Confidentiality holds and availability does
-not, which is the right way round, but a client that restores from a backup
-should force a rekey before it trusts its own sending.
+**The sender is now stopped rather than left talking to itself.** A copy
+reopened from storage refuses to send until it has rekeyed: `send` returns
+`RestoredAndNotRekeyed`, and `rekey_after_restore` moves the epoch and hands
+back the commit the caller has to deliver. It used to succeed, have the receiver
+drop the message, and tell nobody, so to the person holding the device their
+messages simply stopped arriving. Confidentiality held and availability did not,
+silently.
 
 **Three of the four are inherited.** The forward-secrecy deletion, the forward
 distance limit of a thousand and the epoch check are the library's behaviour,

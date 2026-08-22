@@ -317,10 +317,14 @@ fn dispatch(req: &Value) -> Res {
         }
         "session.receive" => {
             let message = str_arg(req, "message")?;
-            match engine(s.receive(&message))? {
-                Some(text) => json!(text),
-                None => Value::Null,
-            }
+            // Passed through as the object the binding produces: which of three
+            // things arrived, rather than "the plaintext or null". A caller that
+            // cannot tell a member joining from a routine rekey cannot surface
+            // the one and stay quiet about the other, and surfacing membership
+            // changes is a security control. See ADV-7 in the threat model.
+            let json = engine(s.receive(&message))?;
+            serde_json::from_str::<Value>(&json)
+                .unwrap_or_else(|_| Value::String(json))
         }
 
         "session.seal" => {

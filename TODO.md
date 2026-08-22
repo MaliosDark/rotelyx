@@ -189,7 +189,14 @@ Everything needed for this is built.
 - [x] Persistent blocklist, so a block survives a restart
 - [ ] Derive the sealing key from the device keystore rather than a passphrase,
       where the platform offers one
-- [ ] Encrypted MLS group state at rest
+- [x] **Encrypted MLS group state at rest, in the browser**, which is the only
+      client that keeps any. `sealSession` puts the signing key, the hybrid key
+      and the whole group state behind Argon2id at 64 MiB, because the obvious
+      place to keep it there is local storage, which any script on the origin can
+      read and which outlives the tab
+- [ ] **The native clients do not keep a conversation at all**, so there is
+      nothing at rest to encrypt and a restart loses it. That is a missing
+      feature rather than a missing lock, and the lock is what to build second
 - [ ] A backup format that does not create a state rollback vector
 
 ### 4. Relay hardening
@@ -312,10 +319,17 @@ Everything needed for this is built.
       id. The tests that existed covered two *bought* tokens, which have
       different ids by construction, so none of them ever reached the free path;
       the new one fails without the fix
-- [ ] **Nothing rate limits a mailbox connection.** The fix above stops one
-      caller silencing the rest while staying inside its own limits. It does not
-      stop somebody opening connections in a loop, and the relay has a limiter
-      while the mailbox has none
+- [x] **A mailbox holds at most four thousand sockets open.** Nothing bounded
+      it: a connection costs a descriptor, a task and a buffer, and opening them
+      in a loop costs the other end no token, no payment and no identity. The
+      metering counts bytes deposited and never counts a connection that
+      deposits nothing, so a caller that only opens sockets was free. Refusing
+      at a ceiling is the honest failure; running out of descriptors is the same
+      denial arriving later and taking the accepted connections with it
+- [ ] **Per-address limits on a mailbox, which belong in the reverse proxy.**
+      The ceiling above bounds the resource whatever is in front, and it does
+      not tell one caller from a thousand. `docs/nginx-relay.conf` has the zones
+      written and they are still not deployed
 - [!] **A bought token links its holder's deposits to each other.** The id names
       nobody, which is not the same as linking nothing: the meter counts against
       it, so the mailbox sees a stable pseudonym with a usage history across
@@ -343,11 +357,16 @@ Everything needed for this is built.
       who left, and the terminal, desktop and browser clients name them. The
       browser page already read the whole roster aloud, which is why it was the
       only one this did not affect
-- [ ] **The wasm binding still collapses all three cases into `undefined`**, so
-      `chat.html` says "the group changed" on a routine rekey. It reads the
-      roster by name when it does, so this is a false positive rather than a
-      hole. Left for the same pass as opening the page in a browser, because
-      changing the shape of that return means changing the deployed page
+- [x] **The wasm binding says which of three things arrived.** It returned the
+      plaintext or `undefined`, and `undefined` meant a member joining, a
+      routine rekey, and a message the group did not recognise, so `chat.html`
+      announced that the group had changed for all three. A notice a person is
+      meant to read, firing on ordinary traffic, is a notice people learn to
+      dismiss. It returns JSON naming the case now, and the page says who joined
+      or left by name and stays quiet on a rekey. Verified by building the wasm,
+      serving `site/` locally against a mailbox of its own, and running
+      `scripts/browser-test/run` at it: conversation established, safety numbers
+      matching, a message delivered each way
 - [x] **A timing test measured the machine's spare capacity.** The MDCT speed
       bound averaged one run and failed at 10.6% against a 10% limit while a
       build was running, then passed three times in a row a minute later on the
@@ -398,11 +417,17 @@ Everything needed for this is built.
       is refused as too old. Written up in section 5b of the threat model, with a
       test for each: three of the four hold because of library behaviour this
       crate never chose, so an upgrade could move them without anybody noticing
-- [!] **A restored device is silently mute.** It is not stopped from sending,
-      the receiver drops what it sends, and nothing tells the person holding it.
-      Confidentiality holds and availability does not, which is the right way
-      round, but a client that restores from a backup should force a rekey
-      before it trusts its own sending. No client does
+- [x] **A restored copy refuses to send until it has rekeyed.** It used to send
+      into a hole: a copy reopened from storage believes it is at a generation
+      the group has spent, the receiver refuses everything it sends because it
+      deletes each generation's secret as it uses it, and `send` succeeded
+      anyway. Nothing told the person holding the device, so to them messages
+      simply stopped arriving. Confidentiality held and availability did not,
+      silently, which is the worst way for anything to fail. `send` now returns
+      `RestoredAndNotRekeyed`, and `rekey_after_restore` moves the epoch and
+      returns the commit the caller has to deliver. It cannot be done inside
+      `reopen`, which has no way to send anything: a rekey nobody receives is
+      the same failure from the other side
 - [x] **Swept the other four documents the same way.** The README, the
       architecture note, the codec note and the paper. Corrected: "addressing is
       never transmitted", which said no addressing information crosses the
@@ -790,7 +815,10 @@ wide margin the largest single task remaining in the project.
       enough
 - [ ] Background lifecycle. iOS will not hold a socket, and every design
       decision downstream of "the phone hosts it" collides with this
-- [ ] Silent push with jittered delivery and decoy pushes
+- [x] **Silent pushes marked as decoys, on one fixed schedule.** Not jittered
+      delivery, which this line used to plan and which would be a weakening: a
+      device woken on a rhythm of its own is identifiable by that rhythm, so one
+      schedule shared by every registered device is the stronger arrangement
 - [?] Whether to ship the browser harness as a Tauri shell or write native
       clients
 
@@ -823,10 +851,14 @@ wide margin the largest single task remaining in the project.
       restart does not drop every uncollected envelope
 - [x] Message history survives a reload, sealed under the same key as the
       session, with local arrival timestamps
-- [ ] **Superseded:** message history does not survive a reload. The conversation resumes
-      and the group is intact, but the visible log starts empty: nothing has
-      ever stored plaintext messages. Needs a decision first, since storing them
-      is the one place this design would keep readable content at rest
+- [x] **Message history survives a reload, sealed.** The line above was written
+      when nothing stored messages at all and said the decision was still open.
+      It was taken: `persist()` writes the log under the same vault key as the
+      session, capped at five hundred entries, and `resumeWith` replays it. The
+      decision it was waiting on is therefore made and worth stating plainly
+      rather than leaving implied: this design keeps readable content at rest in
+      exactly one place, a browser's local storage, behind Argon2id at 64 MiB,
+      and `localStorage.removeItem` on the way out
 - [x] Persist conversation state in the tab, sealed under a passphrase, with the
       key derived once so saving after every message stays cheap
 - [x] **The build machine's username was in every shipped artifact**: 173 paths
@@ -870,8 +902,19 @@ wide margin the largest single task remaining in the project.
       confidentiality: it forwards ciphertext it cannot read either way. But its
       connection log covers people with no relationship to the operator. Closing
       it is one file and one flag, and the unit says how
-- [ ] Verify the smaller wasm in a browser before deploying it
-- [ ] `wasm-opt` is not installed here and was not run
+- [x] **Verified the module in a browser before deploying it.** Built it, served
+      `site/` locally against a mailbox of its own, and ran
+      `scripts/browser-test/run` at it: two tabs, conversation established,
+      safety numbers matching, a message delivered each way
+- [x] **`wasm-opt` is installed, was run, and is deliberately not used.** It
+      makes the file smaller and the download larger, which is the opposite of
+      the point. Measured, raw against `gzip -9`: none 1,514,620 / 533,914;
+      `-Oz` 1,351,201 / 571,267; `-Os` 1,379,416 / 570,320; `-O2` 1,407,376 /
+      574,203; `-O3` 1,396,050 / 572,908. Every level shrinks the file by about
+      a tenth and costs about 36 KB compressed, and a server serves this
+      compressed. The table is in `scripts/build-wasm` so the next person does
+      not have to rediscover it, with a note that it is a property of this
+      module and this version of the tool rather than a law
 
 ---
 
@@ -909,10 +952,12 @@ wide margin the largest single task remaining in the project.
       found nothing at 29 coverage points until it was seeded with real
       envelopes and reached 39: a fuzzer that never gets past the length check
       proves nothing, and the number to watch is coverage rather than executions
-- [ ] **Run the fuzzers for longer than 90 seconds, somewhere that does not need
-      somebody to remember.** What ran is a smoke test. The corpus is gitignored
-      because it is machine-specific; a case that finds something belongs in the
-      ordinary suite as a regression
+- [x] **Ran them for twenty five minutes each instead of ninety seconds.** About
+      nine hundred million cases across the three targets, one at a time with
+      nothing building beside them. Nothing found
+- [ ] **Somewhere the fuzzers run without anybody remembering.** The corpus is
+      gitignored because it is machine-specific; a case that finds something
+      belongs in the ordinary suite as a regression
 - [x] **Constant time review**, recorded in `docs/THREAT-MODEL.md` section 6.
       Every comparison in the first-party crates touching a key, tag, token,
       proof or passphrase was located and classified. Three were already

@@ -454,12 +454,22 @@ impl Session {
         Ok(BASE64.encode(&bytes))
     }
 
-    /// Process an incoming message.
+    /// Take one message, and say which of three things it was.
     ///
-    /// Returns the plaintext for an application message, and `undefined` for a
-    /// commit. `undefined` is not an error: it means the group changed, and the
-    /// caller should re-read `epoch` and `memberCount`.
-    pub fn receive(&mut self, message_b64: &str) -> Result<Option<String>, Error> {
+    /// Returns JSON, always: `{"kind":"message","text":…}`,
+    /// `{"kind":"membership","added":[…],"removed":[…],"members":n}`, or
+    /// `{"kind":"nothing"}`.
+    ///
+    /// # Why not "the plaintext, or undefined"
+    ///
+    /// That is what this used to return, and `undefined` meant all three: a
+    /// third party joining, a routine rekey, and a message the group did not
+    /// recognise. The page announced "the group changed" for every one of them,
+    /// so the notice a person is meant to read fires on ordinary traffic, and a
+    /// warning that cries wolf is one people learn to dismiss. Surfacing
+    /// membership changes is a security control, stated as one in ADV-7 of the
+    /// threat model; a control that fires when nothing happened is not one.
+    pub fn receive(&mut self, message_b64: &str) -> Result<String, Error> {
         let bytes = decode(message_b64)?;
 
         let member = &self.member;
@@ -473,27 +483,45 @@ impl Session {
         // A commit moves the epoch, so the tag key must follow it.
         self.sync_tag_keys()?;
 
-        // Mapped back to "plaintext or nothing" for the browser binding.
-        //
-        // The core now distinguishes a membership change from a rekey and from
-        // a message it did not recognise, which the Rust clients use to say who
-        // joined or left rather than only how many people are here. This
-        // binding still collapses all three into `undefined`, so `chat.html`
-        // announces "the group changed" on a routine rekey too. It reads the
-        // whole roster by name when it does, which is why this is a false
-        // positive rather than a hole, and it is recorded in TODO.md rather
-        // than fixed in the same pass as the core: changing the shape of this
-        // return means changing the deployed page, and that wants a browser to
-        // test it in.
-        match outcome {
-            rotelyx_crypto::Received::Message(plaintext) => Ok(Some(
-                String::from_utf8(plaintext)
-                    .map_err(|_| Error::new("decrypted payload is not valid UTF-8"))?,
-            )),
-            rotelyx_crypto::Received::MembershipChanged(_) | rotelyx_crypto::Received::Nothing => {
-                Ok(None)
-            }
+        fn short(identity: &[u8]) -> String {
+            identity.iter().take(8).map(|b| format!("{b:02x}")).collect()
         }
+        fn quoted(names: &[String]) -> String {
+            names
+                .iter()
+                .map(|n| format!("\"{n}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+
+        Ok(match outcome {
+            rotelyx_crypto::Received::Message(plaintext) => {
+                let text = String::from_utf8(plaintext)
+                    .map_err(|_| Error::new("decrypted payload is not valid UTF-8"))?;
+                // Written by hand rather than pulling in a JSON crate for one
+                // field. `escape_default` covers quotes, backslashes and control
+                // characters, which is everything that could break the string.
+                let escaped: String = text.escape_default().collect();
+                format!("{{\"kind\":\"message\",\"text\":\"{escaped}\"}}")
+            }
+            rotelyx_crypto::Received::MembershipChanged(change) => {
+                let added: Vec<String> = change.added.iter().map(|p| short(&p.identity)).collect();
+                let removed: Vec<String> =
+                    change.removed.iter().map(|p| short(&p.identity)).collect();
+                let members = self
+                    .conversation
+                    .as_ref()
+                    .map(|c| c.member_count())
+                    .unwrap_or(0);
+                format!(
+                    "{{\"kind\":\"membership\",\"added\":[{}],\"removed\":[{}],\"members\":{}}}",
+                    quoted(&added),
+                    quoted(&removed),
+                    members
+                )
+            }
+            rotelyx_crypto::Received::Nothing => "{\"kind\":\"nothing\"}".to_string(),
+        })
     }
 
     // ---- mailbox -----------------------------------------------------------
@@ -816,6 +844,33 @@ impl Session {
     }
 
     /// Rebuild a session from a sealed blob.
+    /// Move to a fresh epoch after unsealing, and let `send` work again.
+    ///
+    /// Returns the commit, base64. The caller must deliver it the way it
+    /// delivers anything else, and until the other side has processed it they
+    /// are still at the old epoch.
+    ///
+    /// # Why a resumed session cannot just carry on
+    ///
+    /// A session read back from storage believes it is at a generation the
+    /// group may already have spent. Whatever it sends is then refused by the
+    /// receiver, which deletes each generation's secret as it uses it, and
+    /// nothing says so: the messages just stop arriving. That is what a copy of
+    /// the same sealed blob on a second device looks like, and a browser cannot
+    /// tell that from an ordinary reload, so it does this every time. A commit
+    /// is cheap and it also moves the keys forward.
+    #[wasm_bindgen(js_name = rekeyAfterRestore)]
+    pub fn rekey_after_restore(&mut self) -> Result<String, Error> {
+        let member = &self.member;
+        let group = self
+            .conversation
+            .as_mut()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+        let commit = group.rekey_after_restore(member).map_err(err)?;
+        self.sync_tag_keys()?;
+        Ok(BASE64.encode(&commit))
+    }
+
     #[wasm_bindgen(js_name = unsealSession)]
     pub fn unseal_session(blob_b64: &str, key: &SessionKey) -> Result<Session, Error> {
         let plain = open_bytes(key, &decode(blob_b64)?)?;
@@ -1291,6 +1346,25 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// The text of a `receive` result, if it was an application message.
+    ///
+    /// `receive` returns JSON saying which of three things arrived, so a test
+    /// that wants the plaintext has to say so. These two keep the assertions
+    /// below reading like the properties they check rather than like parsing.
+    fn message_text(json: &str) -> Option<String> {
+        let marker = "\"kind\":\"message\",\"text\":\"";
+        let start = json.find(marker)? + marker.len();
+        let rest = &json[start..];
+        let end = rest.rfind("\"}")?;
+        Some(rest[..end].to_string())
+    }
+
+    /// Whether a `receive` result was an application message at all.
+    fn is_message(json: &str) -> bool {
+        json.contains("\"kind\":\"message\"")
+    }
+
     use super::*;
 
     /// The whole browser handshake, executed on the host.
@@ -1320,14 +1394,14 @@ mod tests {
 
         let commit = alice.commit_pq().expect("commit");
         assert!(
-            bob.receive(&commit).expect("apply commit").is_none(),
+            !is_message(&bob.receive(&commit).expect("apply commit")),
             "a commit carries no plaintext"
         );
         assert_eq!(alice.epoch(), bob.epoch());
 
         let wire = alice.send("hello from the browser").expect("send");
         assert_eq!(
-            bob.receive(&wire).expect("receive").expect("application"),
+            message_text(&bob.receive(&wire).expect("receive")).expect("application"),
             "hello from the browser"
         );
 
@@ -1433,7 +1507,7 @@ mod tests {
             // Everyone already in the group applies the commit.
             for j in 1..i {
                 assert!(
-                    sessions[j].receive(&invitation.commit).expect("commit").is_none(),
+                    !is_message(&sessions[j].receive(&invitation.commit).expect("commit")),
                     "an add commit carries no plaintext"
                 );
             }
@@ -1473,7 +1547,7 @@ mod tests {
 
             let payload = member.open_mine(mine[0], slot, 2).expect("open");
             assert_eq!(
-                member.receive(&payload).expect("decrypt").expect("plaintext"),
+                message_text(&member.receive(&payload).expect("decrypt")).expect("plaintext"),
                 "hello everyone"
             );
         }
@@ -1512,7 +1586,7 @@ mod tests {
         let commit = group[0].commit_pq().expect("commit");
         for member in group.iter_mut().skip(1) {
             assert!(
-                member.receive(&commit).expect("apply commit").is_none(),
+                !is_message(&member.receive(&commit).expect("apply commit")),
                 "a commit carries no plaintext"
             );
         }
@@ -1535,7 +1609,7 @@ mod tests {
                 .expect("an envelope for us");
             let payload = member.open_mine(mine, slot, 2).expect("open");
             assert_eq!(
-                member.receive(&payload).expect("decrypt").expect("plaintext"),
+                message_text(&member.receive(&payload).expect("decrypt")).expect("plaintext"),
                 "after the rotation"
             );
         }
@@ -1594,7 +1668,7 @@ mod tests {
 
         let payload = group[1].open_mine(mine, slot, 2).expect("open");
         assert!(
-            group[1].receive(&payload).expect("apply").is_none(),
+            !is_message(&group[1].receive(&payload).expect("apply")),
             "a commit carries no plaintext"
         );
 
@@ -1615,7 +1689,7 @@ mod tests {
                 .expect("an envelope for us");
             let payload = member.open_mine(mine, slot, 2).expect("open");
             assert_eq!(
-                member.receive(&payload).expect("decrypt").expect("plaintext"),
+                message_text(&member.receive(&payload).expect("decrypt")).expect("plaintext"),
                 "hello, I have just arrived"
             );
         }
@@ -1722,7 +1796,7 @@ mod tests {
 
         let payload = reopened.open_mine(mine, slot, 2).expect("open");
         assert_eq!(
-            reopened.receive(&payload).expect("decrypt").expect("plaintext"),
+            message_text(&reopened.receive(&payload).expect("decrypt")).expect("plaintext"),
             "sigues ahi?"
         );
     }
@@ -1741,12 +1815,23 @@ mod tests {
             Session::unseal_session(&sealed, &SessionKey::unlock(phrase, &sealed).expect("unlock"))
                 .expect("unseal");
 
+        // A resumed session rekeys before it is allowed to send, and the other
+        // side has to hear about it. Without that it would be speaking at a
+        // generation the group may already have spent, and every message would
+        // be dropped by the receiver with nothing to say so.
+        assert!(
+            reopened.send("too soon").is_err(),
+            "a resumed session sent without rekeying"
+        );
+        let commit = reopened.rekey_after_restore().expect("rekey after restore");
+        group[0].receive(&commit).expect("the other side applies the rekey");
+
         let ciphertext = reopened.send("vuelvo a estar").expect("send");
         let envelopes = reopened.seal_for_group(&ciphertext, slot).expect("seal");
 
         let payload = group[0].open_mine(&envelopes[0], slot, 2).expect("open");
         assert_eq!(
-            group[0].receive(&payload).expect("decrypt").expect("plaintext"),
+            message_text(&group[0].receive(&payload).expect("decrypt")).expect("plaintext"),
             "vuelvo a estar"
         );
     }
@@ -1987,7 +2072,7 @@ mod tests {
                 .open_mine(&envelopes[0], at(receiver_bucket), back)
                 .expect("open");
             assert_eq!(
-                group[1].receive(&payload).expect("decrypt").expect("plaintext"),
+                message_text(&group[1].receive(&payload).expect("decrypt")).expect("plaintext"),
                 "hello",
                 "{why}"
             );
@@ -2090,7 +2175,7 @@ mod tests {
                     .open_mine(&envelopes[0], at(receiver), back)
                     .expect("open");
                 assert_eq!(
-                    group[1].receive(&payload).expect("decrypt").expect("plaintext"),
+                    message_text(&group[1].receive(&payload).expect("decrypt")).expect("plaintext"),
                     "hello"
                 );
             }

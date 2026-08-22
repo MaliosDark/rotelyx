@@ -75,6 +75,12 @@ pub enum GroupError {
 
     #[error("message was not an application message")]
     NotApplication,
+
+    #[error(
+        "this conversation was reopened from storage and has not rekeyed. \
+         Call `rekey_after_restore` and send the commit before sending messages"
+    )]
+    RestoredAndNotRekeyed,
 }
 
 fn mls<E: std::fmt::Display>(e: E) -> GroupError {
@@ -365,6 +371,24 @@ impl Received {
 
 pub struct Conversation {
     group: MlsGroup,
+    /// Reopened from storage and not yet rekeyed.
+    ///
+    /// # What this stops
+    ///
+    /// A copy restored from a backup believes it is at a generation the group
+    /// has already spent, so everything it sends is refused by the receiver,
+    /// which deleted that generation's secret as it used it. `send` succeeded
+    /// anyway and nothing told the person holding the device: to them, messages
+    /// simply stopped arriving.
+    ///
+    /// Two devices restored from one backup is the same shape, and so is a
+    /// device rolled back to an older copy of itself. Measured, and written up
+    /// in section 5b of the threat model.
+    ///
+    /// Rekeying moves the epoch, which gives this copy generations of its own.
+    /// If two copies rekey at once, MLS resolves it the way it resolves any two
+    /// commits at one epoch: one merges and the other has to process it.
+    restored_needs_rekey: bool,
 }
 
 impl std::fmt::Debug for Conversation {
@@ -397,7 +421,10 @@ impl Conversation {
         )
         .map_err(mls)?;
 
-        Ok(Self { group })
+        Ok(Self {
+            group,
+            restored_needs_rekey: false,
+        })
     }
 
     pub fn epoch(&self) -> u64 {
@@ -582,7 +609,14 @@ impl Conversation {
         let id = GroupId::from_slice(group_id);
         MlsGroup::load(member.provider.storage(), &id)
             .map_err(|e| GroupError::Mls(format!("{e:?}")))
-            .map(|maybe| maybe.map(|group| Self { group }))
+            .map(|maybe| {
+                maybe.map(|group| Self {
+                    group,
+                    // Reopened from storage: this copy may be behind whatever
+                    // else has been using this state.
+                    restored_needs_rekey: true,
+                })
+            })
     }
 
     /// Join a conversation from a welcome message.
@@ -627,7 +661,10 @@ impl Conversation {
         .map_err(mls)?;
 
         let group = staged.into_group(&joiner.provider).map_err(mls)?;
-        Ok(Self { group })
+        Ok(Self {
+            group,
+            restored_needs_rekey: false,
+        })
     }
 
     /// Mix hybrid post-quantum material into the conversation's key schedule.
@@ -638,6 +675,40 @@ impl Conversation {
     ///
     /// The PSK id binds the secret to this group and this epoch, so material
     /// captured from one epoch cannot be replayed into another.
+    /// Move to a fresh epoch after reopening from storage, and let `send` work.
+    ///
+    /// Returns the commit, which the caller must deliver to the other members
+    /// the same way it delivers anything else. Until they process it they are
+    /// still at the old epoch, which is ordinary MLS and not special to this.
+    ///
+    /// # Why this is not done inside `reopen`
+    ///
+    /// A commit has to reach the other side. `reopen` has no way to send one,
+    /// and a rekey nobody receives leaves this copy talking to itself, which is
+    /// the failure it exists to prevent, arrived at from the other direction.
+    pub fn rekey_after_restore(&mut self, member: &Member) -> Result<Vec<u8>, GroupError> {
+        let (commit, _welcome, _group_info) = self
+            .group
+            .commit_builder()
+            .load_psks(member.provider.storage())
+            .map_err(|e| GroupError::Mls(format!("{e:?}")))?
+            .build(
+                member.provider.rand(),
+                member.provider.crypto(),
+                &member.signer,
+                |_| true,
+            )
+            .map_err(mls)?
+            .stage_commit(&member.provider)
+            .map_err(mls)?
+            .into_contents();
+
+        let out = commit.tls_serialize_detached().map_err(codec)?;
+        self.group.merge_pending_commit(&member.provider).map_err(mls)?;
+        self.restored_needs_rekey = false;
+        Ok(out)
+    }
+
     pub fn commit_pq_secret(
         &mut self,
         member: &Member,
@@ -687,6 +758,11 @@ impl Conversation {
 
     /// Encrypt an application message.
     pub fn send(&mut self, sender: &Member, plaintext: &[u8]) -> Result<Vec<u8>, GroupError> {
+        // Refuse loudly rather than send into a hole. See
+        // `Conversation::restored_needs_rekey`.
+        if self.restored_needs_rekey {
+            return Err(GroupError::RestoredAndNotRekeyed);
+        }
         self.group
             .create_message(&sender.provider, &sender.signer, plaintext)
             .map_err(mls)?
@@ -861,48 +937,112 @@ mod tests {
         );
     }
 
-    /// A backup restored twice cannot deliver twice.
+    /// A copy reopened from storage refuses to send until it has rekeyed.
+    ///
+    /// # The hole this closes
+    ///
+    /// A restored copy believes it is at a generation the group has already
+    /// spent. Everything it sent was refused by the receiver, which deletes each
+    /// generation's secret as it uses it, and `send` succeeded anyway: nothing
+    /// told the person holding the device, so to them messages simply stopped
+    /// arriving. Confidentiality held and availability did not, silently, which
+    /// is the worst way for anything to fail.
+    ///
+    /// The refusal is the point. Rekeying is what makes it work again, and the
+    /// caller has to deliver that commit, so it cannot be done inside `reopen`.
+    #[test]
+    fn a_reopened_conversation_refuses_to_send_until_it_rekeys() {
+        let (alice, bob, mut a, mut b) = conversation_of_two();
+
+        // Alice's copy is written down and opened again, which is what a restore
+        // from a backup looks like from here.
+        let mut reopened = Conversation::reopen(&alice, &a.group_id())
+            .expect("reopen")
+            .expect("the group is there");
+
+        assert!(
+            matches!(
+                reopened.send(&alice, b"into the hole"),
+                Err(GroupError::RestoredAndNotRekeyed)
+            ),
+            "a reopened copy sent as though nothing had happened"
+        );
+
+        // Rekeying gives it generations of its own, and the other side has to
+        // hear about it.
+        let commit = reopened
+            .rekey_after_restore(&alice)
+            .expect("rekey after restore");
+        b.receive(&bob, &commit).expect("bob applies the rekey");
+
+        let ct = reopened
+            .send(&alice, b"and now it arrives")
+            .expect("sending works once the epoch has moved");
+        assert_eq!(
+            b.receive(&bob, &ct).expect("receive").message(),
+            Some(b"and now it arrives".to_vec()),
+            "the message did not arrive after the rekey"
+        );
+
+        // And the original copy, still at the old epoch, is the one now behind.
+        assert!(
+            a.send(&alice, b"from the stale copy")
+                .ok()
+                .map(|ct| b.receive(&bob, &ct).is_err())
+                .unwrap_or(true),
+            "a copy left behind by somebody else's rekey still delivered"
+        );
+    }
+
+    /// A backup restored twice cannot deliver twice, at either layer.
     ///
     /// # The class this belongs to
     ///
-    /// Review gate 4 names the state-corruption failures that kill hand-written
-    /// ratchets and that MLS does not solve for us automatically. Two of them
-    /// are the same mechanism: one backup restored onto two devices, and one
-    /// device rolled back to an older backup. Both rewind the generation
-    /// counter, and a rewound sender encrypts under a key it has already used.
+    /// Review gate 4 names the state-corruption failures MLS does not solve for
+    /// us. Two of them are one mechanism: a backup restored onto two devices,
+    /// and a device rolled back to an older backup. Both rewind the generation
+    /// counter, so the copy encrypts under a key the group has already spent.
     ///
-    /// What saves it is that the receiver deletes each generation's secret as it
-    /// uses it, so the second message under one generation has nothing left to
-    /// decrypt with. That is inherited from the library rather than chosen here,
-    /// which is why it is pinned.
-    ///
-    /// What it does not save is the sender. `send` succeeds, the message goes
-    /// nowhere, and nothing tells the person holding the restored device. To
-    /// them their messages simply stop arriving.
+    /// There are two layers between that and a delivered message, and this
+    /// asserts both. The near one is the guard: a copy reopened from storage
+    /// refuses to send at all. The far one is the receiver, which deletes each
+    /// generation's secret as it uses it, so even a copy that got past the guard
+    /// has nothing to be decrypted with. The far layer is the library's, which
+    /// is why it is pinned here rather than assumed.
     #[test]
     fn a_rewound_sender_cannot_deliver_under_a_generation_already_used() {
         let (alice, bob, mut a, mut b) = conversation_of_two();
 
-        let backup = alice.export().expect("export");
         let first = a.send(&alice, b"the same generation").expect("send");
         b.receive(&bob, &first).expect("the first arrives");
 
-        // The backup is restored elsewhere, so that copy still believes it is at
-        // the generation just spent.
-        let restored = Member::restore(backup).expect("restore");
-        let mut rewound = Conversation::reopen(&restored, &a.group_id())
+        let mut rewound = Conversation::reopen(&alice, &a.group_id())
             .expect("reopen")
             .expect("the group is there");
 
+        // The near layer.
+        assert!(
+            matches!(
+                rewound.send(&alice, b"the same generation"),
+                Err(GroupError::RestoredAndNotRekeyed)
+            ),
+            "a copy reopened from storage sent without rekeying"
+        );
+
+        // The far layer. Rekeying clears the guard, and the commit is
+        // deliberately *not* delivered, so this copy is now speaking at an epoch
+        // the receiver has never seen: the same shape as a generation already
+        // spent, and refused for the same reason.
+        let _commit = rewound
+            .rekey_after_restore(&alice)
+            .expect("rekey after restore");
         let second = rewound
-            .send(&restored, b"the same generation")
-            .expect("a rewound sender is not stopped from sending");
+            .send(&alice, b"the same generation")
+            .expect("sending is allowed once the guard is cleared");
 
         assert!(
             b.receive(&bob, &second).is_err(),
-            "a second message under one generation was delivered, so a restored \
-             backup can make the sender encrypt twice under one key and have both \
-             accepted"
+            "a receiver accepted a message from a copy it never heard rekey"
         );
     }
 

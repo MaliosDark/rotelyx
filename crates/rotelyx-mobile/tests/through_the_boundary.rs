@@ -86,7 +86,18 @@ fn two_people_pair_and_talk() {
 
     let commit = text(json!({"op": "session.commitPq", "handle": ana}));
     let applied = ok(json!({"op": "session.receive", "handle": beto, "message": commit}));
-    assert!(applied.is_null(), "a commit yields no plaintext");
+    // A commit says which of three things it was, not "not a message".
+    //
+    // This asserted null, which the boundary returned for a member joining, a
+    // routine rekey and a message the group did not recognise alike. An
+    // application on the other side of this boundary cannot warn about a third
+    // party arriving if it is handed the same value for all three, and warning
+    // about it is a security control rather than a nicety: see ADV-7.
+    assert_eq!(
+        applied["kind"], "nothing",
+        "mixing in a post-quantum secret moved nobody in or out, and was \
+         reported as {applied}"
+    );
 
     // Both sides agree on who is present and on which epoch they are in. If
     // these differ, everything below would still appear to work and the
@@ -108,11 +119,13 @@ fn two_people_pair_and_talk() {
     // A message each way.
     let sealed = text(json!({"op": "session.send", "handle": ana, "text": "hello from ana"}));
     let heard = ok(json!({"op": "session.receive", "handle": beto, "message": sealed}));
-    assert_eq!(heard, json!("hello from ana"));
+    assert_eq!(heard["kind"], "message");
+    assert_eq!(heard["text"], "hello from ana");
 
     let sealed = text(json!({"op": "session.send", "handle": beto, "text": "hello back"}));
     let heard = ok(json!({"op": "session.receive", "handle": ana, "message": sealed}));
-    assert_eq!(heard, json!("hello back"));
+    assert_eq!(heard["kind"], "message");
+    assert_eq!(heard["text"], "hello back");
 
     // And the mailbox layer: tags, sealing, opening.
     let bucket = 1_000_000u64;

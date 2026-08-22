@@ -69,6 +69,22 @@ echo "Generating the glue..."
 wasm-bindgen target/wasm32-unknown-unknown/wasm/rotelyx_wasm.wasm \
     --out-dir "$OUT" --target web --no-typescript --remove-name-section
 
+# wasm-opt is deliberately not run.
+#
+# It makes the file smaller and the download larger, which is the opposite of
+# what it is for. Measured on this module, raw against gzip -9:
+#
+#   none   1,514,620   533,914
+#   -Oz    1,351,201   571,267
+#   -Os    1,379,416   570,320
+#   -O2    1,407,376   574,203
+#   -O3    1,396,050   572,908
+#
+# Every level shrinks the file by about a tenth and costs about 36 KB
+# compressed. A server serves this compressed, so compressed is the number that
+# reaches anybody. Rerun the table before assuming otherwise: it is a property
+# of this module and this version of the tool, not a law.
+
 AFTER=$(stat -c%s "$OUT/rotelyx_wasm_bg.wasm")
 GZ=$(gzip -9 -c "$OUT/rotelyx_wasm_bg.wasm" | wc -c)
 
@@ -100,6 +116,9 @@ echo "  sha256  $(sha256sum "$OUT/rotelyx_wasm_bg.wasm" | cut -d" " -f1)"
 echo
 echo "  The build is reproducible: the same source gives this same hash. Publish"
 echo "  it, so that what is served can be checked against what is claimed."
+echo
+echo "Verify it before deploying:"
+echo "  scripts/browser-test/run <url>   two tabs, one conversation, in a real browser"
 echo
 echo "Not yet verified in a browser. The native tests cover the logic, not the"
 echo "build: open site/chat.html and complete a handshake before deploying."

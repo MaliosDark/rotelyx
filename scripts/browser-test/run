@@ -9,6 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cdp import http_json, Page  # noqa: E402
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "https://rotelyx.ideoa.co/chat.html"
+# A mailbox of your own, for testing a build before it is deployed. Without it
+# the page uses whatever it would use for the host it was served from.
+MAILBOX = os.environ.get("MAILBOX", "")
 PORT = int(os.environ.get("PORT", "9401"))
 
 
@@ -102,6 +105,10 @@ try:
     set_field(b, "name", "browser-test-guest")
     set_field(a, "phrase", phrase)
     set_field(b, "phrase", phrase)
+    if MAILBOX:
+        set_field(a, "mailbox", MAILBOX)
+        set_field(b, "mailbox", MAILBOX)
+        step(f"mailbox {MAILBOX}")
 
     click(a, "host")
     time.sleep(3)

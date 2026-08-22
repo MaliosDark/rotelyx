@@ -1037,7 +1037,35 @@ async fn handle_request(
 // Routes
 // ---------------------------------------------------------------------------
 
+/// How many sockets this server will hold open at once.
+///
+/// # Why there is a ceiling at all
+///
+/// Nothing else bounds it. A connection costs a file descriptor, a task and a
+/// buffer, and opening them in a loop costs the other end almost nothing: no
+/// token, no payment, no identity. The metering below counts bytes deposited
+/// and does not count connections that never deposit anything, so a caller that
+/// only ever opens sockets is free.
+///
+/// Refusing at a ceiling is the honest failure. Running out of descriptors is
+/// the same denial arriving later and taking the accepted connections with it.
+///
+/// This is not the whole answer and is not meant to be. A reverse proxy is
+/// where per-address limits belong, because it is the thing that still knows
+/// the address; see `docs/nginx-relay.conf`. This bounds the resource whatever
+/// is in front.
+const MAX_OPEN_SOCKETS: u64 = 4_096;
+
 async fn ws_handler(ws: WebSocketUpgrade, State(server): State<Arc<Server>>) -> Response {
+    if server.counters.connections_open.load(Ordering::Relaxed) >= MAX_OPEN_SOCKETS {
+        server.counters.refused.fetch_add(1, Ordering::Relaxed);
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many connections are open\n",
+        )
+            .into_response();
+    }
+
     ws.max_message_size(MAX_FRAME_BYTES)
         .on_upgrade(move |socket| handle_socket(socket, server))
 }
@@ -1573,6 +1601,24 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    /// The text of a wasm `receive` result, if it was an application message.
+    ///
+    /// `receive` returns JSON naming which of three things arrived, so a test
+    /// that wants the plaintext has to say so rather than take whatever came
+    /// back.
+    fn message_text(json: &str) -> Option<String> {
+        let marker = "\"kind\":\"message\",\"text\":\"";
+        let start = json.find(marker)? + marker.len();
+        let rest = &json[start..];
+        let end = rest.rfind("\"}")?;
+        Some(rest[..end].to_string())
+    }
+
+    fn is_message(json: &str) -> bool {
+        json.contains("\"kind\":\"message\"")
+    }
+
     use super::*;
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -2302,10 +2348,11 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert_eq!(commit["t"], "commit");
 
         assert!(
-            guest
-                .receive(commit["commit"].as_str().expect("string"))
-                .expect("apply the commit")
-                .is_none(),
+            !is_message(
+                &guest
+                    .receive(commit["commit"].as_str().expect("string"))
+                    .expect("apply the commit")
+            ),
             "a commit carries no plaintext"
         );
 
@@ -2334,7 +2381,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .open(pushed["envelope"].as_str().expect("string"), slot, 2)
             .expect("addressed to us");
         assert_eq!(
-            guest.receive(&payload).expect("decrypt").expect("plaintext"),
+            message_text(&guest.receive(&payload).expect("decrypt")).expect("plaintext"),
             "hello from the browser"
         );
     }
@@ -2416,7 +2463,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             recv_step(&mut guest_ws, "#6").await["envelope"].as_str().unwrap(),
             &meeting,
         ).expect("open"));
-        assert!(guest.receive(commit["commit"].as_str().unwrap()).expect("apply").is_none());
+        assert!(!is_message(&guest.receive(commit["commit"].as_str().unwrap()).expect("apply")));
 
         // The guest leaves the meeting place and listens on its own tags. The
         // host stays, so people can still arrive.
@@ -2478,7 +2525,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let payload = guest
             .open_mine(envelope["envelope"].as_str().unwrap(), slot, 2)
             .expect("addressed to the guest at the epoch it is still on");
-        assert!(guest.receive(&payload).expect("apply").is_none());
+        assert!(!is_message(&guest.receive(&payload).expect("apply")));
 
         // Applying a commit moves the epoch, and the tags move with it. A
         // client that does not re-subscribe here goes silent: it keeps
@@ -2511,7 +2558,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
                 .open_mine(envelope["envelope"].as_str().unwrap(), slot, 2)
                 .expect("addressed to us");
             assert_eq!(
-                session.receive(&payload).expect("decrypt").expect("plaintext"),
+                message_text(&session.receive(&payload).expect("decrypt")).expect("plaintext"),
                 "hello to you both",
                 "{who} could not read it"
             );
@@ -2579,7 +2626,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
                 .open_mine(envelope["envelope"].as_str().unwrap(), slot, 2)
                 .expect("addressed to us");
             assert_eq!(
-                session.receive(&mine).expect("decrypt").expect("plaintext"),
+                message_text(&session.receive(&mine).expect("decrypt")).expect("plaintext"),
                 "one for everybody"
             );
         }
