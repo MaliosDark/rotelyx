@@ -11,6 +11,8 @@
 
 pub mod device;
 
+pub mod echo;
+
 use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
@@ -51,6 +53,26 @@ pub struct Call {
     window: Vec<f32>,
     frames_out: u64,
     frames_in: u64,
+    /// Takes the loudspeaker back out of the microphone.
+    ///
+    /// # What it is aligned against, and what that costs
+    ///
+    /// The filter needs to know which played sample sat under which captured
+    /// one. Two devices with two clocks do not offer that, and this does not
+    /// have the timestamps that would settle it, so the two streams are matched
+    /// a frame at a time: whatever was queued for the loudspeaker this tick is
+    /// the reference for whatever the microphone produced this tick, and
+    /// silence stands in when nothing was played.
+    ///
+    /// A constant offset between them is exactly what an adaptive filter is
+    /// for: it finds the delay itself, which is why the filter covers 128 ms
+    /// rather than the few it would need if the alignment were exact. An offset
+    /// that *drifts*, because the two devices run at slightly different rates,
+    /// is a different matter and would need resampling against a common clock.
+    /// This is the part that needs a real microphone and a real room to judge,
+    /// and it has not had one.
+    echo: echo::EchoCanceller,
+
     /// Frames invented to cover ones that never arrived. What a call quality
     /// indicator should show beside the loss rate: it is the loss somebody
     /// actually heard smoothed over.
@@ -96,6 +118,7 @@ impl Call {
             frames_out: 0,
             frames_in: 0,
             frames_concealed: 0,
+            echo: echo::EchoCanceller::new(),
             dropped_samples: 0,
         })
     }
@@ -145,7 +168,23 @@ impl Call {
             let Some(more) = self.capture.take(FRAME) else {
                 return Ok(false);
             };
-            self.window.extend_from_slice(&more);
+            // Make up whatever the loudspeaker did not play.
+            //
+            // The reference is the audio queued for playback, added as it
+            // arrives. When the other end is quiet none arrives, and a
+            // canceller with less reference than microphone holds the
+            // microphone back waiting for audio that is never coming: the call
+            // would go silent in this direction whenever it went silent in the
+            // other. The shortfall is silence, because that is what the
+            // loudspeaker was doing. Only the shortfall: padding
+            // unconditionally would put twice as much reference as microphone
+            // through and align the filter against nothing.
+            let deficit = more.len().saturating_sub(self.echo.reference_available());
+            if deficit > 0 {
+                self.echo.played(&vec![0.0f32; deficit]);
+            }
+            let cleaned = self.echo.capture(&more);
+            self.window.extend_from_slice(&cleaned);
         }
 
         let frame = self
@@ -211,6 +250,7 @@ impl Call {
         let missing = inbound.skipped().min(MOST_CONCEALED_IN_A_ROW);
         for _ in 0..missing {
             let filled = self.decoder.conceal();
+            self.echo.played(&filled);
             self.playback.queue(&filled);
             self.frames_concealed += 1;
         }
@@ -219,6 +259,9 @@ impl Call {
             return;
         };
 
+        // The reference for the canceller: what the loudspeaker is about to
+        // play is what the microphone is about to hear.
+        self.echo.played(&audio);
         self.playback.queue(&audio);
         self.frames_in += 1;
     }
@@ -233,6 +276,13 @@ impl Call {
     /// Frames invented to cover ones that never arrived.
     pub fn frames_concealed(&self) -> u64 {
         self.frames_concealed
+    }
+
+    /// How much of the loudspeaker is being taken back out of the microphone,
+    /// in decibels. Zero means none of it: on a speakerphone that is the number
+    /// that decides whether the other end can bear the call.
+    pub fn echo_loss_db(&self) -> f32 {
+        self.echo.loss_db()
     }
 
     pub fn frames_received(&self) -> u64 {

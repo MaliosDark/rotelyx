@@ -766,7 +766,26 @@ wide margin the largest single task remaining in the project.
       long one is inaudible within about a tenth of a second. Concealment that
       keeps inventing sound for a dead connection is a machine talking to
       itself, so it fades and the call path stops after eight in a row
-- [ ] Acoustic echo cancellation
+- [x] **Acoustic echo cancellation.** A microphone in the same room as a
+      loudspeaker hears the loudspeaker, so the far end hears itself: the single
+      most unpleasant thing a telephone can do, and the reason the README told
+      people to use headphones. What reaches the microphone is not what was
+      played but what was played convolved with the room, so the room is
+      measured rather than subtracted: a partitioned frequency-domain adaptive
+      filter covering 128 ms, which is the buffering of two devices plus a small
+      room. **38.3 dB removed** on a synthetic path with an unknown delay and
+      four reflections.
+      Two things it took to get there, both written down where they happened.
+      Normalising each partition against its own power diverges: twenty four
+      partitions each take a full step, so it overshot every block and came out
+      *louder* than the microphone, measured at -26 dB, which is to say it was
+      adding echo. And without zeroing the half of each partition's impulse
+      response that the transform invents, it reached 19 dB rather than 38: the
+      filter spends its step size chasing circular wrap-around that is not part
+      of any room.
+      Adaptation freezes while both ends talk, with a test: a filter that keeps
+      learning through double talk learns to predict the near end and starts
+      subtracting *them*, which is how a canceller chews words
 - [ ] Congestion control and bandwidth estimation
 - [x] **Media keys derived from MLS exporters**, so a call is as end to end as
       a message. `rotelyx-media`: per sender frame encryption in the shape of

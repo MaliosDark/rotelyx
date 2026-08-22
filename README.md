@@ -107,8 +107,11 @@ have also listened to it, and what that found is written down in
 was a broken test: the rating scale was never shown to either listener, so there
 is no perceptual measurement of this codec yet, only the objective one.
 
-**There is no echo cancellation.** On a speakerphone you send the other person
-back to themselves. Use headphones.
+**Echo cancellation is new and has never met a real room.** It measures the path
+from your speaker to your microphone and subtracts what it predicts, which took
+38 dB off a synthetic room in tests. Whether it does that in your kitchen is a
+different question, and nobody has asked it yet: headphones are still the
+answer if the other person hears themselves.
 
 ## What the people running a server can see
 
