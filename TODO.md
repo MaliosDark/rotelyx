@@ -194,9 +194,20 @@ Everything needed for this is built.
       and the whole group state behind Argon2id at 64 MiB, because the obvious
       place to keep it there is local storage, which any script on the origin can
       read and which outlives the tab
-- [ ] **The native clients do not keep a conversation at all**, so there is
-      nothing at rest to encrypt and a restart loses it. That is a missing
-      feature rather than a missing lock, and the lock is what to build second
+- [x] **The lock exists, in the same format as the identity's.**
+      `sealed::seal_bytes` and `store::save_conversation` put arbitrary state
+      behind the same Argon2id and XChaCha20-Poly1305 the identity uses, owner
+      only on disk, with a test that the file does not contain the plaintext and
+      that a wrong passphrase gets nothing. The bytes are the participant rather
+      than a message: whoever holds them reads everything the current epochs can
+      read, so a sealed identity beside an unsealed conversation would make the
+      seal on the identity a decoration
+- [!] **Resuming a conversation in a native client needs a decision, not code.**
+      The storage is built and nothing calls it, because saving is the easy half:
+      to carry on, the two sides have to find each other again, and whether that
+      is `listen` reopening on the same invitation, a `resume` command, or the
+      mailbox is a product question. Saving state that nothing can reopen would
+      be a file that only ever grows a risk
 - [ ] A backup format that does not create a state rollback vector
 
 ### 4. Relay hardening

@@ -53,6 +53,8 @@ pub struct Paths {
     pub identity: PathBuf,
     pub invitations: PathBuf,
     pub blocks: PathBuf,
+    /// Where a conversation is kept between runs, sealed.
+    pub conversation: PathBuf,
 }
 
 impl Paths {
@@ -61,6 +63,7 @@ impl Paths {
         Self {
             invitations: identity.with_extension("invites"),
             blocks: identity.with_extension("blocks"),
+            conversation: identity.with_extension("conversation"),
             identity,
         }
     }
@@ -283,6 +286,71 @@ pub fn save_invitations(path: &Path, invitations: &[StoredInvitation]) -> Result
 ///
 /// Read, modify, write rather than a bare append, so that expired entries are
 /// pruned every time a new one is issued.
+/// Write a conversation down, sealed under the same passphrase as the identity.
+///
+/// # Why sealed and not merely a file
+///
+/// The bytes are the participant. Whoever holds them can read everything the
+/// group's current epochs can read, which is more than any single message. A
+/// sealed identity sitting next to an unsealed conversation would make the seal
+/// on the identity a decoration.
+///
+/// The caller decides what the bytes are: this layer does not know what an MLS
+/// group looks like and should not have to, so it takes something already
+/// serialised and gives it back unchanged.
+pub fn save_conversation(
+    path: &Path,
+    state: &[u8],
+    passphrase: &str,
+) -> Result<(), StoreError> {
+    let sealed = crate::sealed::seal_bytes(state, passphrase).map_err(|e| StoreError::Write {
+        path: path.to_path_buf(),
+        source: std::io::Error::other(e.to_string()),
+    })?;
+    std::fs::write(path, sealed).map_err(|source| StoreError::Write {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    // Owner only. A conversation on a shared machine is the participant, and
+    // anybody who can read it is in the group.
+    restrict(path).map_err(|source| StoreError::Write {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(())
+}
+
+/// Read a conversation back. `None` when there is no file, which is the
+/// ordinary case for a first run rather than an error.
+pub fn load_conversation(path: &Path, passphrase: &str) -> Result<Option<Vec<u8>>, StoreError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path).map_err(|source| StoreError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    crate::sealed::open_bytes(&bytes, passphrase)
+        .map(Some)
+        .map_err(|e| StoreError::Read {
+            path: path.to_path_buf(),
+            source: std::io::Error::other(e.to_string()),
+        })
+}
+
+/// Forget a conversation. Called when one ends, so what is left on the disk is
+/// what somebody is actually in.
+pub fn forget_conversation(path: &Path) -> Result<(), StoreError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(StoreError::Write {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 pub fn add_invitation(
     path: &Path,
     invitation: StoredInvitation,
@@ -295,6 +363,63 @@ pub fn add_invitation(
 
 #[cfg(test)]
 mod tests {
+
+    /// A conversation on the disk must be worth nothing without the passphrase.
+    ///
+    /// # Why this matters more than it looks
+    ///
+    /// The bytes are the participant, not a message: whoever holds them reads
+    /// everything the group's current epochs can read. A sealed identity beside
+    /// an unsealed conversation would make the seal on the identity a
+    /// decoration, so this asserts the file is sealed rather than merely
+    /// written, and that a wrong passphrase gets nothing.
+    #[test]
+    fn a_saved_conversation_is_sealed() {
+        let path = tmp("sealed-conversation");
+        let state = b"whatever an MLS group serialises to";
+
+        save_conversation(&path, state, "the right passphrase").expect("save");
+
+        let raw = std::fs::read(&path).expect("read");
+        assert!(
+            !raw.windows(state.len()).any(|w| w == state),
+            "the conversation was written in the clear"
+        );
+        assert!(
+            crate::sealed::is_sealed(&raw),
+            "the file is not in the sealed format"
+        );
+
+        assert_eq!(
+            load_conversation(&path, "the right passphrase").expect("load"),
+            Some(state.to_vec())
+        );
+        assert!(
+            load_conversation(&path, "a different passphrase").is_err(),
+            "a wrong passphrase opened it"
+        );
+    }
+
+    /// No file is an ordinary first run, not a failure.
+    #[test]
+    fn no_saved_conversation_is_not_an_error() {
+        let path = tmp("no-conversation");
+        assert_eq!(load_conversation(&path, "anything").expect("load"), None);
+
+        // And forgetting one that is not there is not a failure either: a
+        // conversation ends the same way whether or not it was ever saved.
+        forget_conversation(&path).expect("forget");
+    }
+
+    /// Forgetting must actually remove it.
+    #[test]
+    fn a_forgotten_conversation_is_gone() {
+        let path = tmp("forgotten-conversation");
+        save_conversation(&path, b"state", "phrase").expect("save");
+        forget_conversation(&path).expect("forget");
+        assert_eq!(load_conversation(&path, "phrase").expect("load"), None);
+    }
+
     use super::*;
     use crate::identity::Identity;
 

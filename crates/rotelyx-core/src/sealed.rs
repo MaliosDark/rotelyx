@@ -101,6 +101,19 @@ const MIN_LEN: usize = MAGIC.len() + 1 + SALT_LEN + NONCE_LEN + SECRET_LEN + 16;
 /// The header is authenticated as associated data, so an attacker cannot
 /// downgrade the version field or swap a salt without the tag failing.
 pub fn seal(identity: &Identity, passphrase: &str) -> Result<Vec<u8>, SealError> {
+    seal_bytes(&identity.to_storage_bytes()[..], passphrase)
+}
+
+/// Seal anything under a passphrase, in the same format.
+///
+/// # Why this is not only for identities
+///
+/// A conversation is worth as much as the identity that holds it: the MLS group
+/// state decrypts everything the current epochs can decrypt. Keeping it beside
+/// a sealed identity in the clear would make the seal on the identity a
+/// decoration. The format, the header and the derivation are the same, so
+/// somebody auditing one has audited both.
+pub fn seal_bytes(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, SealError> {
     let mut salt = [0u8; SALT_LEN];
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::fill(&mut salt).map_err(|_| SealError::Entropy)?;
@@ -115,13 +128,12 @@ pub fn seal(identity: &Identity, passphrase: &str) -> Result<Vec<u8>, SealError>
     header.extend_from_slice(&salt);
     header.extend_from_slice(&nonce);
 
-    let secret = identity.to_storage_bytes();
     let xnonce = XNonce::try_from(&nonce[..]).map_err(|_| SealError::Kdf)?;
     let ciphertext = cipher
         .encrypt(
             &xnonce,
             Payload {
-                msg: &secret[..],
+                msg: plaintext,
                 aad: &header,
             },
         )
@@ -139,6 +151,20 @@ pub fn seal(identity: &Identity, passphrase: &str) -> Result<Vec<u8>, SealError>
 /// was close, and there is nothing a legitimate user does differently in the
 /// two cases.
 pub fn open(bytes: &[u8], passphrase: &str) -> Result<Identity, SealError> {
+    let secret: [u8; SECRET_LEN] = open_bytes(bytes, passphrase)?
+        .try_into()
+        .map_err(|v: Vec<u8>| SealError::Truncated {
+            len: v.len(),
+            min: SECRET_LEN,
+        })?;
+    Ok(Identity::from_bytes(secret))
+}
+
+/// Open anything sealed by [`seal_bytes`].
+///
+/// A wrong passphrase and a modified file are the same error, for the reason
+/// given on [`open`].
+pub fn open_bytes(bytes: &[u8], passphrase: &str) -> Result<Vec<u8>, SealError> {
     if bytes.len() < MIN_LEN {
         return Err(SealError::Truncated {
             len: bytes.len(),
@@ -179,12 +205,7 @@ pub fn open(bytes: &[u8], passphrase: &str) -> Result<Identity, SealError> {
         )
         .map_err(|_| SealError::Unopenable)?;
 
-    let secret: [u8; SECRET_LEN] = plaintext
-        .as_slice()
-        .try_into()
-        .map_err(|_| SealError::Unopenable)?;
-
-    Ok(Identity::from_bytes(secret))
+    Ok(plaintext)
 }
 
 /// Whether a file looks like a sealed identity rather than a raw key.
