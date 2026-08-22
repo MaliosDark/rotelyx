@@ -359,6 +359,34 @@ be replayed onto another connection, and the relay refuses an address that is
 already somebody's connection or already answered elsewhere. Taking someone's
 address needs their invitation's secret key.
 
+### And a different name
+
+An address per invitation stops the network seeing one name shared by all of
+somebody's contacts. On its own it then hands that name straight to the
+contacts: the group handshake shows both sides a credential, and a client that
+puts its long-lived identity there shows the same value to everybody. Two people
+you invited could still compare what their screens say.
+
+So a conversation carries a name of its own, derived from the invitation secret
+both sides hold and nobody else does. It is stable for that conversation, so a
+peer sees one consistent value across reconnections, and unrelated between
+conversations. Measured with a real relay: the identity is `ef53e87e`, one
+contact is shown `a82d5b96`, another `e875cc93`.
+
+This is what SimpleX means by having no user identifiers, arrived at from the
+other side. SimpleX gives each contact a queue of its own; Rotelyx gives each
+invitation an address of its own and each conversation a name of its own.
+
+**It costs no authentication.** An MLS credential is a label the member chooses,
+and nothing ever proved it belonged to anybody. What authenticates is the safety
+number, which both sides contribute to and which is read out over a channel
+Rotelyx does not control.
+
+**What it costs is recognition.** Somebody who verified you in one conversation
+cannot recognise you in another, and cannot vouch for you to a third. The safety
+number verifies a relationship rather than a person. That is the trade, and it
+is the point rather than a side effect.
+
 A permission is for one address. Admission checks which address the call was
 answered at, and only the invitation answered there may admit it. Without that
 the separation would survive being looked at but not being tested: a holder who

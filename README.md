@@ -32,6 +32,10 @@ No accounts, no phone numbers, and no servers belonging to anybody else.
 A messenger where **your identity is a key, not an account.** No phone number,
 no email, no sign up, nothing published anywhere.
 
+And that key is never the name anybody sees. Each person you invite reaches a
+different address and is shown a different name, so two of your contacts cannot
+compare what they were given and find each other.
+
 When both people are online, messages go **straight between the two devices**
 and touch no server. When one is offline, the message waits in a mailbox that
 cannot read it and is never told who sent it: an envelope carries no sender, and

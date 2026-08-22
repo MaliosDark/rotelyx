@@ -1201,17 +1201,30 @@
     </p>
 
     <p>
-      The property obtained is unlinkability of an endpoint&rsquo;s
-      <em>addresses</em>: no two correspondents are given the same one, nothing on
-      the wire relates them, and no holder can test one it did not receive. That
-      is unlinkability with respect to a passive observer. It is <em>not</em>
-      unlinkability between the correspondents themselves. A client presents one
-      long-lived identity key to everybody, so two people invited by the same
-      host are shown the same identity once the group handshake completes, and
-      that identity is the value the clients display. Separating it would mean a
-      distinct identity per contact, in the manner of SimpleX, at the cost of a
-      safety number that verifies one relationship rather than one person; that
-      is a design decision and is recorded as open rather than claimed. Nor is it
+      The separation runs to the name as well as the address. A conversation
+      carries a name derived from the invitation secret both sides hold, so no
+      two correspondents are shown the same one after the group handshake
+      either, and neither is shown the long-lived identity. This is what SimpleX
+      means by having no user identifiers, and it is reached from the other
+      direction: SimpleX gives each contact its own queue, Rotelyx gives each
+      invitation its own address and each conversation its own name.
+    </p>
+
+    <p>
+      It costs nothing in authentication. An MLS credential is a label its holder
+      chooses and never proved anything about who it belonged to; what
+      authenticates is the safety number, to which both parties contribute and
+      which is compared out of band. What it costs is recognition: a party who
+      verified a correspondent in one conversation cannot recognise them in
+      another, and cannot vouch for them to a third. That is the trade, and it is
+      the intent rather than a side effect.
+    </p>
+
+    <p>
+      The property obtained is therefore unlinkability of an endpoint&rsquo;s
+      correspondents both to a passive observer and to each other: no two are
+      given the same address or the same name, nothing on the wire relates them,
+      and no holder can test an address it did not receive. It is <em>not</em>
       obtained with respect to the relay. All of an endpoint&rsquo;s addresses are answered on
       one relay connection, and the relay holds the table mapping them to it, so
       it can see that the parties reaching those addresses reach the same host.

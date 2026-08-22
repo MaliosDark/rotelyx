@@ -216,11 +216,15 @@ impl Engine {
         // The name this identity uses in this conversation, derived from the
         // invitation the caller actually used. Which one that is comes from the
         // address the call was answered at, which the caller does not choose.
+        // Derived from the address the call arrived at, which both sides always
+        // know. The invitation secret would work only when both have one, and
+        // an open host with live invitations answers at an invitation's address
+        // while a caller without a code has no secret to derive from.
         let shared = session
             .answered_at()
-            .and_then(|at| live.iter().find(|inv| inv.to_invitation().address() == at))
-            .map(|inv| inv.secret.to_vec())
-            .unwrap_or_else(|| self.identity.id().as_bytes().to_vec());
+            .unwrap_or_else(|| self.identity.id())
+            .as_bytes()
+            .to_vec();
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
@@ -251,7 +255,7 @@ impl Engine {
         let transport = RotelyxEndpoint::ephemeral_transport_key();
         let calling_as = rotelyx_core::RotelyxId::from(transport.public());
 
-        let (evidence, invitation_secret) = match invite.map(str::trim).filter(|s| !s.is_empty()) {
+        let (evidence, addr) = match invite.map(str::trim).filter(|s| !s.is_empty()) {
             Some(code) => {
                 let bytes = data_encoding::BASE64URL_NOPAD
                     .decode(code.as_bytes())
@@ -264,15 +268,26 @@ impl Engine {
                     .context("that is not an invitation code")?;
                 // Expiry belongs to the issuer; we only prove possession.
                 let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
+                // Call the address in the code, not one pasted beside it.
+                //
+                // Each invitation is answered at an address of its own, and a
+                // permission is for one address: a holder dialling some other
+                // address of the same host is refused. The id comes from the
+                // code and the network addresses from what was pasted, because
+                // one says which key to ask for and the other says where the
+                // machine is.
                 (
                     Admission::Invitation {
                         proof: invitation.prove(&calling_as, self.epoch),
                         epoch: self.epoch,
                     },
-                    Some(secret.to_vec()),
+                    rotelyx_net::EndpointAddr::from_parts(
+                        host.endpoint_id(),
+                        addr.addrs.iter().cloned(),
+                    ),
                 )
             }
-            None => (Admission::None, None),
+            None => (Admission::None, addr),
         };
         let dialled_id = addr.id;
 
@@ -289,10 +304,9 @@ impl Engine {
             .await
             .context("connecting")?;
 
-        // The same derivation the listening side makes, from the same secret.
-        let shared = invitation_secret
-            .clone()
-            .unwrap_or_else(|| dialled_id.as_bytes().to_vec());
+        // The same derivation the listening side makes, from the address this
+        // call was placed to.
+        let shared = dialled_id.as_bytes().to_vec();
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 

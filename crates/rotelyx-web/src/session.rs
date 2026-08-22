@@ -193,11 +193,14 @@ impl Driver {
         // Derived from the invitation the caller actually used, which comes from
         // the address the call was answered at rather than anything the caller
         // wrote.
+        // Derived from the address the call arrived at, which both sides always
+        // know, rather than from the invitation secret, which only both have
+        // when the caller arrived with a code.
         let shared = session
             .answered_at()
-            .and_then(|at| all.iter().find(|inv| inv.to_invitation().address() == at))
-            .map(|inv| inv.secret.to_vec())
-            .unwrap_or_else(|| self.identity.id().as_bytes().to_vec());
+            .unwrap_or_else(|| self.identity.id())
+            .as_bytes()
+            .to_vec();
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
@@ -225,7 +228,7 @@ impl Driver {
         let transport = RotelyxEndpoint::ephemeral_transport_key();
         let calling_as = rotelyx_core::RotelyxId::from(transport.public());
 
-        let (evidence, invitation_secret, addr) = match invite.map(str::trim).filter(|s| !s.is_empty()) {
+        let (evidence, _invitation_secret, addr) = match invite.map(str::trim).filter(|s| !s.is_empty()) {
             Some(code) => {
                 let bytes = data_encoding::BASE64URL_NOPAD
                     .decode(code.as_bytes())
@@ -275,10 +278,9 @@ impl Driver {
             .await
             .context("connecting")?;
 
-        // The same derivation the listening side makes, from the same secret.
-        let shared = invitation_secret
-            .clone()
-            .unwrap_or_else(|| dialled_id.as_bytes().to_vec());
+        // The same derivation the listening side makes, from the address this
+        // call was placed to.
+        let shared = dialled_id.as_bytes().to_vec();
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 

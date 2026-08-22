@@ -471,6 +471,25 @@ Everything needed for this is built.
       invitation is refused, which is the address binding working. The id now
       comes from the code and the network addresses from what was pasted: one
       says which key to ask for, the other says where the machine is
+- [x] **Nine hundred million fuzzing cases, nothing found.** Twenty five minutes
+      on each target, one at a time and with no build running beside them:
+      279,856,821 on the frame reader at 78 coverage points, 604,526,799 on the
+      envelope parser at 39, and 15,156,212 on MLS handling at 2,565 with a
+      corpus of 1,635. No crash, no hang, no artifact. The first two are small
+      parsers and their coverage did not move with a seeded corpus, which is the
+      honest reading: that is probably all of them
+- [x] **Both sides derive the conversation name from the address, not from the
+      invitation secret.** The secret is only shared when the caller arrived with
+      a code: an open host that holds live invitations answers at an invitation's
+      address, and a caller without one has no secret to derive from, so the two
+      would compute different names and read out safety numbers that cannot
+      match. That is a break that looks exactly like somebody in the middle. The
+      address is the thing both sides always know, and it does not need to be
+      secret, because what is hashed with it is the identity's own key. Verified
+      live on both paths: with invitations, and with an open host
+- [x] **The desktop dialled the address pasted beside a code rather than the one
+      inside it.** The same defect the web had, left behind when its code parsing
+      was fixed and its dialling was not
 - [ ] Watch the refusal counters in production. Limits chosen from reasoning
       rather than from traffic, and the first real load will say whether they
       are in the right place

@@ -73,16 +73,25 @@ hole-punch.
   is the single largest metadata exposure in the system and it is inherent to
   relayed transport. Mitigations: prefer direct paths and surface relay use in
   the UI; support self-hosted relays; rotate relay selection.
-- **What per-invitation addresses do and do not change here.** The identity key
-  never reaches the wire, and each invitation carries a transport key of its
-  own, so the relay never sees a long-lived name and no two people you invited
-  are given the same **address**. That defeats a **passive observer**.
-  It does **not** defeat **correspondents comparing notes**, which an earlier
-  draft of this line claimed: two people invited by the same identity are shown
-  the same identity once the group handshake completes, because a client
-  presents one long-lived key to everybody. The addresses differ, the identity
-  does not, and the identity is the value the clients print. See the open design
-  item in `TODO.md`. It does **not** defeat this adversary either: all of one
+- **What a name per contact does and does not change here.** The identity key
+  never reaches the wire; each invitation carries a transport key of its own, so
+  no two people you invited are given the same **address**; and each conversation
+  carries a **name** of its own, derived from the invitation secret both sides
+  hold, so no two of them are shown the same name inside the conversation
+  either. That defeats a **passive observer** and it defeats **correspondents
+  comparing notes**, which is the whole of what SimpleX means by having no user
+  identifiers.
+  A middle draft of this line said the opposite, and was right at the time: the
+  addresses differed and the identity did not, because a client put its
+  long-lived key in every MLS credential. Measured after the change, with a real
+  relay: the identity is `ef53e87e`, one contact is shown `a82d5b96` and another
+  `e875cc93`.
+  It costs no authentication. An MLS credential is a label the member chooses
+  and never proved anything about who it belonged to; what authenticates is the
+  safety number, which both sides contribute to and compare out of band. What it
+  costs is recognition: somebody who verified you in one conversation cannot
+  recognise you in another, and cannot vouch for you to anybody else.
+  It does **not** defeat this adversary: all of one
   endpoint's addresses are answered on a single relay connection, and the relay
   holds the table mapping them to it, so it can still see that the parties
   reaching those addresses are reaching the same host. Correspondent
@@ -311,14 +320,15 @@ No public security claim is made before all of these are met.
    the L3 envelope parser, and MLS message handling.
    *Harness built, gate not closed.* `fuzz/` holds a libFuzzer target for each
    of the three, run with `cargo +nightly fuzz run <target>`. Nothing found so
-   far: 15.5M cases against the frame reader, 30.7M against the envelope parser
-   with a seeded corpus, and 8.5M against MLS handling, which reached 2,563
-   coverage points and a corpus of 1,635. No crash, no hang.
-   The one artifact produced was a "slow unit" of 44 seconds, which ran in 78 ms
-   on its own: libFuzzer times by the clock on the wall, and the machine was
-   compiling at the time. Do not run these beside a build.
-   That is still a smoke run and not a campaign. Closing this gate wants sustained
-   runs and a place they happen without somebody remembering to start them.
+   far, over about nine hundred million cases: 279,856,821 against the frame
+   reader at 78 coverage points, 604,526,799 against the envelope parser at 39,
+   and 15,156,212 against MLS handling at 2,565 with a corpus of 1,635. No
+   crash, no hang, no artifact.
+   An earlier pass did produce one artifact, a "slow unit" of 44 seconds, which
+   ran in 78 ms on its own: libFuzzer times by the clock on the wall and the
+   machine was compiling. Do not run these beside a build.
+   Still not a closed gate. It wants somewhere these run without anybody
+   remembering to start them.
    The frame and envelope targets also assert that anything accepted re-encodes
    to the bytes it came from, so a second encoding of one value is a finding
    rather than something the fuzzer would pass over.

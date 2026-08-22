@@ -603,17 +603,23 @@ async fn main() -> Result<()> {
             // derived from it is stable here and unrelated to the name any other
             // contact sees. Which invitation that is comes from the address the
             // call was answered at, which the caller does not choose.
+            // Derived from the address the call arrived at, which both sides
+            // know and neither can be mistaken about.
+            //
+            // The invitation secret would do as well and only when both sides
+            // have one: an open host with live invitations answers at an
+            // invitation's address, and a caller arriving without a code has no
+            // secret to derive from, so the two would reach different names and
+            // read out safety numbers that cannot match. The address is the
+            // thing they always share.
+            //
+            // It is not secret from the relay, and does not need to be: what is
+            // hashed with it is this identity's own key, which nobody else has.
             let shared = session
                 .answered_at()
-                .and_then(|at| {
-                    live.iter()
-                        .find(|inv| inv.to_invitation().address() == at)
-                })
-                .map(|inv| inv.secret.to_vec())
-                // An identity listening under its own key has nothing to derive
-                // from and nothing to hide: the caller reached an address it
-                // could work out from the identity anyway.
-                .unwrap_or_else(|| identity.id().as_bytes().to_vec());
+                .unwrap_or_else(|| identity.id())
+                .as_bytes()
+                .to_vec();
             let my_name = identity.in_conversation(&shared);
             let me = Member::new(my_name.as_bytes()).context("creating member")?;
             let conversation = handshake::host(&mut session, &me).await?;
@@ -638,7 +644,7 @@ async fn main() -> Result<()> {
             // An invitation code carries where to call as well as permission to.
             // A bare address is still accepted, for a host running --open.
             let code = invite.as_deref().or(Some(addr.as_str()));
-            let (evidence, addr, invitation_secret) = match code {
+            let (evidence, addr, _invitation_secret) = match code {
                 Some(text) => {
                     let bytes = data_encoding::BASE64URL_NOPAD
                         .decode(text.trim().as_bytes())
@@ -699,13 +705,9 @@ async fn main() -> Result<()> {
                 .connect_with(addr, &evidence)
                 .await
                 .context("connecting")?;
-            // The same name derivation as the listening side, from the same
-            // secret: the invitation being used. Both ends must reach the same
-            // conclusion about what to derive from, or the safety numbers stop
-            // matching.
-            let shared = invitation_secret
-                .clone()
-                .unwrap_or_else(|| dialled_id.as_bytes().to_vec());
+            // The same derivation the listening side makes, from the address
+            // this call was placed to.
+            let shared = dialled_id.as_bytes().to_vec();
             let my_name = identity.in_conversation(&shared);
             let me = Member::new(my_name.as_bytes()).context("creating member")?;
             let conversation = handshake::join(&mut session, &me).await?;
