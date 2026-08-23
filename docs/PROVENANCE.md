@@ -42,3 +42,14 @@ replacement plan are in
 licence obligation and must not be removed.
 
 ---
+
+## The obligation that comes with the code
+
+Deriving from somebody else's work means their fixes stop arriving. `cargo
+update` will never change a line under `crates/net`, so a hole they close stays
+open here until a person reads what they did and ports it.
+
+[`docs/UPSTREAM.md`](UPSTREAM.md) is where that reading is recorded, and
+`scripts/watch-upstream` and `scripts/audit-dependencies` run weekly to say when
+more of it is due. Both are part of the licence's practical cost, not only its
+legal one.

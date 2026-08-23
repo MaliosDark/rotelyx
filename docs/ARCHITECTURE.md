@@ -293,23 +293,19 @@ contact. Cryptography does not fix it. Scarcity does.
   'primaryColor':'#1B222D','primaryTextColor':'#DFE5EE','primaryBorderColor':'#E8A33D',
   'lineColor':'#8B96A8','fontFamily':'ui-monospace, SFMono-Regular, Menlo, monospace'}}}%%
 flowchart TD
-    START["Someone dials your endpoint"] --> BLOCK{"On your<br/>blocklist?"}
-
-    BLOCK -->|"Yes"| DENY1["<b>Refused</b><br/>before any verification work"]
-    BLOCK -->|"No"| POLICY{"Your reachability<br/>policy"}
+    START["Someone dials your endpoint"] --> POLICY{"Your reachability<br/>policy"}
 
     POLICY -->|"InvitationOnly<br/><i>default</i>"| INV{"Holds a live<br/>invitation?"}
     POLICY -->|"ProofOfWork"| POW{"Paid the work?"}
     POLICY -->|"Open"| ALLOW
 
     INV -->|"Yes"| ALLOW["<b>Session opens</b><br/>MLS handshake begins"]
-    INV -->|"No"| DENY2["<b>Refused</b><br/>caller learns only that<br/>the connection closed"]
+    INV -->|"No, or withdrawn"| DENY2["<b>Refused</b><br/>caller learns only that<br/>the connection closed"]
 
     POW -->|"Bound to both identities<br/>and to the hour"| ALLOW
     POW -->|"Wrong target, wrong sender,<br/>stale, or insufficient"| DENY2
 
     style ALLOW fill:#122A26,stroke:#4FB39A,color:#4FB39A
-    style DENY1 fill:#2F1B20,stroke:#E0808C,color:#E0808C
     style DENY2 fill:#2F1B20,stroke:#E0808C,color:#E0808C
     style START fill:#33280F,stroke:#E8A33D,color:#E8A33D
 ```

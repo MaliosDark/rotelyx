@@ -93,3 +93,17 @@ not a fix, and it means editing a vendored tree that upstream patches still have
 to apply to. The cost of keeping them is that they are 763 lines nobody has
 reviewed. That is the trade, written down so the next person can take it again
 rather than rediscover it.
+
+## Keeping up with upstream
+
+Owning this code means upstream's fixes stop arriving. `scripts/watch-upstream`
+compares each crate here against the project it was taken from and against the
+security advisories filed for that code, weekly, in CI. `docs/UPSTREAM.md`
+records what was found and what was ported.
+
+Read that file before trusting the version numbers in the table above. Every
+crate here is level with the newest release its upstream has published, and that
+was still not enough: the QUIC crates come from a fork of quinn that is itself
+behind quinn, under version numbers that cannot be compared with it. The first
+run of the watch found a remote memory-exhaustion bug that had been fixed
+upstream two months earlier.

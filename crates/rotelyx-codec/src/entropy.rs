@@ -209,6 +209,7 @@ impl<'a> RangeDecoder<'a> {
 ///
 /// Counts start at one so nothing is impossible, which matters: a symbol the
 /// model has never seen must still be codeable, and a zero frequency cannot be.
+#[derive(Clone)]
 pub struct Model {
     counts: Vec<u32>,
     total: u32,

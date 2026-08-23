@@ -93,8 +93,21 @@ fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>
     Ok(key)
 }
 
-/// The minimum length of a well formed sealed file.
+/// The minimum length of a well formed sealed **identity**.
+///
+/// An identity's plaintext is exactly `SECRET_LEN`, so anything shorter than
+/// this cannot be one whatever else it is.
 const MIN_LEN: usize = MAGIC.len() + 1 + SALT_LEN + NONCE_LEN + SECRET_LEN + 16;
+
+/// The minimum length of a well formed sealed anything.
+///
+/// Header and tag, with no assumption about the plaintext, because
+/// [`seal_bytes`] takes any. Using `MIN_LEN` here was a real defect and not a
+/// conservative bound: it counts a 32 byte identity that arbitrary state does
+/// not have, so sealing anything shorter produced a file this function refused
+/// to open. Found by sealing twelve bytes and getting them back as
+/// `Truncated { len: 77, min: 97 }`.
+const MIN_BYTES_LEN: usize = MAGIC.len() + 1 + SALT_LEN + NONCE_LEN + 16;
 
 /// Seal an identity under a passphrase.
 ///
@@ -165,10 +178,10 @@ pub fn open(bytes: &[u8], passphrase: &str) -> Result<Identity, SealError> {
 /// A wrong passphrase and a modified file are the same error, for the reason
 /// given on [`open`].
 pub fn open_bytes(bytes: &[u8], passphrase: &str) -> Result<Vec<u8>, SealError> {
-    if bytes.len() < MIN_LEN {
+    if bytes.len() < MIN_BYTES_LEN {
         return Err(SealError::Truncated {
             len: bytes.len(),
-            min: MIN_LEN,
+            min: MIN_BYTES_LEN,
         });
     }
     if &bytes[..MAGIC.len()] != MAGIC {
@@ -220,6 +233,25 @@ pub fn is_sealed(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sealing something shorter than an identity and getting it back.
+    ///
+    /// `open_bytes` used to reject its own output here. Its minimum length
+    /// counted a 32 byte identity secret, which arbitrary state does not have,
+    /// so anything under that came back as `Truncated { len: 77, min: 97 }`.
+    /// Found by a backup format sealing twelve bytes.
+    #[test]
+    fn a_payload_shorter_than_an_identity_still_opens() {
+        for len in [0usize, 1, 12, 31, 32, 33] {
+            let plaintext = vec![0xABu8; len];
+            let sealed = seal_bytes(&plaintext, "a passphrase").expect("seal");
+            assert_eq!(
+                open_bytes(&sealed, "a passphrase").expect("open"),
+                plaintext,
+                "a {len} byte payload did not survive the round trip"
+            );
+        }
+    }
 
     #[test]
     fn seal_and_open_roundtrip() {

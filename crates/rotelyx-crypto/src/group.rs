@@ -73,6 +73,18 @@ pub enum GroupError {
     #[error("expected a {expected} message, got something else")]
     UnexpectedMessage { expected: &'static str },
 
+    #[error("no member of this conversation holds that signature key")]
+    NoSuchMember,
+
+    #[error("a person's identity is {len} bytes, and a credential carries at most 255")]
+    PersonTooLong { len: usize },
+
+    #[error(
+        "a member cannot remove itself: the commit would be encrypted under a \
+         key schedule it has just left, so nobody would be able to read it"
+    )]
+    CannotRemoveSelf,
+
     #[error("message was not an application message")]
     NotApplication,
 
@@ -118,12 +130,47 @@ impl Member {
     /// public key bytes, not a name: there is no name registry to consult, and
     /// a self-asserted display name in a credential is a phishing surface.
     pub fn new(identity: &[u8]) -> Result<Self, GroupError> {
+        Self::for_device(identity, b"")
+    }
+
+    /// Create a participant that is one **device** belonging to one person.
+    ///
+    /// # Why a device is its own leaf
+    ///
+    /// The alternative is for a person's devices to share one key, which is
+    /// simpler and wrong in the way that matters: a shared key cannot be taken
+    /// away from one device without being taken away from all of them, so losing
+    /// a phone means re-establishing every conversation on every device. Worse,
+    /// nothing in the group can tell which device sent a message, so a stolen
+    /// phone is indistinguishable from its owner for as long as nobody notices.
+    ///
+    /// Separate leaves make a device a member: it has its own signing key, it
+    /// appears in the roster, and it can be removed with [`Conversation::remove`]
+    /// while the person stays. That removal is a commit, so every partner sees
+    /// it happen.
+    ///
+    /// # What the credential carries
+    ///
+    /// `person` and `device`, length-prefixed so they can be told apart again.
+    /// The person is what a partner has verified with a safety number, and the
+    /// device is what distinguishes two leaves of that person. Neither is a
+    /// display name: there is no registry to consult and a self-asserted name in
+    /// a credential is a phishing surface. In Rotelyx the person is the
+    /// per-conversation name derived in `rotelyx-core`.
+    ///
+    /// **This does not by itself prove the two leaves are the same person.** A
+    /// credential says what its holder chose to say. What makes it meaningful is
+    /// who committed the Add: a device joins because a device already in the
+    /// group added it, so the claim is only as good as the member that vouched.
+    /// A partner's interface should say "a device was added by Ana" rather than
+    /// "Ana added a device", because the first is what the group actually knows.
+    pub fn for_device(person: &[u8], device: &[u8]) -> Result<Self, GroupError> {
         let provider = OpenMlsRustCrypto::default();
         let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(mls)?;
         signer.store(provider.storage()).map_err(mls)?;
 
         let credential = CredentialWithKey {
-            credential: BasicCredential::new(identity.to_vec()).into(),
+            credential: BasicCredential::new(encode_identity(person, device)?).into(),
             signature_key: signer.public().into(),
         };
 
@@ -311,8 +358,87 @@ impl std::fmt::Debug for MemberState {
 /// authenticates and what a safety number covers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Participant {
+    /// Who this leaf claims to belong to.
+    ///
+    /// Parsed out of the credential, so it keeps meaning the same thing it did
+    /// before devices existed and every caller comparing it against a name still
+    /// works. When `well_formed` is false this is the raw credential instead.
     pub identity: Vec<u8>,
+
+    /// Which device of that person this leaf is.
+    ///
+    /// Empty for a person who has only ever had one, which is what
+    /// [`Member::new`] produces.
+    pub device: Vec<u8>,
+
     pub signature_key: Vec<u8>,
+
+    /// Whether the credential was in Rotelyx's shape.
+    ///
+    /// A credential from another implementation is not split at a plausible
+    /// place and called a person: it is reported as what it is, so a caller can
+    /// tell "somebody else's member" from "a person with no device id" rather
+    /// than being handed a guess.
+    pub well_formed: bool,
+}
+
+/// The largest `person` a credential can carry, so the one byte length prefix
+/// is enough and a longer one is refused rather than silently truncated.
+const MAX_PERSON_LEN: usize = 255;
+
+/// `person_len ‖ person ‖ device`.
+///
+/// One byte for the length rather than a delimiter, because a person's bytes are
+/// a hash and can contain anything a delimiter could be.
+fn encode_identity(person: &[u8], device: &[u8]) -> Result<Vec<u8>, GroupError> {
+    if person.len() > MAX_PERSON_LEN {
+        return Err(GroupError::PersonTooLong { len: person.len() });
+    }
+    let mut out = Vec::with_capacity(1 + person.len() + device.len());
+    out.push(person.len() as u8);
+    out.extend_from_slice(person);
+    out.extend_from_slice(device);
+    Ok(out)
+}
+
+/// Split a credential into the person and the device it names.
+fn decode_identity(credential: &[u8]) -> Option<(&[u8], &[u8])> {
+    let (len, rest) = credential.split_first()?;
+    let len = *len as usize;
+    if rest.len() < len {
+        return None;
+    }
+    Some(rest.split_at(len))
+}
+
+impl Participant {
+    fn from_credential(credential: &[u8], signature_key: Vec<u8>) -> Self {
+        match decode_identity(credential) {
+            Some((person, device)) => Self {
+                identity: person.to_vec(),
+                device: device.to_vec(),
+                signature_key,
+                well_formed: true,
+            },
+            None => Self {
+                identity: credential.to_vec(),
+                device: Vec::new(),
+                signature_key,
+                well_formed: false,
+            },
+        }
+    }
+
+    /// Whether two leaves claim the same person.
+    ///
+    /// A claim, not a proof. See [`Member::for_device`]: what makes it worth
+    /// anything is which member committed the Add. Two credentials nobody could
+    /// parse are never the same person, however identical their bytes: saying
+    /// yes there would be answering a question about people using a value that
+    /// is not known to name one.
+    pub fn same_person_as(&self, other: &Participant) -> bool {
+        self.well_formed && other.well_formed && self.identity == other.identity
+    }
 }
 
 /// Who joined or left, when a commit changed the membership.
@@ -560,9 +686,11 @@ impl Conversation {
     pub fn roster(&self) -> Vec<Participant> {
         self.group
             .members()
-            .map(|m| Participant {
-                identity: m.credential.serialized_content().to_vec(),
-                signature_key: m.signature_key.as_slice().to_vec(),
+            .map(|m| {
+                Participant::from_credential(
+                    m.credential.serialized_content(),
+                    m.signature_key.as_slice().to_vec(),
+                )
             })
             .collect()
     }
@@ -591,6 +719,55 @@ impl Conversation {
             commit.tls_serialize_detached().map_err(codec)?,
             welcome.tls_serialize_detached().map_err(codec)?,
         ))
+    }
+
+    /// Remove a member, returning the commit to broadcast.
+    ///
+    /// # Why this is what device revocation is
+    ///
+    /// A device that is lost is a leaf that can still decrypt. Nothing about
+    /// forgetting it locally changes that: the group's key schedule includes it
+    /// until the group says otherwise, so revocation has to be a commit, and a
+    /// commit is exactly what every other member processes.
+    ///
+    /// That is what makes it visible rather than a local setting. Everybody who
+    /// applies this commit moves to a new epoch derived without that leaf, sees
+    /// the removal in [`MembershipChange::removed`], and can say so to the person
+    /// reading. A revocation nobody else notices is a revocation the removed
+    /// device does not have to respect.
+    ///
+    /// The removed device keeps everything it could already read. Forward
+    /// secrecy is about what comes next, and what comes next is encrypted under
+    /// a key schedule it is no longer part of.
+    ///
+    /// `signature_key` rather than a leaf index, because an index is a position
+    /// in a tree that shifts as members come and go, and a caller holding one
+    /// across a single epoch boundary would remove somebody else.
+    pub fn remove(
+        &mut self,
+        remover: &Member,
+        signature_key: &[u8],
+    ) -> Result<Vec<u8>, GroupError> {
+        let target = self
+            .group
+            .members()
+            .find(|m| m.signature_key.as_slice() == signature_key)
+            .ok_or(GroupError::NoSuchMember)?;
+
+        if target.signature_key.as_slice() == remover.signer.public() {
+            return Err(GroupError::CannotRemoveSelf);
+        }
+
+        let (commit, _welcome, _group_info) = self
+            .group
+            .remove_members(&remover.provider, &remover.signer, &[target.index])
+            .map_err(mls)?;
+
+        self.group
+            .merge_pending_commit(&remover.provider)
+            .map_err(mls)?;
+
+        commit.tls_serialize_detached().map_err(codec)
     }
 
     /// The public ratchet tree, needed out of band by a joining member.
@@ -803,14 +980,21 @@ impl Conversation {
                     .map_err(mls)?;
                 let after = self.roster();
 
+                // Compared on the signature key, which is what MLS authenticates
+                // and what names a leaf. It used to compare the credential
+                // identity, and that was wrong twice over: the identity is
+                // self-asserted, so two members claiming the same one would hide
+                // a real change, and once a person's devices became separate
+                // leaves sharing a person, adding a second device looked like
+                // nothing happening at all.
                 let added: Vec<Participant> = after
                     .iter()
-                    .filter(|p| !before.iter().any(|q| q.identity == p.identity))
+                    .filter(|p| !before.iter().any(|q| q.signature_key == p.signature_key))
                     .cloned()
                     .collect();
                 let removed: Vec<Participant> = before
                     .iter()
-                    .filter(|p| !after.iter().any(|q| q.identity == p.identity))
+                    .filter(|p| !after.iter().any(|q| q.signature_key == p.signature_key))
                     .cloned()
                     .collect();
 
@@ -1150,6 +1334,121 @@ mod tests {
     /// impossible: every member processes the commit. That guarantee is only
     /// worth something if it reaches a person, and this layer used to hand the
     /// client the same value for an addition, a rekey and a message it did not
+    /// A device is a member, so revoking one is a commit everybody processes.
+    #[test]
+    fn revoking_a_device_is_visible_to_everybody_else() {
+        let alice_phone = Member::for_device(b"alice", b"phone").expect("phone");
+        let alice_laptop = Member::for_device(b"alice", b"laptop").expect("laptop");
+        let bob = Member::new(b"bob").expect("bob");
+
+        let mut phone = Conversation::create(&alice_phone).expect("create");
+        let (commit, welcome) = phone
+            .invite(&alice_phone, bob.key_package().expect("kp").key_package())
+            .expect("invite bob");
+        let _ = commit;
+        let mut bobs =
+            Conversation::join(&bob, &welcome, &phone.ratchet_tree().expect("tree"))
+                .expect("bob joins");
+
+        // Alice adds her laptop as its own leaf.
+        let (commit, _welcome) = phone
+            .invite(&alice_phone, alice_laptop.key_package().expect("kp").key_package())
+            .expect("add the laptop");
+        let outcome = bobs.receive(&bob, &commit).expect("bob sees the add");
+        let change = outcome.membership_change().expect("bob was not told");
+        assert_eq!(change.added.len(), 1);
+        assert_eq!(change.added[0].identity, b"alice");
+        assert_eq!(change.added[0].device, b"laptop");
+        assert_eq!(bobs.member_count(), 3);
+
+        // Two leaves, one person, and Bob can tell.
+        let roster = bobs.roster();
+        let alices: Vec<&Participant> = roster
+            .iter()
+            .filter(|p| p.identity == b"alice")
+            .collect();
+        assert_eq!(alices.len(), 2, "the two devices did not read as one person");
+        assert!(alices[0].same_person_as(alices[1]));
+        assert_ne!(
+            alices[0].signature_key, alices[1].signature_key,
+            "separate leaves must not share a key, which is the whole point"
+        );
+
+        // The laptop is lost. The phone revokes it.
+        let laptop_key = alices
+            .iter()
+            .find(|p| p.device == b"laptop")
+            .expect("the laptop is in the roster")
+            .signature_key
+            .clone();
+
+        let commit = phone
+            .remove(&alice_phone, &laptop_key)
+            .expect("revoke the laptop");
+
+        let outcome = bobs.receive(&bob, &commit).expect("bob sees the removal");
+        let change = outcome
+            .membership_change()
+            .expect("bob was not told a device was revoked");
+        assert_eq!(change.added.len(), 0);
+        assert_eq!(change.removed.len(), 1, "the wrong number of departures");
+        assert_eq!(change.removed[0].identity, b"alice");
+        assert_eq!(
+            change.removed[0].device, b"laptop",
+            "the revocation did not say which device"
+        );
+        assert_eq!(bobs.member_count(), 2);
+
+        // And Alice's phone is still Alice: revoking a device is not leaving.
+        assert!(bobs.roster().iter().any(|p| p.identity == b"alice"));
+    }
+
+    #[test]
+    fn a_member_cannot_remove_itself() {
+        let alice = Member::new(b"alice").expect("alice");
+        let bob = Member::new(b"bob").expect("bob");
+        let mut group = Conversation::create(&alice).expect("create");
+        group
+            .invite(&alice, bob.key_package().expect("kp").key_package())
+            .expect("invite");
+
+        let me: Vec<u8> = alice.signer.public().to_vec();
+        assert!(matches!(
+            group.remove(&alice, &me),
+            Err(GroupError::CannotRemoveSelf)
+        ));
+    }
+
+    #[test]
+    fn removing_somebody_who_is_not_there_says_so() {
+        let alice = Member::new(b"alice").expect("alice");
+        let stranger = Member::new(b"stranger").expect("stranger");
+        let mut group = Conversation::create(&alice).expect("create");
+
+        let key: Vec<u8> = stranger.signer.public().to_vec();
+        assert!(matches!(
+            group.remove(&alice, &key),
+            Err(GroupError::NoSuchMember)
+        ));
+    }
+
+    /// A credential from somewhere else is reported as unparseable rather than
+    /// split at a plausible place and called a person.
+    #[test]
+    fn a_credential_that_is_not_ours_is_not_guessed_at() {
+        let foreign = Participant::from_credential(&[], vec![1, 2, 3]);
+        assert!(!foreign.well_formed);
+        assert!(foreign.device.is_empty());
+
+        // A length that runs off the end is not a person either.
+        let truncated = Participant::from_credential(&[200, 1, 2], vec![4]);
+        assert!(!truncated.well_formed);
+        assert_eq!(truncated.identity, vec![200, 1, 2]);
+
+        // And two of them are never "the same person".
+        assert!(!foreign.same_person_as(&Participant::from_credential(&[], vec![9])));
+    }
+
     /// recognise. The clients could report a count and nothing else, and one
     /// commit can remove a member and add another, which leaves the count where
     /// it was.

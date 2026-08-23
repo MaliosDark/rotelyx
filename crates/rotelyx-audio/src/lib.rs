@@ -276,18 +276,11 @@ impl Call {
             self.window.extend_from_slice(&quieter);
         }
 
-        let frame = self
-            .encoder
-            .encode(&self.window[..WINDOW])
-            .context("encoding")?;
-
-        // Half the window is the next window's history.
-        self.window.drain(..FRAME);
-
-        // What the network will carry, which the transport reports rather than
-        // this guessing. A frame trimmed to the budget still decodes; it just
-        // decodes rougher.
-        // What the link will carry, and what the path will bear.
+        // What the link will carry, and what the path will bear. Both are
+        // decided *before* encoding now, because the encoder needs them: a band
+        // is rebuilt as its level times its shape, and how many layers survive
+        // decides the shape, so a frame trimmed after the fact carries levels
+        // chosen for stages nobody receives.
         //
         // The first is a hard limit: a datagram larger than the path allows is
         // not sent at all. The second is a choice, taken from the loss and the
@@ -301,9 +294,18 @@ impl Call {
             .out
             .payload_budget(conn.max_datagram_size().unwrap_or(1200))
             .min(allowed);
+
+        let frame = self
+            .encoder
+            .encode_within(&self.window[..WINDOW], budget)
+            .context("encoding")?;
+
+        // Half the window is the next window's history.
+        self.window.drain(..FRAME);
+
         let datagram = self
             .out
-            .frame(&frame.within(budget).to_bytes())
+            .frame(&frame.to_bytes())
             .context("protecting the frame")?;
 
         // Dropped rather than queued when the connection is congested. A late

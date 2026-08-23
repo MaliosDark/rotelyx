@@ -27,6 +27,10 @@ const CLASSIFIED: &[(&str, &str)] = &[
         "an arriving contact proof, and an invitation secret against the revoked list",
     ),
     (
+        "crates/rotelyx-core/src/store.rs",
+        "an invitation secret against the ones this device issued, when revoking",
+    ),
+    (
         "crates/rotelyx-crypto/src/hybrid.rs",
         "two post-quantum shared secrets",
     ),

@@ -5,7 +5,6 @@
 //! ```text
 //!   alice.key       sealed identity, see the `sealed` module
 //!   alice.invites   invitations this identity has issued
-//!   alice.blocks    identities this device refuses
 //! ```
 //!
 //! The blocklist is a file rather than memory for a reason that is easy to miss:
@@ -13,15 +12,15 @@
 //! blocked reaches you again the next time the app starts, and nothing tells
 //! you it happened.
 //!
-//! Invitations and blocks are stored in the clear. Both are already known to
+//! Invitations are stored in the clear. They are already known to
 //! the parties they concern, and neither can be used to read a message. The
 //! identity key is the only thing here worth sealing, and it is sealed.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use subtle::ConstantTimeEq;
+
 use crate::access::Invitation;
-use crate::identity::RotelyxId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -52,7 +51,6 @@ pub enum StoreError {
 pub struct Paths {
     pub identity: PathBuf,
     pub invitations: PathBuf,
-    pub blocks: PathBuf,
     /// Where a conversation is kept between runs, sealed.
     pub conversation: PathBuf,
 }
@@ -62,7 +60,6 @@ impl Paths {
         let identity = identity.as_ref().to_path_buf();
         Self {
             invitations: identity.with_extension("invites"),
-            blocks: identity.with_extension("blocks"),
             conversation: identity.with_extension("conversation"),
             identity,
         }
@@ -82,7 +79,7 @@ fn restrict(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn write_restricted(path: &Path, contents: &str) -> Result<(), StoreError> {
+pub(crate) fn write_restricted(path: &Path, contents: &str) -> Result<(), StoreError> {
     std::fs::write(path, contents).map_err(|source| StoreError::Write {
         path: path.to_path_buf(),
         source,
@@ -91,86 +88,6 @@ fn write_restricted(path: &Path, contents: &str) -> Result<(), StoreError> {
         path: path.to_path_buf(),
         source,
     })
-}
-
-// ---------------------------------------------------------------------------
-// Blocklist
-// ---------------------------------------------------------------------------
-
-/// Identities this device refuses, persisted across restarts.
-#[derive(Debug, Default, Clone)]
-pub struct Blocklist {
-    entries: HashSet<RotelyxId>,
-}
-
-impl Blocklist {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Load a blocklist. A missing file is an empty list, not an error: a
-    /// device that has blocked nobody has nothing to load.
-    pub fn load(path: &Path) -> Result<Self, StoreError> {
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let text = std::fs::read_to_string(path).map_err(|source| StoreError::Read {
-            path: path.to_path_buf(),
-            source,
-        })?;
-
-        let mut entries = HashSet::new();
-        for (n, line) in text.lines().enumerate() {
-            let line = line.split('#').next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
-            }
-            let id: RotelyxId = line.parse().map_err(|_| StoreError::Malformed {
-                path: path.to_path_buf(),
-                line: n + 1,
-                reason: "not an identity".into(),
-            })?;
-            entries.insert(id);
-        }
-        Ok(Self { entries })
-    }
-
-    pub fn save(&self, path: &Path) -> Result<(), StoreError> {
-        let mut out = String::from("# Rotelyx blocklist. One identity per line.\n");
-        // Sorted so the file does not churn between saves, which makes it
-        // reviewable in a diff and in version control.
-        let mut ids: Vec<_> = self.entries.iter().map(ToString::to_string).collect();
-        ids.sort();
-        for id in ids {
-            out.push_str(&id);
-            out.push('\n');
-        }
-        write_restricted(path, &out)
-    }
-
-    pub fn insert(&mut self, id: RotelyxId) -> bool {
-        self.entries.insert(id)
-    }
-
-    pub fn remove(&mut self, id: &RotelyxId) -> bool {
-        self.entries.remove(id)
-    }
-
-    pub fn contains(&self, id: &RotelyxId) -> bool {
-        self.entries.contains(id)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &RotelyxId> {
-        self.entries.iter()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +278,41 @@ pub fn add_invitation(
     save_invitations(path, &all)
 }
 
+/// Retire one issued invitation, by the secret inside its code.
+///
+/// # Why this is what blocking means here
+///
+/// There is no identity to ban. A caller presents a per-invitation transport
+/// key, and the name anybody sees is derived per conversation, so a blocklist of
+/// identities is a list of values that never arrive. What does arrive is an
+/// invitation, and an invitation is a thing this side issued and can withdraw.
+///
+/// So "block this person" is "withdraw the way they get in". It is verified
+/// against a secret this side holds rather than against something the caller
+/// chose to say about itself, which is why it works where the blocklist did not.
+///
+/// It stops the next connection, not the current one: a session already open
+/// stays open until it closes. Callers should say so rather than implying a
+/// hang-up.
+pub fn revoke_invitation(
+    path: &Path,
+    secret: &[u8; 32],
+    now_epoch: u64,
+) -> Result<bool, StoreError> {
+    let all = load_invitations(path, now_epoch)?;
+    let before = all.len();
+    let kept: Vec<StoredInvitation> = all
+        .into_iter()
+        .filter(|inv| !bool::from(inv.secret.ct_eq(secret)))
+        .collect();
+
+    if kept.len() == before {
+        return Ok(false);
+    }
+    save_invitations(path, &kept)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -434,77 +386,6 @@ mod tests {
         p
     }
 
-    // --- blocklist ---
-
-    /// The property this file exists for.
-    #[test]
-    fn a_block_survives_a_restart() {
-        let path = tmp("blocks-survive");
-        let blocked = Identity::generate().id();
-
-        let mut list = Blocklist::new();
-        list.insert(blocked);
-        list.save(&path).expect("save");
-
-        // A fresh process would do exactly this.
-        let reloaded = Blocklist::load(&path).expect("load");
-        assert!(reloaded.contains(&blocked));
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn unblocking_persists_too() {
-        let path = tmp("blocks-unblock");
-        let blocked = Identity::generate().id();
-
-        let mut list = Blocklist::new();
-        list.insert(blocked);
-        list.save(&path).expect("save");
-
-        let mut list = Blocklist::load(&path).expect("load");
-        assert!(list.remove(&blocked));
-        list.save(&path).expect("save");
-
-        assert!(!Blocklist::load(&path).expect("load").contains(&blocked));
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn a_missing_blocklist_is_empty_rather_than_an_error() {
-        let path = tmp("blocks-missing");
-        assert!(Blocklist::load(&path).expect("load").is_empty());
-    }
-
-    #[test]
-    fn a_malformed_blocklist_line_names_the_line() {
-        let path = tmp("blocks-bad");
-        std::fs::write(&path, "# ok\nnot-an-identity\n").expect("write");
-
-        match Blocklist::load(&path) {
-            Err(StoreError::Malformed { line, .. }) => assert_eq!(line, 2),
-            other => panic!("expected a malformed error, got {other:?}"),
-        }
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn the_blocklist_file_does_not_churn_between_saves() {
-        let path = tmp("blocks-stable");
-        let mut list = Blocklist::new();
-        for _ in 0..8 {
-            list.insert(Identity::generate().id());
-        }
-
-        list.save(&path).expect("save");
-        let first = std::fs::read_to_string(&path).expect("read");
-        Blocklist::load(&path).expect("load").save(&path).expect("save");
-        let second = std::fs::read_to_string(&path).expect("read");
-
-        assert_eq!(first, second, "a reload and resave changed the file");
-        let _ = std::fs::remove_file(&path);
-    }
-
     // --- invitations ---
 
     #[test]
@@ -569,18 +450,17 @@ mod tests {
     fn paths_are_derived_from_the_identity_file() {
         let p = Paths::from_identity("/tmp/alice.key");
         assert!(p.invitations.ends_with("alice.invites"));
-        assert!(p.blocks.ends_with("alice.blocks"));
     }
 
     #[cfg(unix)]
     #[test]
     fn saved_files_are_owner_only() {
         use std::os::unix::fs::PermissionsExt;
-        let path = tmp("blocks-perms");
-        Blocklist::new().save(&path).expect("save");
+        let path = tmp("perms");
+        save_invitations(&path, &[]).expect("save");
 
         let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "blocklist is readable by others");
+        assert_eq!(mode & 0o777, 0o600, "an invitation file is readable by others");
         let _ = std::fs::remove_file(&path);
     }
 }

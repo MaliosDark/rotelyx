@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+#
+# Check every dependency in Cargo.lock against the RustSec advisory database.
+#
+#   scripts/audit-dependencies
+#
+# # Why this exists next to scripts/watch-upstream
+#
+# The watch covers the 124,000 vendored lines under `crates/net`, where fixes
+# never arrive on their own. This covers the other 700-odd packages, where fixes
+# do arrive on their own and still only when somebody runs `cargo update`, having
+# first been given a reason to.
+#
+# Both halves have to be checked, because the answer to "are we exposed" is not
+# in either one alone. The vendored watch found a live remote memory-exhaustion
+# bug on its first run. Nothing had ever looked at the registry side at all.
+#
+# # Why it does not shell out to cargo-audit
+#
+# cargo-audit does this job well. It also means installing a tool that reads the
+# lock file and reaches the network, into every place this has to run, and this
+# project's habit is to own the checks it depends on. The whole database is one
+# shallow clone of a public git repository and the matching is a version
+# comparison. That is small enough to keep.
+#
+# # What it can and cannot decide
+#
+# It decides "is this version inside a patched or unaffected range", which is
+# exactly what the advisory states and no more. It does not know whether the
+# vulnerable function is reachable from Rotelyx, and an advisory that lists
+# affected functions is still reported in full, because deciding reachability is
+# reading, not matching.
+#
+# Advisories marked informational (unmaintained, unsound, a notice) are listed
+# apart from vulnerabilities. They are not nothing, but they are not the same
+# thing and mixing them is how a report stops being read.
+#
+# Anything reported has to be assessed and the verdict written into
+# `docs/UPSTREAM.md`, named by its RUSTSEC id. An advisory not named there is
+# unreviewed and this exits non-zero.
+
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB = os.path.join(ROOT, "target", "advisory-db")
+LEDGER = os.path.join(ROOT, "docs", "UPSTREAM.md")
+UPSTREAM = "https://github.com/rustsec/advisory-db"
+
+
+def fetch_database():
+    """A shallow clone, refreshed in place. The history is of no use here."""
+    if os.path.isdir(os.path.join(DB, ".git")):
+        r = subprocess.run(
+            ["git", "-C", DB, "fetch", "--depth", "1", "origin", "main"],
+            capture_output=True,
+        )
+        if r.returncode != 0:
+            return False
+        subprocess.run(
+            ["git", "-C", DB, "reset", "--hard", "-q", "FETCH_HEAD"], check=True
+        )
+        return True
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    r = subprocess.run(
+        ["git", "clone", "--depth", "1", "-q", UPSTREAM, DB], capture_output=True
+    )
+    return r.returncode == 0
+
+
+def parse_version(text):
+    """Numeric core, and whether a pre-release tag follows it.
+
+    A pre-release sorts below the release it leads to, which is the only part of
+    the pre-release rule that changes an answer here.
+    """
+    core = re.match(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", text.strip())
+    nums = tuple(int(g or 0) for g in core.groups())
+    pre = "-" in text.split("+")[0]
+    return nums, pre
+
+
+def compare(a, b):
+    (an, ap), (bn, bp) = parse_version(a), parse_version(b)
+    if an != bn:
+        return -1 if an < bn else 1
+    if ap != bp:
+        return -1 if ap else 1
+    return 0
+
+
+def satisfies(version, requirement):
+    """Does `version` satisfy one comma-separated Cargo requirement.
+
+    Advisories write ranges the way Cargo does: `>= 0.11.15`, `^0.9.5`,
+    `< 0.11.0`, or several of those joined by commas, meaning all of them.
+    """
+    for part in requirement.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"(>=|<=|>|<|\^|=)?\s*(.+)", part)
+        op, target = m.group(1) or "^", m.group(2).strip()
+        c = compare(version, target)
+        if op == ">=" and c < 0:
+            return False
+        if op == ">" and c <= 0:
+            return False
+        if op == "<=" and c > 0:
+            return False
+        if op == "<" and c >= 0:
+            return False
+        if op == "=" and c != 0:
+            return False
+        if op == "^":
+            # Caret: up to the next number that is allowed to break things,
+            # which for a leading zero is the first non-zero component.
+            nums, _ = parse_version(target)
+            if c < 0:
+                return False
+            if nums[0] != 0:
+                ceiling = (nums[0] + 1, 0, 0)
+            elif nums[1] != 0:
+                ceiling = (0, nums[1] + 1, 0)
+            else:
+                ceiling = (0, 0, nums[2] + 1)
+            if parse_version(version)[0] >= ceiling:
+                return False
+    return True
+
+
+def read_advisory(path):
+    text = open(path, encoding="utf-8").read()
+    block = re.search(r"```toml(.*?)```", text, re.S)
+    body = block.group(1) if block else text
+
+    def field(name):
+        m = re.search(r'^%s\s*=\s*"(.*)"' % name, body, re.M)
+        return m.group(1) if m else None
+
+    def listed(name):
+        m = re.search(r"^%s\s*=\s*\[(.*?)\]" % name, body, re.M | re.S)
+        return re.findall(r'"(.*?)"', m.group(1)) if m else []
+
+    title = re.search(r"^#\s+(.+)$", text, re.M)
+    return {
+        "id": field("id"),
+        "package": field("package"),
+        "informational": field("informational"),
+        "patched": listed("patched"),
+        "unaffected": listed("unaffected"),
+        "title": (title.group(1).strip() if title else "").strip(),
+    }
+
+
+def affected(advisory, version):
+    for req in advisory["unaffected"]:
+        if satisfies(version, req):
+            return False
+    for req in advisory["patched"]:
+        if satisfies(version, req):
+            return False
+    # No patched range at all means nobody has shipped a fix.
+    return True
+
+
+def locked_packages(lock_path):
+    found = {}
+    for block in open(lock_path, encoding="utf-8").read().split("[[package]]"):
+        name = re.search(r'^name = "(.*)"', block, re.M)
+        version = re.search(r'^version = "(.*)"', block, re.M)
+        if name and version:
+            found.setdefault(name.group(1), set()).add(version.group(1))
+    return found
+
+
+def main():
+    lock = os.path.join(ROOT, "Cargo.lock")
+    if not os.path.exists(lock):
+        print("no Cargo.lock, so there is nothing resolved to check", file=sys.stderr)
+        return 2
+
+    if not fetch_database():
+        print(
+            "could not reach the advisory database, so this run proves nothing",
+            file=sys.stderr,
+        )
+        return 2
+
+    ledger = open(LEDGER, encoding="utf-8").read() if os.path.exists(LEDGER) else ""
+    packages = locked_packages(lock)
+
+    vulnerabilities, informational = [], []
+    for name, versions in sorted(packages.items()):
+        directory = os.path.join(DB, "crates", name)
+        if not os.path.isdir(directory):
+            continue
+        for entry in sorted(os.listdir(directory)):
+            advisory = read_advisory(os.path.join(directory, entry))
+            for version in sorted(versions):
+                if not affected(advisory, version):
+                    continue
+                row = (name, version, advisory)
+                (informational if advisory["informational"] else vulnerabilities).append(row)
+
+    unreviewed = 0
+    for heading, rows in (("Vulnerabilities", vulnerabilities), ("Informational", informational)):
+        if not rows:
+            continue
+        print("\n%s\n%s" % (heading, "-" * len(heading)))
+        for name, version, advisory in rows:
+            seen = advisory["id"] in ledger
+            if not seen:
+                unreviewed += 1
+            print(
+                "  %-24s %-12s %-18s %s%s"
+                % (
+                    name,
+                    version,
+                    advisory["id"],
+                    advisory["title"][:60],
+                    "" if seen else "   [UNREVIEWED]",
+                )
+            )
+
+    print(
+        "\n%d packages resolved, %d vulnerabilities, %d informational, %d unreviewed"
+        % (len(packages), len(vulnerabilities), len(informational), unreviewed)
+    )
+    if unreviewed:
+        print(
+            "\nRead each unreviewed advisory and decide whether it reaches Rotelyx.\n"
+            "Record the verdict in docs/UPSTREAM.md, named by its RUSTSEC id.\n"
+            "Matching a version range is not the same as being exposed, and this\n"
+            "script deliberately cannot tell the difference."
+        )
+    return 1 if unreviewed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

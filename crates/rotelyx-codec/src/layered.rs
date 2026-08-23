@@ -67,6 +67,7 @@ use crate::mdct::{self, FRAME, WINDOW};
 use crate::entropy::{decode_symbol, encode_symbol, Model, RangeDecoder, RangeEncoder};
 use crate::rangecoder::{Decoder, Encoder};
 use crate::rvq;
+use crate::tns;
 use crate::{coarsen, energy_to_level, level_quantum, level_to_energy, CodecError};
 
 /// How many layers a frame is split into: a base and three refinements.
@@ -369,6 +370,7 @@ fn residual_context(previous: i16) -> usize {
 /// that flag is nearly free: the top of the spectrum is almost always asleep and
 /// the bottom almost never is, so the model that matters has already made up its
 /// mind before it is asked.
+#[derive(Clone)]
 pub struct LevelModels {
     /// Whether each band is silent, one model per band context.
     silence: Vec<Model>,
@@ -466,6 +468,68 @@ pub fn read_levels(stream: &mut RangeDecoder, models: &mut LevelModels) -> [u8; 
     levels
 }
 
+/// Choose each band's level against the shape the decoder will hold.
+///
+/// The same idea as the base codec's `refine_levels`, and the same reason it is
+/// free: the pyramid codes direction and `rvq::encode` normalises by the band's
+/// own root mean square before it starts, so a band's stages do not depend on
+/// its level. Only the plan does, and the caller checks that separately.
+///
+/// The error is a parabola in the gain with its minimum at the projection
+/// `<x, s> / <s, s>`, and the measured energy sits above that whenever the shape
+/// is imperfect. So a band always came out slightly too loud, always in the same
+/// direction, and this is the level on the grid that undoes it.
+fn refine_levels(
+    coefficients: &[f32],
+    shapes: &[Vec<f32>],
+    levels: [u8; BANDS],
+    quantum: u8,
+) -> [u8; BANDS] {
+    let mut refined = levels;
+
+    for b in 0..BANDS {
+        let shape = &shapes[b];
+        if shape.is_empty() {
+            continue;
+        }
+        let x = &coefficients[bands::range(b)];
+        let ss: f32 = shape.iter().map(|s| s * s).sum();
+        if ss <= 1e-12 {
+            continue;
+        }
+
+        let error_at = |gain: f32| -> f64 {
+            x.iter()
+                .zip(shape)
+                .map(|(&c, &s)| {
+                    let d = (c - gain * s) as f64;
+                    d * d
+                })
+                .sum()
+        };
+
+        let here = levels[b];
+        let mut best = error_at(level_to_energy(here));
+
+        // Four steps either way is further than the projection can move a level,
+        // and stopping there keeps this from being a search.
+        for step in -4i16..=4 {
+            let candidate = (here as i16 + step * quantum as i16).clamp(0, 255) as u8;
+            let candidate = coarsen(candidate, quantum);
+            if candidate == here {
+                continue;
+            }
+            let e = error_at(level_to_energy(candidate));
+            if e < best {
+                best = e;
+                refined[b] = candidate;
+            }
+        }
+    }
+
+    refined
+}
+
 pub struct LayeredEncoder {
     window: Vec<f32>,
     budget_bits: usize,
@@ -483,12 +547,52 @@ impl LayeredEncoder {
         }
     }
 
+    /// Encode a frame, keeping every layer.
+    ///
+    /// For a link with a budget, prefer [`LayeredEncoder::encode_within`]: this
+    /// is the same call with no ceiling, and a caller that trims afterwards
+    /// gets a frame whose levels were chosen for layers it then threw away.
     pub fn encode(&mut self, audio: &[f32]) -> Result<LayeredFrame, CodecError> {
+        self.encode_within(audio, usize::MAX)
+    }
+
+    /// Encode a frame that fits in `budget_bytes`, trimming layers here.
+    ///
+    /// # Why the trim moved inside
+    ///
+    /// It used to happen in the caller: encode everything, then call
+    /// `LayeredFrame::within` against a budget taken from live congestion. That
+    /// works for the bits and not for the levels. A band is rebuilt as its level
+    /// times its shape, and the shape depends on how many stages arrive, so the
+    /// best level for a frame with four layers is not the best level for the
+    /// same frame with one. Choosing outside meant choosing against a frame
+    /// nobody would receive.
+    pub fn encode_within(
+        &mut self,
+        audio: &[f32],
+        budget_bytes: usize,
+    ) -> Result<LayeredFrame, CodecError> {
         if audio.len() != WINDOW {
             return Err(CodecError::WrongFrameSize { got: audio.len() });
         }
 
-        let coefficients = mdct::forward(audio, &self.window);
+        let mut coefficients = mdct::forward(audio, &self.window);
+
+        // Shaping happens before the energies are measured, because what gets
+        // quantised from here on is the prediction error and the levels have to
+        // describe that, not the coefficients it was computed from.
+        // Two separate questions. Whether the frame carries shaping bits at all
+        // depends only on the rate, which the decoder also knows, so it stays out
+        // of the bitstream. Whether the filter in those bits is active depends on
+        // the audio, which the decoder does not know, so it travels as the flag.
+        let shaping = tns::allowed(self.budget_bits / 8);
+        let filter = if shaping && tns::is_transient(audio) {
+            tns::analyse(&coefficients)
+        } else {
+            tns::Filter::default()
+        };
+        filter.apply(&mut coefficients);
+
         let measured = bands::energies(&coefficients);
 
         let mut levels = [0u8; BANDS];
@@ -503,8 +607,13 @@ impl LayeredEncoder {
         // In their own stream rather than mixed with the shapes: the two are
         // coded by different machinery, and interleaving them would mean the
         // arithmetic coder could not be flushed until the last band was written.
+        // Coded against a copy of the models, because the size of this stream
+        // decides the bit budget and the budget decides the plan, so it has to
+        // be known before anything is committed. The real models are advanced
+        // once, at the end, with whichever levels are actually sent.
+        let mut trial_models = self.models.clone();
         let mut energy_stream = RangeEncoder::new();
-        write_levels(&mut energy_stream, &levels, &mut self.models);
+        write_levels(&mut energy_stream, &levels, &mut trial_models);
 
         let energy_bytes = energy_stream.finish();
         if energy_bytes.len() > u8::MAX as usize {
@@ -513,8 +622,14 @@ impl LayeredEncoder {
 
         // The shapes follow in the same layer, bit packed.
         let mut base = Encoder::new();
+        let shaping_bits = if shaping {
+            filter.write(&mut base);
+            filter.bits()
+        } else {
+            0
+        };
 
-        let spent = (1 + energy_bytes.len()) * 8;
+        let spent = (1 + energy_bytes.len()) * 8 + shaping_bits;
         let plans = plan(&energies, self.budget_bits.saturating_sub(spent));
 
         // Code every band fully, then split the stages across layers. Coding
@@ -544,15 +659,90 @@ impl LayeredEncoder {
 
         // Length prefixed, so the decoder knows where the arithmetic stream
         // ends and the bit packed shapes begin.
-        let mut base_bytes = Vec::with_capacity(1 + energy_bytes.len());
-        base_bytes.push(energy_bytes.len() as u8);
-        base_bytes.extend_from_slice(&energy_bytes);
-        base_bytes.extend_from_slice(&base.finish());
+        let shape_bits = base.finish();
+        let refinements: Vec<Vec<u8>> = layers.into_iter().map(|l| l.finish()).collect();
 
-        Ok(LayeredFrame {
-            base: base_bytes,
-            refinements: layers.into_iter().map(|l| l.finish()).collect(),
-        })
+        let assemble = |energy: &[u8], refinements: &[Vec<u8>]| {
+            let mut base_bytes = Vec::with_capacity(1 + energy.len() + shape_bits.len());
+            base_bytes.push(energy.len() as u8);
+            base_bytes.extend_from_slice(energy);
+            base_bytes.extend_from_slice(&shape_bits);
+            LayeredFrame {
+                base: base_bytes,
+                refinements: refinements.to_vec(),
+            }
+        };
+
+        // What will actually be sent. Every layer beyond the budget is dropped
+        // here rather than by the caller, because the level chosen next depends
+        // on which stages the decoder will hold, and a caller trimming
+        // afterwards would leave that choice made against a frame nobody gets.
+        let frame = assemble(&energy_bytes, &refinements);
+        let keep = frame.within(budget_bytes).refinements.len();
+        let refinements: Vec<Vec<u8>> = refinements.into_iter().take(keep).collect();
+
+        // Now the levels can be chosen against the shape the decoder will
+        // rebuild, rather than against the energy that was measured. See
+        // `refine_levels`.
+        let surviving: Vec<Vec<f32>> = (0..BANDS)
+            .map(|b| {
+                let n = bands::range(b).len();
+                let stages = &coded[b][..coded[b].len().min(keep + 1)];
+                if stages.is_empty() {
+                    Vec::new()
+                } else {
+                    rvq::decode(n, stages)
+                }
+            })
+            .collect();
+
+        let refined = refine_levels(&coefficients, &surviving, levels, self.quantum);
+
+        // A level may only move if the frame comes out the same shape: the
+        // energies decide the plan, and the size of their coded stream decides
+        // the budget the plan is computed against. Either changing would leave
+        // the decoder splitting the bits differently from the encoder that
+        // wrote them, and reading every band from the wrong place.
+        //
+        // Tried one band at a time rather than all at once. All at once is one
+        // arithmetic encode and it was refused four times in five, because a
+        // single band moving is usually enough to change the coded length of
+        // the whole stream. Band by band, what one band spoils no longer costs
+        // the other twenty three.
+        let energy_len = energy_bytes.len();
+        let want = self.budget_bits.saturating_sub(spent);
+        let mut chosen = levels;
+        let mut chosen_bytes = energy_bytes;
+        let mut committed = trial_models;
+
+        for b in 0..BANDS {
+            if refined[b] == chosen[b] {
+                continue;
+            }
+            let mut candidate = chosen;
+            candidate[b] = refined[b];
+
+            let mut models = self.models.clone();
+            let mut stream = RangeEncoder::new();
+            write_levels(&mut stream, &candidate, &mut models);
+            let bytes = stream.finish();
+            if bytes.len() != energy_len {
+                continue;
+            }
+
+            let energies: Vec<f32> = candidate.iter().map(|&l| level_to_energy(l)).collect();
+            if plan(&energies, want) != plans {
+                continue;
+            }
+
+            chosen = candidate;
+            chosen_bytes = bytes;
+            committed = models;
+        }
+        let energy_bytes = chosen_bytes;
+
+        self.models = committed;
+        Ok(assemble(&energy_bytes, &refinements))
     }
 }
 
@@ -662,7 +852,14 @@ impl LayeredDecoder {
         let energies: Vec<f32> = levels.iter().map(|&l| level_to_energy(l)).collect();
 
         let mut base = Decoder::new(shape_bytes);
-        let spent = (1 + energy_len) * 8;
+        let (filter, shaping_bits) = if tns::allowed(self.budget_bits / 8) {
+            let filter = tns::Filter::read(&mut base);
+            let bits = filter.bits();
+            (filter, bits)
+        } else {
+            (tns::Filter::default(), 0)
+        };
+        let spent = (1 + energy_len) * 8 + shaping_bits;
         let plans = plan(&energies, self.budget_bits.saturating_sub(spent));
 
         let mut refinements: Vec<Decoder> =
@@ -705,7 +902,8 @@ impl LayeredDecoder {
         self.last_energies = energies.clone();
         self.concealed_in_a_row = 0;
 
-        let coefficients = bands::denormalise(&shape, &energies);
+        let mut coefficients = bands::denormalise(&shape, &energies);
+        filter.undo(&mut coefficients);
         Ok(self.overlap.push(&mdct::inverse(&coefficients, &self.window)))
     }
 }

@@ -28,6 +28,7 @@
 //! preferred over the alternative, which is a mailbox that keeps copies of
 //! everything it has already delivered.
 
+mod limits;
 mod vault;
 mod wake;
 
@@ -42,6 +43,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use axum::{
+    extract::ConnectInfo,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
@@ -205,6 +207,21 @@ struct Args {
     /// it is working matters more than a leak to an audience of one.
     #[arg(long)]
     stats: bool,
+
+    /// An address whose `X-Forwarded-For` this server believes. Repeatable.
+    ///
+    /// Per-address limits need the caller's address, and behind a proxy every
+    /// connection arrives from the proxy. Keying on that would put everybody in
+    /// one bucket, where the first abuser locks out the rest.
+    ///
+    /// Naming the proxy here is what makes its header believable. Without it the
+    /// header is ignored, because a header is written by whoever is talking to
+    /// us: trusting it by default would let any caller claim a fresh address per
+    /// connection and walk straight through the limits.
+    ///
+    /// Run directly with no proxy and this is not needed at all.
+    #[arg(long, value_name = "IP")]
+    trusted_proxy: Vec<std::net::IpAddr>,
 }
 
 #[derive(clap::Subcommand)]
@@ -340,6 +357,13 @@ struct Server {
     /// tracking this project exists to prevent, so it is opt-in and meant to be
     /// switched off before anybody but the operator can reach the page.
     counters: Counters,
+
+    /// Per-address admission control. See `limits`.
+    limits: limits::Limits,
+
+    /// Addresses whose forwarded header is believed. Empty by default: a header
+    /// is written by whoever is talking to us.
+    trusted_proxies: Vec<std::net::IpAddr>,
 
     /// Where the meter is snapshotted. `None` keeps it in memory only, which
     /// means every restart hands out a fresh allowance.
@@ -1037,37 +1061,56 @@ async fn handle_request(
 // Routes
 // ---------------------------------------------------------------------------
 
-/// How many sockets this server will hold open at once.
+/// How many sockets this server will hold open at once, and how many one
+/// address may have of them, live in `limits`.
 ///
-/// # Why there is a ceiling at all
-///
-/// Nothing else bounds it. A connection costs a file descriptor, a task and a
-/// buffer, and opening them in a loop costs the other end almost nothing: no
-/// token, no payment, no identity. The metering below counts bytes deposited
-/// and does not count connections that never deposit anything, so a caller that
-/// only ever opens sockets is free.
-///
-/// Refusing at a ceiling is the honest failure. Running out of descriptors is
-/// the same denial arriving later and taking the accepted connections with it.
-///
-/// This is not the whole answer and is not meant to be. A reverse proxy is
-/// where per-address limits belong, because it is the thing that still knows
-/// the address; see `docs/nginx-relay.conf`. This bounds the resource whatever
-/// is in front.
-const MAX_OPEN_SOCKETS: u64 = 4_096;
+/// This used to be a bare total here, with a comment saying per-address limits
+/// belong in a reverse proxy. They do belong there and they were never there:
+/// the control panel rejected the directives twice and a proxy is not present
+/// in every deployment anyway. A limit most operators will never configure is a
+/// limit most deployments do not have, so it moved into the only place that is
+/// always running.
 
-async fn ws_handler(ws: WebSocketUpgrade, State(server): State<Arc<Server>>) -> Response {
-    if server.counters.connections_open.load(Ordering::Relaxed) >= MAX_OPEN_SOCKETS {
-        server.counters.refused.fetch_add(1, Ordering::Relaxed);
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "too many connections are open\n",
-        )
-            .into_response();
-    }
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    State(server): State<Arc<Server>>,
+) -> Response {
+    // The address, not the address and port: a fresh connection gets a fresh
+    // source port, so keying on the pair would give every connection a bucket of
+    // its own and limit nothing.
+    let address = limits::client_address(
+        peer.ip(),
+        &server.trusted_proxies,
+        headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok()),
+    );
+
+    let slot = match server.limits.admit(address) {
+        Ok(slot) => slot,
+        Err(why) => {
+            server.counters.refused.fetch_add(1, Ordering::Relaxed);
+            // The same answer whichever limit it was. Telling a caller which one
+            // it hit tells it how to stay under the others.
+            debug!(?why, "refused a connection");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "too many connections are open\n",
+            )
+                .into_response();
+        }
+    };
 
     ws.max_message_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, server))
+        .on_upgrade(move |socket| async move {
+            // Held for the life of the socket and released on drop, so a handler
+            // that returns early, panics, or is cancelled mid-await still gives
+            // the slot back. All three happen on a websocket.
+            let _slot = slot;
+            handle_socket(socket, server).await
+        })
 }
 
 /// Health probe. Deliberately reports nothing about contents: an operator
@@ -1205,6 +1248,7 @@ fn router_full(
         // test never accidentally asserts on a page that production hides.
         false,
         Waking::default(),
+        Vec::new(),
     )
 }
 
@@ -1242,6 +1286,7 @@ fn router_stateful(
     blind: rotelyx_capability::blind::BlindVerifier,
     stats: bool,
     waking: Waking,
+    trusted_proxies: Vec<std::net::IpAddr>,
 ) -> (Router, Arc<Server>) {
     let _ = ttl_seconds;
     let (wake, _) = broadcast::channel(1024);
@@ -1263,6 +1308,8 @@ fn router_stateful(
             show: stats,
             ..Default::default()
         },
+        limits: limits::Limits::new(),
+        trusted_proxies,
     });
 
     // Reclaim memory from envelopes nobody collected.
@@ -1574,6 +1621,7 @@ async fn main() -> Result<()> {
         blind_verifier,
         args.stats,
         waking,
+        args.trusted_proxy.clone(),
     );
 
     let listener = tokio::net::TcpListener::bind(args.bind)
@@ -1586,8 +1634,11 @@ async fn main() -> Result<()> {
     // The meter is snapshotted on the sweep timer, so a hard kill loses at most
     // one interval of spending. A signalled shutdown writes it out below and
     // loses nothing.
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
             info!("shutting down");
         })
@@ -1678,11 +1729,17 @@ mod tests {
             rotelyx_capability::blind::BlindVerifier::new(),
             true,
             Waking::default(),
+            Vec::new(),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve");
         });
         (format!("ws://{addr}/mailbox"), server)
     }
@@ -1714,11 +1771,17 @@ mod tests {
                 every: Duration::from_secs(300),
                 state: None,
             },
+            Vec::new(),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve");
         });
         (format!("ws://{addr}/mailbox"), server)
     }
@@ -2114,7 +2177,11 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let addr = listener.local_addr().expect("addr");
         let app = router(DEFAULT_TTL_SECONDS, KEEPALIVE);
         tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await;
         });
         format!("ws://{addr}/mailbox")
     }
@@ -2128,6 +2195,40 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
     fn tag_hex(tag: &Tag) -> String {
         tag.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// The per-address limit is real over a socket, not only in `limits`.
+    ///
+    /// The unit tests exercise the bucket. This exercises the thing that has to
+    /// hold: a caller opening sockets and depositing nothing, which is the case
+    /// that pays no token, gets no meter reading, and was free until now.
+    #[tokio::test]
+    async fn one_address_cannot_open_every_socket_over_the_wire() {
+        let url = spawn_server().await;
+
+        let mut held = Vec::new();
+        for n in 0..limits::PER_ADDRESS_CONNECTIONS {
+            held.push(
+                tokio_tungstenite::connect_async(&url)
+                    .await
+                    .unwrap_or_else(|e| panic!("connection {n} was refused under the limit: {e}"))
+                    .0,
+            );
+        }
+
+        assert!(
+            tokio_tungstenite::connect_async(&url).await.is_err(),
+            "one address opened more than {} sockets",
+            limits::PER_ADDRESS_CONNECTIONS
+        );
+
+        // And the slots come back, so a client that reconnects all day is not
+        // locked out for the life of the process.
+        held.clear();
+        assert!(
+            tokio_tungstenite::connect_async(&url).await.is_ok(),
+            "the address stayed refused after its connections closed"
+        );
     }
 
     /// Two Rotelyx members exchange a real encrypted message through the real
@@ -2699,7 +2800,11 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let addr = listener.local_addr().expect("addr");
         let app = router_with(DEFAULT_TTL_SECONDS, KEEPALIVE, Some(verifier));
         tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await;
         });
         (format!("ws://{addr}/mailbox"), TEST_KEY)
     }
@@ -2914,7 +3019,11 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let addr = listener.local_addr().expect("addr");
         let app = router(DEFAULT_TTL_SECONDS, Duration::from_millis(80));
         tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await;
         });
 
         let mut client = connect(&format!("ws://{addr}/mailbox")).await;

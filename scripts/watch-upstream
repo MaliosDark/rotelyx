@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+#
+# Watch the projects the vendored transport was taken from, for releases and
+# security advisories that have to be ported by hand.
+#
+#   scripts/watch-upstream
+#
+# # Why this has to exist
+#
+# `crates/net` holds 124,000 lines derived from iroh, from N0's quinn fork, and
+# from their supporting crates. Vendoring bought independence from their
+# infrastructure and their release schedule. It also bought the obligation that
+# comes with owning code: when somebody finds a hole upstream, nothing arrives
+# on its own. `cargo update` will never fix a line in this repository.
+#
+# # The trap this is built around
+#
+# Every vendored crate carries the upstream version it was taken from, and on
+# the day this was written every one of them matched the newest thing upstream
+# had published. That looked like being current. It was not.
+#
+# N0's QUIC crates are themselves a fork of quinn, renumbered to 1.x. `noq-proto
+# 1.1.1` was the newest noq-proto in existence and was still missing the fix for
+# a remote memory-exhaustion bug that quinn had already shipped. Being level with
+# the fork you took says nothing about whether that fork is level with *its*
+# upstream, and the advisories are filed against the original name.
+#
+# So this checks two different things, and the second is the one that matters:
+#
+#   1. version drift, against the crate we actually took the code from
+#   2. security advisories, against the crate the advisories are *filed under*,
+#      which for the QUIC crates is a different name entirely
+#
+# # How an advisory gets cleared
+#
+# Advisories cannot be triaged by version number here, because the numbers do
+# not line up across the rename. Each one has to be read and checked against the
+# source in this tree. `docs/UPSTREAM.md` records that verdict, one entry per
+# advisory ID. An advisory not named in that file is unreviewed, and this exits
+# non-zero until somebody writes down what they found.
+#
+# Exit status is 0 only when nothing has drifted and nothing is unreviewed.
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.."
+
+LEDGER="docs/UPSTREAM.md"
+UA="rotelyx-upstream-watch (vendored transport security tracking)"
+
+# our crate directory | crate we took the code from | crate advisories are filed under
+#
+# The third column differs from the second only where a rename hides the trail:
+# the noq crates are quinn under another name, so a quinn advisory applies to
+# them and searching for "noq" finds nothing.
+WATCH=(
+  "rotelyx-transport|iroh|iroh"
+  "rotelyx-transport-base|iroh-base|iroh-base"
+  "rotelyx-relay-proto|iroh-relay|iroh-relay"
+  "rotelyx-discovery|iroh-dns|iroh-dns"
+  "rotelyx-metrics|iroh-metrics|iroh-metrics"
+  "rotelyx-metrics-derive|iroh-metrics-derive|iroh-metrics-derive"
+  "rotelyx-quic|noq|quinn"
+  "rotelyx-quic-proto|noq-proto|quinn-proto"
+  "rotelyx-quic-udp|noq-udp|quinn-udp"
+  "rotelyx-netwatch|netwatch|netwatch"
+  "rotelyx-error|n0-error|n0-error"
+  "rotelyx-error-macros|n0-error-macros|n0-error-macros"
+  "rotelyx-future|n0-future|n0-future"
+  "rotelyx-watcher|n0-watcher|n0-watcher"
+)
+
+GH_AUTH=()
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  GH_AUTH=(-H "Authorization: Bearer $GITHUB_TOKEN")
+fi
+
+if [ ! -f "$LEDGER" ]; then
+  echo "no $LEDGER, so no advisory has a recorded verdict" >&2
+  exit 2
+fi
+
+drift=0
+unreviewed=0
+offline=0
+
+printf '%-24s %-10s %-10s %s\n' CRATE OURS UPSTREAM ADVISORIES
+printf '%-24s %-10s %-10s %s\n' ------ ---- -------- ----------
+
+for row in "${WATCH[@]}"; do
+  IFS='|' read -r ours upstream advisory <<< "$row"
+
+  manifest="crates/net/$ours/Cargo.toml"
+  have=$(grep -m1 '^version = ' "$manifest" | cut -d'"' -f2)
+
+  latest=$(curl -sS -m 20 -A "$UA" "https://crates.io/api/v1/crates/$upstream" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin)["crate"].get("max_stable_version") or "?")
+except Exception:
+    print("?")
+')
+
+  # A 404 from the advisory database is the answer "none filed", not a failure.
+  body=$(curl -sS -m 20 "${GH_AUTH[@]}" \
+    "https://api.github.com/repos/rustsec/advisory-db/contents/crates/$advisory" 2>/dev/null)
+  ids=$(printf '%s' "$body" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if isinstance(d, list):
+    for f in d:
+        print(f["name"].removesuffix(".md"))
+')
+
+  new=()
+  for id in $ids; do
+    grep -q "$id" "$LEDGER" || new+=("$id")
+  done
+
+  note=""
+  if [ "$latest" = "?" ]; then
+    note="upstream unreachable"
+    offline=1
+  elif [ "$latest" != "$have" ]; then
+    note="BEHIND $upstream $latest"
+    drift=1
+  fi
+
+  if [ ${#new[@]} -gt 0 ]; then
+    note="${note:+$note; }UNREVIEWED: ${new[*]}"
+    unreviewed=1
+  fi
+
+  count=$(printf '%s' "$ids" | grep -c . )
+  printf '%-24s %-10s %-10s %-4s %s\n' "$ours" "$have" "$latest" "$count" "$note"
+done
+
+echo
+if [ "$offline" = 1 ]; then
+  echo "some upstream lookups failed, so this run proves nothing about those crates"
+fi
+if [ "$unreviewed" = 1 ]; then
+  echo "Read each unreviewed advisory, check this tree against it, and record the"
+  echo "verdict in $LEDGER. Renumbered forks mean the patched range in the"
+  echo "advisory cannot answer the question for us."
+fi
+if [ "$drift" = 1 ]; then
+  echo "A crate is behind the project it was taken from. Read the changes between"
+  echo "the two and port what matters; then update the version in its Cargo.toml"
+  echo "so this check keeps meaning something."
+fi
+
+[ "$drift" = 0 ] && [ "$unreviewed" = 0 ] && [ "$offline" = 0 ]

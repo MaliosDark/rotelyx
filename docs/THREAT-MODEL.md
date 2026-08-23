@@ -240,12 +240,23 @@ are just keypairs.
     binds to *both* identities and to the hour, so it is non-transferable: a
     bulk sender pays per recipient, pays again per throwaway identity, and
     cannot stockpile proofs in advance. That forces the choice between reusing
-    one blockable identity and paying for every new one.
+    one identity whose invitations can be withdrawn and paying for every new one.
 - **Still not defended:** a determined individual attacker with time. Neither
   mechanism is meant to stop one person; both are meant to destroy the
   economics of bulk contact, which is the actual threat.
-  - **Blocklists**, checked *before* any verification runs. A block that still
-    costs CPU is one the blocked party can keep spending.
+  - **Withdrawing an invitation**, which is what blocking means here. There was
+    a blocklist of identities and it never refused anybody unwilling to be
+    refused: the check ran against whatever the transport authenticated, which
+    is a key belonging to one invitation and to nothing else, so it matched
+    nothing. The second check ran against the credential the member chose for
+    itself. A caller who kept its real identity there was caught; a caller who
+    put any other bytes there was admitted, and the person who blocked them was
+    told it had worked.
+
+    An invitation is different in the one way that matters: this side issued it
+    and holds its secret, so withdrawing it is verified against something the
+    caller cannot choose. `store::revoke_invitation` retires it and the next
+    connection on it is refused.
   - **Revocation.** Expiry is a promise about the future; a leaked invitation is
     a problem now, so `Gate::revoke` retires one immediately without affecting
     holders of the others.
@@ -264,8 +275,16 @@ are just keypairs.
   must be its admission evidence, and it is checked before the MLS handshake, so
   an unauthorised peer cannot make us do group-crypto work. Live-socket tests in
   `crates/rotelyx-core/tests/admission.rs` assert the refusals actually happen.
-- **Outstanding:** rate limiting per source, and a way to distribute blocklists
-  across a user's own devices.
+- **Rate limiting per source** lives in both servers rather than in front of
+  them. `rotelyx-relay::limits` keys on the endpoint identity, which the relay
+  handshake proves before access control is asked. The mailbox has no such thing
+  when a socket opens, and that is exactly the caller it bounds, the one that
+  opens sockets and deposits nothing, so `rotelyx-mailbox-server::limits` keys on
+  the address. Both were meant to live in a reverse proxy; the control panel
+  rejected the directives twice, and a proxy is not present in every deployment
+  in any case.
+- **Outstanding:** a way to carry withdrawn invitations across a user's own
+  devices.
 
 ---
 
@@ -401,6 +420,7 @@ foreign infrastructure: a promise in a document does not enforce itself.
 | `access.rs` invitation revocation | An invitation secret against the revoked list |
 | `vault.rs` passphrase binding | A passphrase against the one a cached key was derived from |
 | `wake.rs` `secrets_match` | A device's revocation secret against the stored hash |
+| `store.rs` `revoke_invitation` | An invitation secret against the ones this device issued |
 
 **Variable time and correct to be, because the values are public:**
 
@@ -434,11 +454,42 @@ bytes and discharges it permanently.
 can key the map the server routes with, and making that constant time would mean
 scanning every subscriber on every deposit.
 
-**Not covered by this review**, and worth stating rather than leaving implied:
-the timing of the underlying primitives is the libraries' responsibility, not
-ours. Whether `chacha20poly1305`, `ed25519-dalek`, `ml-kem` and the RSA blind
-signature implementation are constant time is their claim; we have not measured
-it, and a review that said otherwise would be claiming work nobody did.
+**The primitives underneath were then measured**, because the review above
+covered only comparisons we wrote and said so. `crates/rotelyx-crypto/tests/
+constant_time.rs` runs a dudect measurement in the ordinary suite: time an
+operation over two classes of input chosen so that a leak separates them, and
+apply Welch's t-test, where |t| above 10 is not noise.
+
+Two of the four operations named here are covered, the two every secret
+comparison and every sealed file pass through:
+
+| Operation | t |
+|---|---:|
+| A byte loop written to leak, as the control | -650 |
+| Two wrong values in the same byte, as the null | 1.2 |
+| `subtle::ConstantTimeEq` on 32 bytes | 1.3 |
+| XChaCha20-Poly1305 rejecting a forged tag | 0.2 |
+
+The controls are the point. A timing harness that reports "no leak" for
+everything is indistinguishable from a broken one, so the run first measures a
+comparison written to leak and refuses to report anything else unless it saw it.
+It then measures two inputs that nothing real could separate, and fails if it
+separated them.
+
+That second control was not decoration. An earlier version of this harness gave
+each class its own array and reported `subtle::ConstantTimeEq` leaking at t = 65,
+reproducibly, across runs. It was measuring the distance between two addresses:
+handing both classes data that differed in the same byte, out of two buffers,
+produced t = -26 on its own. Both classes now read one buffer, flipped and
+restored outside the timed region. **A measurement with no null control would
+have been published as a finding.**
+
+What this still does not cover: `ed25519-dalek`, `ml-kem` and the RSA blind
+signature implementation. And what it concludes is narrower than it looks.
+Absence of evidence of a leak, on one machine, one compiler and one
+microarchitecture, is not constant time. The profile is printed with the result
+because an unoptimised build is not the binary that ships, and the compiler is
+part of what is being watched.
 
 ## 7. What the artifacts leaked, and what can now be verified
 

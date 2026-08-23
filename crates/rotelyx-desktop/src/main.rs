@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use rotelyx_core::store::{self, Blocklist, Paths, StoredInvitation};
-use rotelyx_core::{epoch_at, Identity, Invitation, RotelyxId};
+use rotelyx_core::store::{self, Paths, StoredInvitation};
+use rotelyx_core::{epoch_at, Identity, Invitation};
 use rotelyx_net::EndpointAddr;
 use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
@@ -67,7 +67,13 @@ pub(crate) fn decode_addr(s: &str) -> Result<EndpointAddr> {
 struct Snapshot {
     id: String,
     invitations: usize,
-    blocked: usize,
+}
+
+/// One live invitation, as the window lists them.
+#[derive(serde::Serialize)]
+struct InvitationRow {
+    code: String,
+    expires_in_hours: u64,
 }
 
 #[tauri::command]
@@ -76,14 +82,9 @@ fn snapshot(app: tauri::State<'_, Arc<App>>) -> Result<Snapshot, String> {
     let invitations = store::load_invitations(&app.paths.invitations, epoch)
         .map_err(|e| e.to_string())?
         .len();
-    let blocked = Blocklist::load(&app.paths.blocks)
-        .map_err(|e| e.to_string())?
-        .len();
-
     Ok(Snapshot {
         id: app.identity.id().to_string(),
         invitations,
-        blocked,
     })
 }
 
@@ -105,33 +106,38 @@ fn issue_invitation(app: tauri::State<'_, Arc<App>>, hours: u64) -> Result<Strin
 }
 
 #[tauri::command]
-fn block(app: tauri::State<'_, Arc<App>>, id: String) -> Result<bool, String> {
-    let target: RotelyxId = id.trim().parse().map_err(|_| "not a valid identity".to_string())?;
-    let mut blocks = Blocklist::load(&app.paths.blocks).map_err(|e| e.to_string())?;
-    let added = blocks.insert(target);
-    if added {
-        blocks.save(&app.paths.blocks).map_err(|e| e.to_string())?;
-    }
-    Ok(added)
+fn invitations(app: tauri::State<'_, Arc<App>>) -> Result<Vec<InvitationRow>, String> {
+    let epoch = now_epoch().map_err(|e| e.to_string())?;
+    let live = store::load_invitations(&app.paths.invitations, epoch).map_err(|e| e.to_string())?;
+    Ok(live
+        .iter()
+        .map(|inv| InvitationRow {
+            code: inv.code(),
+            // An epoch is an hour, so this is already hours.
+            expires_in_hours: inv.expires_at_epoch.saturating_sub(epoch),
+        })
+        .collect())
 }
 
+/// Withdraw an invitation, which is what blocking means here.
+///
+/// There is no identity to ban. A caller arrives on a key belonging to one
+/// invitation and nothing else, so a list of identities to refuse is a list of
+/// values that never arrive. What can be withdrawn is the invitation, and that
+/// is checked against a secret this side holds rather than against something
+/// the caller chose to say about itself.
 #[tauri::command]
-fn unblock(app: tauri::State<'_, Arc<App>>, id: String) -> Result<bool, String> {
-    let target: RotelyxId = id.trim().parse().map_err(|_| "not a valid identity".to_string())?;
-    let mut blocks = Blocklist::load(&app.paths.blocks).map_err(|e| e.to_string())?;
-    let removed = blocks.remove(&target);
-    if removed {
-        blocks.save(&app.paths.blocks).map_err(|e| e.to_string())?;
-    }
-    Ok(removed)
-}
+fn block(app: tauri::State<'_, Arc<App>>, code: String) -> Result<bool, String> {
+    let epoch = now_epoch().map_err(|e| e.to_string())?;
+    let code = code.trim();
+    let live = store::load_invitations(&app.paths.invitations, epoch).map_err(|e| e.to_string())?;
+    let target = live
+        .iter()
+        .find(|inv| inv.code() == code)
+        .ok_or_else(|| "that is not a code this device issued".to_string())?;
 
-#[tauri::command]
-fn blocked(app: tauri::State<'_, Arc<App>>) -> Result<Vec<String>, String> {
-    let blocks = Blocklist::load(&app.paths.blocks).map_err(|e| e.to_string())?;
-    let mut ids: Vec<_> = blocks.iter().map(ToString::to_string).collect();
-    ids.sort();
-    Ok(ids)
+    store::revoke_invitation(&app.paths.invitations, &target.secret, epoch)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -287,8 +293,7 @@ fn main() {
             snapshot,
             issue_invitation,
             block,
-            unblock,
-            blocked,
+            invitations,
             start,
             start_call,
             end_call,

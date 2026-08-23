@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod backup;
 pub mod access;
 #[cfg(feature = "transport")]
 pub mod endpoint;
@@ -36,5 +37,5 @@ pub use access::{
 pub use endpoint::{Session, RotelyxEndpoint, ALPN};
 pub use identity::{safety_number, Identity, RotelyxId};
 pub use sealed::{is_sealed, SealError};
-pub use store::{Blocklist, Paths, StoreError, StoredInvitation};
+pub use store::{Paths, StoreError, StoredInvitation};
 pub use wire::{Frame, FrameKind, WireError, MAX_FRAME_LEN};

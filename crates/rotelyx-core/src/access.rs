@@ -67,8 +67,6 @@ pub enum AccessError {
     #[error("invitation expired at epoch {expired_at}")]
     ExpiredInvitation { expired_at: u64 },
 
-    #[error("caller is blocked")]
-    Blocked,
 
     /// A code that is not the right length, or whose address half is not a
     /// point on the curve. Said the same way for both, because telling a caller
@@ -440,48 +438,6 @@ mod tests {
     use super::*;
     use crate::identity::Identity;
 
-    /// Blocking survives the transport key no longer being the identity.
-    ///
-    /// # The hole this closes
-    ///
-    /// `admit` checks the blocklist against whatever the transport
-    /// authenticated. Once an endpoint answers on an invitation's own key, that
-    /// is a value the blocklist can never contain, so every blocked caller
-    /// passes the check. The failure is silent, which makes it worse than
-    /// having no blocking: somebody is told the block worked and is reachable
-    /// anyway.
-    ///
-    /// This is the check that runs on the identity the group authenticated,
-    /// which is the value a person actually blocked.
-    #[test]
-    fn a_blocked_identity_is_found_behind_an_ephemeral_key() {
-        let blocked = Identity::generate();
-        let allowed = Identity::generate();
-
-        let mut gate = Gate::invitation_only();
-        gate.block(blocked.id());
-
-        // What the transport would authenticate: a key belonging to nobody.
-        let ephemeral = Identity::generate().id();
-        assert!(
-            !gate.is_blocked(&ephemeral),
-            "the transport check cannot see through an ephemeral key, which is the point"
-        );
-
-        // What the group authenticates.
-        let roster = vec![
-            allowed.id().as_bytes().to_vec(),
-            blocked.id().as_bytes().to_vec(),
-        ];
-        assert_eq!(
-            gate.blocked_member(&roster),
-            Some(blocked.id()),
-            "a blocked identity got through behind an ephemeral key"
-        );
-
-        let clean = vec![allowed.id().as_bytes().to_vec()];
-        assert_eq!(gate.blocked_member(&clean), None, "refused somebody not blocked");
-    }
 
     /// Two invitations from one identity are answered at two addresses, and
     /// neither is the identity.
@@ -747,23 +703,6 @@ mod tests {
         ));
     }
 
-    /// A blocked identity must be refused before any verification runs: a
-    /// block that still costs us CPU is a block the blocked party can abuse.
-    #[test]
-    fn a_blocked_identity_is_refused_even_with_a_valid_invitation() {
-        let (caller, me) = ids();
-        let inv = Invitation::issue(200);
-        let proof = inv.prove(&caller, 100);
-
-        let mut gate = Gate::invitation_only();
-        gate.add_invitation(inv);
-        gate.block(caller);
-
-        assert!(matches!(
-            gate.admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None),
-            Err(AccessError::Blocked)
-        ));
-    }
 
     /// A permission is for one address, and worthless at any other.
     ///
@@ -826,21 +765,6 @@ mod tests {
         assert!(gate.admit(&caller, &me, &evidence, 100, None).is_ok());
     }
 
-    #[test]
-    fn unblocking_restores_access() {
-        let (caller, me) = ids();
-        let inv = Invitation::issue(200);
-        let proof = inv.prove(&caller, 100);
-
-        let mut gate = Gate::invitation_only();
-        gate.add_invitation(inv);
-        gate.block(caller);
-        assert!(gate.unblock(&caller));
-
-        assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
-            .is_ok());
-    }
 
     /// Revocation is the answer to a leaked invitation. Expiry is a promise
     /// about the future; a leak is a problem now.
@@ -924,18 +848,6 @@ mod tests {
             .is_err());
     }
 
-    #[test]
-    fn an_open_gate_admits_anyone_but_still_honours_blocks() {
-        let (caller, me) = ids();
-        let mut gate = Gate::new(ReachabilityPolicy::Open);
-        assert!(gate.admit(&caller, &me, &Admission::None, 100, None).is_ok());
-
-        gate.block(caller);
-        assert!(matches!(
-            gate.admit(&caller, &me, &Admission::None, 100, None),
-            Err(AccessError::Blocked)
-        ));
-    }
 
     // --- admission wire format ---
 
@@ -991,7 +903,6 @@ pub struct Gate {
     /// Invitations this identity has issued and not yet retired.
     invitations: Vec<Invitation>,
     /// Identities refused outright.
-    blocked: std::collections::HashSet<RotelyxId>,
     /// Epochs of tolerance for clock skew on proofs.
     tolerance: u64,
 }
@@ -1001,7 +912,6 @@ impl Gate {
         Self {
             policy,
             invitations: Vec::new(),
-            blocked: std::collections::HashSet::new(),
             tolerance: 1,
         }
     }
@@ -1043,45 +953,6 @@ impl Gate {
         self.invitations.len()
     }
 
-    pub fn block(&mut self, id: RotelyxId) {
-        self.blocked.insert(id);
-    }
-
-    pub fn unblock(&mut self, id: &RotelyxId) -> bool {
-        self.blocked.remove(id)
-    }
-
-    pub fn is_blocked(&self, id: &RotelyxId) -> bool {
-        self.blocked.contains(id)
-    }
-
-    /// Whether any identity in a group is blocked.
-    ///
-    /// # Why a second check exists at all
-    ///
-    /// [`Gate::admit`] checks the blocklist against whatever the transport
-    /// authenticated. That was the identity and now need not be: an endpoint
-    /// bound under an invitation's own key authenticates that key, and a
-    /// blocklist of identities cannot match one.
-    ///
-    /// Left there, blocking would fail **silently**, which is worse than not
-    /// having it: somebody would block a person, be told it worked, and be
-    /// reachable by them anyway. The identity is available once the group
-    /// handshake completes, and this is the check that uses it.
-    ///
-    /// It refuses later than the transport check does, so a blocked caller
-    /// still completes a handshake before being dropped and learns that
-    /// something answered. Discarding the invitation they hold is the stronger
-    /// answer, because an address that is not bound cannot be reached at all.
-    /// This is the one that keeps `block <identity>` meaning what it says.
-    pub fn blocked_member(&self, identities: &[Vec<u8>]) -> Option<RotelyxId> {
-        identities
-            .iter()
-            .filter_map(|raw| <[u8; 32]>::try_from(raw.as_slice()).ok())
-            .filter_map(|b| rotelyx_transport_base::EndpointId::from_bytes(&b).ok())
-            .map(RotelyxId::from)
-            .find(|id| self.blocked.contains(id))
-    }
 
     /// Decide whether `caller` may open a session.
     ///
@@ -1121,10 +992,6 @@ impl Gate {
         current_epoch: u64,
         dialled: Option<RotelyxId>,
     ) -> Result<(), AccessError> {
-        if self.is_blocked(caller) {
-            return Err(AccessError::Blocked);
-        }
-
         match (&self.policy, evidence) {
             (ReachabilityPolicy::Open, _) => Ok(()),
 

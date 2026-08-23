@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use rotelyx_core::store::{self, Blocklist, Paths};
+use rotelyx_core::store::{self, Paths};
 use rotelyx_core::{
     Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint,
     Session,
@@ -134,11 +134,10 @@ impl Engine {
 
     /// Build the admission gate from what is on disk.
     ///
-    /// Invitations and blocks both come from files, so a restart does not
-    /// reopen the door to somebody who was blocked or hand access to somebody
+    /// Invitations come from a file, so a restart does not hand access to somebody
     /// whose invitation expired.
     fn gate(&self, open: bool, invitations: &[store::StoredInvitation]) -> Result<Gate> {
-        let mut gate = if open {
+        let gate = if open {
             Gate::new(ReachabilityPolicy::Open)
         } else {
             if invitations.is_empty() {
@@ -154,10 +153,6 @@ impl Engine {
             g
         };
 
-        let blocks = Blocklist::load(&self.paths.blocks)?;
-        for id in blocks.iter() {
-            gate.block(*id);
-        }
         Ok(gate)
     }
 

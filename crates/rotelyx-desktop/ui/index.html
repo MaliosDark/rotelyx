@@ -205,12 +205,16 @@
     </div>
 
     <div class="group">
-      <h2>Blocked</h2>
-      <p class="hint">Persisted, so a restart does not reopen the door.</p>
-      <input id="block-id" placeholder="identity to block">
+      <h2>Live invitations</h2>
+      <p class="hint">
+        Blocking somebody is withdrawing the invitation they came in on. There
+        is no identity to ban: a caller arrives on a key belonging to one
+        invitation and nothing else. Withdrawing stops the next connection, not
+        one already open.
+      </p>
+      <input id="block-id" placeholder="invitation code to withdraw">
       <div class="row">
-        <button id="do-block">Block</button>
-        <button id="do-unblock">Unblock</button>
+        <button id="do-block">Withdraw</button>
       </div>
       <div class="val" id="block-list" hidden></div>
     </div>
@@ -319,9 +323,11 @@
         s.invitations === 0
           ? "No live invitations. You are unreachable."
           : `${s.invitations} live invitation(s).`;
-      const list = await invoke("blocked");
+      const list = await invoke("invitations");
       $("block-list").hidden = list.length === 0;
-      $("block-list").textContent = list.join("\n");
+      $("block-list").textContent = list
+        .map((i) => `${i.code}\n  expires in ${i.expires_in_hours}h`)
+        .join("\n");
     } catch (e) {
       $("me").textContent = String(e);
     }
@@ -339,21 +345,15 @@
 
   $("do-block").onclick = async () => {
     try {
-      const id = $("block-id").value.trim();
-      if (!id) return;
-      const added = await invoke("block", { id });
-      log(added ? `blocked ${id.slice(0, 16)}` : "already blocked", "sys");
-      $("block-id").value = "";
-      await refresh();
-    } catch (e) { log(String(e), "sys bad"); }
-  };
-
-  $("do-unblock").onclick = async () => {
-    try {
-      const id = $("block-id").value.trim();
-      if (!id) return;
-      const removed = await invoke("unblock", { id });
-      log(removed ? `unblocked ${id.slice(0, 16)}` : "was not blocked", "sys");
+      const code = $("block-id").value.trim();
+      if (!code) return;
+      const withdrawn = await invoke("block", { code });
+      log(
+        withdrawn
+          ? "withdrawn. That invitation admits nobody from now on."
+          : "that invitation was already gone",
+        "sys",
+      );
       $("block-id").value = "";
       await refresh();
     } catch (e) { log(String(e), "sys bad"); }

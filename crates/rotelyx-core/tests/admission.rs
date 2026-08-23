@@ -102,10 +102,18 @@ async fn an_uninvited_caller_is_refused() {
     .await;
 }
 
-/// A blocked identity is refused even holding a valid invitation, and refused
-/// before any verification work happens.
+/// A revoked invitation is refused over the wire, holder and proof and all.
+///
+/// This used to test a blocklist of identities. That check ran against whatever
+/// the transport authenticated, which is now a key belonging to this invitation
+/// and to nothing else, so it never matched and every blocked caller was
+/// admitted. Silently.
+///
+/// Revocation is what replaced it, and it is verified against a secret this side
+/// holds rather than against something the caller says about itself. This is
+/// that property, end to end.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_blocked_caller_is_refused_over_the_wire() {
+async fn a_revoked_invitation_is_refused_over_the_wire() {
     with_timeout(async {
         let host_id = Identity::generate();
         let caller_id = Identity::generate();
@@ -113,9 +121,10 @@ async fn a_blocked_caller_is_refused_over_the_wire() {
         let invitation = Invitation::issue(EPOCH + 10);
         let proof = invitation.prove(&caller_id.id(), EPOCH);
 
+        let secret = invitation.secret_bytes();
         let mut gate = Gate::invitation_only();
         gate.add_invitation(invitation);
-        gate.block(caller_id.id());
+        assert_eq!(gate.revoke(&secret), 1, "nothing was revoked");
 
         let host = RotelyxEndpoint::bind(&host_id, NetConfig::direct_only())
             .await

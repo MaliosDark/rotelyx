@@ -1,0 +1,45 @@
+name: upstream
+
+# Weekly, and it is allowed to fail.
+#
+# Vendoring 124,000 lines of somebody else's transport bought independence from
+# their infrastructure and their release schedule. What it cannot buy is the
+# work of noticing when they fix a hole, because `cargo update` will never touch
+# a line in this repository.
+#
+# The first time this check was run by hand it found a live one: a remote memory
+# exhaustion in the QUIC stream assembler, reachable before any handshake
+# completes, already fixed upstream months earlier. Every vendored crate was
+# level with the newest version its upstream had published, and the bug was
+# there anyway, because the fork we took from is itself behind the project it
+# forked. Nobody was going to notice that by reading version numbers.
+#
+# A red job once a week is the cheapest way to keep that from being discovered
+# by somebody else.
+on:
+  schedule:
+    # Mondays, 06:00 UTC. The point is that it does not wait for a push.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check vendored crates against upstream
+        env:
+          # Only to raise the anonymous rate limit on the advisory database.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/watch-upstream
+
+        # Both halves have to run even when the first one fails, because
+        # "the vendored transport drifted" and "a dependency has a hole" are
+        # different questions and stopping at the first hides the second.
+      - name: Check dependencies against the advisory database
+        if: always()
+        run: scripts/audit-dependencies

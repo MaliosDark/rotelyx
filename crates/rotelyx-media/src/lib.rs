@@ -72,12 +72,26 @@
 //! streams. That server sees frame sizes, timing, and which sender a frame came
 //! from. It cannot see content. That is the same bargain the blind mailbox
 //! makes, and it is worth stating before anybody builds on it: **a call routed
-//! through a forwarding unit leaks who is speaking and when**, and silence
-//! suppression makes that a transcript of the conversation's rhythm.
+//! through a forwarding unit leaks who is speaking and when**, and over a
+//! conversation that is its rhythm.
+//!
+//! Half of that is now optional rather than inherent. [`Sender::pad_to`] makes
+//! every datagram come out the same size, so the sizes stop being a voice
+//! activity detector anybody on the path can run. It is off by default because
+//! it costs the difference between the average frame and the largest one, from
+//! everybody, including the people saying nothing, and on a two-party direct
+//! call there is no forwarder to hide from.
+//!
+//! The other half is not optional: the forwarder knows which connection a
+//! datagram arrived on, so it knows who sent it. Hiding that needs onion routing
+//! or a group small enough not to need a forwarder, and saying so is better than
+//! implying a property this does not have. See [`forward`].
 
+pub mod forward;
 pub mod jitter;
 pub mod transport;
 
+pub use forward::{ForwardError, Forwarder, Routed};
 pub use jitter::{JitterBuffer, Mode, Playout};
 pub use transport::{MediaIn, MediaOut, TransportError, MAX_FRAME};
 
@@ -292,6 +306,43 @@ impl SenderKeys {
     }
 }
 
+/// One byte, always, marking where the frame ends and the padding begins.
+pub const PAD_MARKER_LEN: usize = 1;
+
+/// The marker. ISO/IEC 7816-4: a single `0x80`, then zeros.
+const PAD_MARKER: u8 = 0x80;
+
+/// Grow a frame to `to` bytes of plaintext, unambiguously.
+///
+/// The marker is written **whether or not** anything is padded, so a receiver
+/// has one rule rather than two and there is no flag in the header saying which
+/// was used. A flag would have to travel in the clear, and a clear flag saying
+/// "this one is padded" is most of what padding was hiding.
+///
+/// Scanning back from the end over zeros to the first non-zero byte finds the
+/// marker unambiguously, whatever the frame itself ends with, because the frame
+/// always ends before the marker.
+fn pad(frame: &[u8], to: Option<usize>) -> Vec<u8> {
+    let target = to.unwrap_or(0).max(frame.len() + PAD_MARKER_LEN);
+    let mut out = Vec::with_capacity(target);
+    out.extend_from_slice(frame);
+    out.push(PAD_MARKER);
+    out.resize(target, 0);
+    out
+}
+
+/// Take the padding back off.
+fn unpad(plain: &[u8]) -> Result<Vec<u8>, MediaError> {
+    let end = plain
+        .iter()
+        .rposition(|&b| b != 0)
+        .ok_or(MediaError::Truncated)?;
+    if plain[end] != PAD_MARKER {
+        return Err(MediaError::Truncated);
+    }
+    Ok(plain[..end].to_vec())
+}
+
 /// Which participant a datagram claims to come from.
 ///
 /// # Why this is readable before anything is authenticated
@@ -320,6 +371,9 @@ pub struct Sender {
     /// cannot advance" and "the counter has been spent" are different states
     /// and conflating them silently wastes the final value.
     exhausted: bool,
+    /// Size every protected frame is grown to, before encryption. See
+    /// [`Sender::pad_to`].
+    pad_to: Option<usize>,
 }
 
 impl Sender {
@@ -333,6 +387,7 @@ impl Sender {
             keys,
             counter: 0,
             exhausted: false,
+            pad_to: None,
         })
     }
 
@@ -355,7 +410,33 @@ impl Sender {
     /// left for it before it decides how many layers to send, and guessing 18
     /// would be wrong for the last seven minutes of a very long call.
     pub fn overhead(&self) -> usize {
-        self.keys.header(self.counter).len() + TAG_LEN
+        self.keys.header(self.counter).len() + TAG_LEN + PAD_MARKER_LEN
+    }
+
+    /// Make every frame this sender protects come out the same size.
+    ///
+    /// # What this is for
+    ///
+    /// A group call above a handful of people needs a forwarding unit, and a
+    /// forwarding unit sees the size of every datagram it routes. Speech is not
+    /// a constant bit rate: a coded frame of silence is smaller than a coded
+    /// frame of a vowel, and the rate control moves the size again. So the sizes
+    /// alone say who is talking and when, which over a conversation is its
+    /// rhythm, and the rhythm is most of what a transcript would tell you about
+    /// who was arguing with whom.
+    ///
+    /// Padding to a fixed size takes that away. It costs the difference between
+    /// the average frame and the largest one, every frame, from everybody,
+    /// including the people saying nothing. That is the trade and it is the
+    /// caller's to make: on a two-party direct call there is no forwarder to
+    /// hide from and this should stay off.
+    ///
+    /// A size smaller than a frame turns out to be does not truncate it. The
+    /// frame goes out at its own size, because dropping audio to keep a size
+    /// constant would be a worse failure than the one being prevented, and
+    /// the caller sets the size from `payload_budget` anyway.
+    pub fn pad_to(&mut self, bytes: Option<usize>) {
+        self.pad_to = bytes;
     }
 
     /// How many plaintext bytes fit in a datagram of `datagram_bytes`.
@@ -382,11 +463,16 @@ impl Sender {
         let header = self.keys.header(counter);
         let cipher = ChaCha20Poly1305::new_from_slice(&self.keys.key[..]).expect("32 byte key");
 
+        // Padded **inside** the encryption, which is the only place it helps. A
+        // datagram padded after the tag tells anybody counting bytes exactly how
+        // much of it is padding, so the real length is still there to read.
+        let padded = pad(frame, self.pad_to);
+
         let sealed = cipher
             .encrypt(
                 &Nonce::from(self.keys.nonce(counter)),
                 Payload {
-                    msg: frame,
+                    msg: &padded,
                     aad: &header,
                 },
             )
@@ -456,7 +542,7 @@ impl Receiver {
         // unauthenticated header would let anyone lock out a frame they cannot
         // even read, by sending garbage that claims its number.
         self.record(counter);
-        Ok(plain)
+        unpad(&plain)
     }
 
     /// The highest counter accepted so far, and whether anything has been.
@@ -820,6 +906,89 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_frame_survives_being_padded() {
+        for pad_to in [None, Some(0usize), Some(1), Some(200), Some(1000)] {
+            let (mut sender, mut receiver) = pair(1);
+            sender.pad_to(pad_to);
+
+            for len in [0usize, 1, 60, 199] {
+                let frame: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+                let protected = sender.protect(&frame).expect("protect");
+                assert_eq!(
+                    receiver.unprotect(&protected).expect("unprotect"),
+                    frame,
+                    "a {len} byte frame padded to {pad_to:?} did not come back"
+                );
+            }
+        }
+    }
+
+    /// A frame ending in the marker byte, or in zeros, must still come back
+    /// whole. This is what an ambiguous padding scheme gets wrong.
+    #[test]
+    fn a_frame_that_looks_like_padding_still_comes_back() {
+        let (mut sender, mut receiver) = pair(1);
+        sender.pad_to(Some(200));
+
+        for frame in [
+            vec![0x80u8],
+            vec![0x00u8; 40],
+            vec![0x80u8; 40],
+            [vec![7u8; 10], vec![0u8; 30]].concat(),
+            [vec![7u8; 10], vec![0x80u8], vec![0u8; 5]].concat(),
+        ] {
+            let protected = sender.protect(&frame).expect("protect");
+            assert_eq!(
+                receiver.unprotect(&protected).expect("unprotect"),
+                frame,
+                "a frame that ends like padding was truncated"
+            );
+        }
+    }
+
+    /// The property padding exists for.
+    ///
+    /// A forwarding unit sees the size of every datagram it routes and nothing
+    /// else. Speech is not a constant bit rate, so without this those sizes are
+    /// who is talking and when. This is the check that they stop being.
+    #[test]
+    fn a_forwarder_cannot_tell_speech_from_silence_by_size() {
+        let (mut sender, _) = pair(1);
+        sender.pad_to(Some(200));
+
+        // What the codec produces for a vowel, for a consonant, and for a room
+        // with nobody in it.
+        let speech = vec![9u8; 120];
+        let quiet = vec![3u8; 24];
+        let nothing = vec![];
+
+        let sizes: Vec<usize> = [speech, quiet, nothing]
+            .iter()
+            .map(|f| sender.protect(f).expect("protect").len())
+            .collect();
+
+        assert_eq!(
+            sizes.iter().collect::<std::collections::HashSet<_>>().len(),
+            1,
+            "the datagrams came out at {sizes:?}, so their sizes still say who is speaking"
+        );
+    }
+
+    /// And with it off, they do say. Stated as a test so the cost of turning it
+    /// on is not mistaken for the cost of having it at all.
+    #[test]
+    fn without_padding_the_sizes_say_everything() {
+        let (mut sender, _) = pair(1);
+
+        let loud = sender.protect(&vec![9u8; 120]).expect("protect").len();
+        let quiet = sender.protect(&vec![3u8; 24]).expect("protect").len();
+        assert!(
+            loud > quiet,
+            "this test no longer measures what it claims to"
+        );
+    }
+
     /// The overhead is what a call pays on every frame, so it is measured
     /// rather than assumed.
     #[test]
@@ -831,12 +1000,21 @@ mod tests {
         let protected = sender.protect(&frame).expect("protect");
 
         let overhead = protected.len() - frame.len();
-        assert_eq!(overhead, 2 + 16, "1 config byte, 1 counter byte, 16 byte tag");
-        assert_eq!(overhead, 18);
+        assert_eq!(
+            overhead,
+            2 + 16 + PAD_MARKER_LEN,
+            "1 config byte, 1 counter byte, 16 byte tag, 1 padding marker"
+        );
+        assert_eq!(overhead, 19);
+
+        // The marker is written on every frame whether or not anything is
+        // padded, so that a receiver has one rule and no flag has to travel in
+        // the clear saying which frames were padded. That flag would have been
+        // most of what the padding was hiding.
 
         // And it grows only as the counter does. At fifty frames a second these
         // are the whole life of a call.
-        for (counter, expected) in [(0u64, 18usize), (255, 18), (256, 19), (65_536, 20), (1 << 24, 21)] {
+        for (counter, expected) in [(0u64, 19usize), (255, 19), (256, 20), (65_536, 21), (1 << 24, 22)] {
             sender.counter = counter;
             let protected = sender.protect(&frame).expect("protect");
             assert_eq!(

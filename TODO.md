@@ -186,7 +186,9 @@ Everything needed for this is built.
 
 - [x] Identity keys sealed with Argon2id and XChaCha20-Poly1305, with in place
       migration of plaintext keys from earlier builds
-- [x] Persistent blocklist, so a block survives a restart
+- [x] ~~Persistent blocklist, so a block survives a restart~~. Built, then
+      removed: it refused nobody unwilling to be refused. See section 3, where
+      blocking became withdrawing an invitation
 - [ ] Derive the sealing key from the device keystore rather than a passphrase,
       where the platform offers one
 - [x] **Encrypted MLS group state at rest, in the browser**, which is the only
@@ -208,7 +210,43 @@ Everything needed for this is built.
       is `listen` reopening on the same invitation, a `resume` command, or the
       mailbox is a product question. Saving state that nothing can reopen would
       be a file that only ever grows a risk
-- [ ] A backup format that does not create a state rollback vector
+- [x] **A backup format that does not create a state rollback vector**,
+      `crates/rotelyx-core/src/backup.rs`. The first thing it says is what is
+      actually on the table: **a backup is a rollback vector, that is what a
+      backup is**. A file that restores a group to the state it held an hour ago
+      restores the message keys that were used and deleted in that hour, and
+      forward secrecy *is* the deletion of those keys. No format changes that.
+
+      Three narrower things it does instead, each worth having on its own.
+      The file is **sealed**, under the same Argon2id and XChaCha20-Poly1305 as
+      the identity, so a backup on a laptop is not the whole conversation in the
+      clear. The device **notices**: it keeps a high-water mark of the furthest
+      epoch it has ever held, the mark does not live inside the backup, and a
+      restore that moves backwards is refused by name. And the restored copy
+      **cannot send until it has rekeyed**, which `Group::reopen` already
+      enforced with `restored_needs_rekey`.
+
+      The header travels sealed rather than beside the ciphertext, because the
+      header is the input to the rollback check: an attacker who could edit the
+      epoch in the clear would walk any backup past it.
+
+      What the mark does not defend against is written down rather than implied.
+      It is a file on the same device, so an attacker who restores the whole
+      device restores the mark with it. Closing that needs somewhere the device
+      cannot rewrite, or the other member noticing, and the other member noticing
+      already exists: a rolled-back copy must rekey before it speaks, and the
+      rekey is a commit the other side sees. The mark stops the ordinary case,
+      somebody restoring an old file by accident, which is the far likelier one.
+
+      **Writing the tests found a real defect one layer down.** `open_bytes`
+      rejected its own output: its minimum length counted a 32 byte identity
+      secret that arbitrary state does not have, so sealing anything shorter came
+      back as `Truncated { len: 77, min: 97 }`. Fixed, with a round-trip test at
+      0, 1, 12, 31, 32 and 33 bytes.
+
+      Deliberately not wired to a command. The item above it is blocked on a
+      product decision about how two sides find each other again, and a restore
+      that nothing can reopen would be the file that only grows a risk
 
 ### 4. Relay hardening
 
@@ -337,10 +375,42 @@ Everything needed for this is built.
       deposits nothing, so a caller that only opens sockets was free. Refusing
       at a ceiling is the honest failure; running out of descriptors is the same
       denial arriving later and taking the accepted connections with it
-- [ ] **Per-address limits on a mailbox, which belong in the reverse proxy.**
-      The ceiling above bounds the resource whatever is in front, and it does
-      not tell one caller from a thousand. `docs/nginx-relay.conf` has the zones
-      written and they are still not deployed
+- [x] **Per-address limits on a mailbox, in the mailbox.** The ceiling above
+      bounded the resource whatever was in front and could not tell one caller
+      from a thousand. This item used to say the limits belong in the reverse
+      proxy. They do belong there and they were never going to arrive there: the
+      control panel rejected `limit_conn` and `limit_req` twice, and re-measured
+      on 23 August 2026 there is still no refusal at any layer, 25 requests to
+      `/mailbox` and 20 to the site root and not one 429.
+
+      The deeper reason to move them is that **a proxy is not always there**.
+      Somebody running this on their own machine has no nginx and no control
+      panel, and a limit that only exists in a configuration file most operators
+      will never write is a limit most deployments do not have.
+
+      `crates/rotelyx-mailbox-server/src/limits.rs`: 16 concurrent connections
+      per address, 60 a minute with a burst of 20, 4096 in total, idle buckets
+      forgotten after ten minutes. Keyed on the **address**, not the address and
+      port, because a fresh connection gets a fresh source port and keying on
+      the pair would give every connection its own bucket and limit nothing.
+
+      The slot is released on `Drop` rather than by the handler, because a
+      handler that returns early, panics, or is cancelled mid-await still has to
+      give it back, and all three happen on a websocket.
+
+      **Behind a proxy every connection arrives from the proxy**, so keying on
+      the address would put the world in one bucket and the first abuser would
+      lock out everybody, which is worse than no limit. A forwarded address is
+      believed only from an address named with `--trusted-proxy`, and only the
+      right-most hop of `X-Forwarded-For`, which is the one that proxy wrote.
+      Ignored by default: a header is written by whoever is talking to us.
+
+      Eight unit tests and one over a real socket, and the wire one was checked
+      by removing the limit and watching it fail. What it is worth is stated
+      rather than implied: an address is worth less than an identity, it is
+      shared by everyone behind one NAT and cheap for an attacker with a subnet.
+      This stops one host holding sockets until the server runs out. The total
+      cap is what bounds the patient attacker
 - [!] **A bought token links its holder's deposits to each other.** The id names
       nobody, which is not the same as linking nothing: the meter counts against
       it, so the mailbox sees a stable pseudonym with a usage history across
@@ -472,18 +542,41 @@ Everything needed for this is built.
       notes. It costs no authentication, because the credential was a label the
       member chose and never proved anything; what it costs is recognising the
       same person in two places, which is the point
-- [!] **Blocking has never worked against anybody unwilling to be blocked.**
-      Measured: a peer that puts its real identity in the credential is refused,
-      and the same peer putting any other bytes there is admitted. The credential
-      is chosen by the member and nothing proves it. The comment above the
-      safety number called it "the identity the group authenticated"; the group
-      binds it to a signature key and authenticates nothing about who it belongs
-      to. `Gate::admit` also checks the blocklist against the transport peer,
-      which is an ephemeral per-invitation key now, so that never matches either.
-      Revocation does work and is verified against a secret the issuer holds.
-      **This needs a decision, not a patch:** either "block" becomes "revoke the
-      invitation", or the command goes. Leaving a command that silently does
-      nothing is the worst of the three
+- [x] **Blocking has never worked against anybody unwilling to be blocked, so
+      it became revocation.** Measured first: a peer that puts its real identity
+      in the credential was refused, and the same peer putting any other bytes
+      there was admitted, because the credential is chosen by the member and
+      nothing proves it. `Gate::admit` also checked the blocklist against the
+      transport peer, which is an ephemeral per-invitation key, so that never
+      matched at all. Somebody was told a block worked and was reachable anyway.
+
+      **Decision taken: "block" means "withdraw the invitation they came in
+      on".** There is no identity to ban and there was never going to be one,
+      because a caller arrives on a key belonging to one invitation and the name
+      anybody sees is derived per conversation. What can be withdrawn is the
+      invitation, and that is checked against a secret this side holds rather
+      than against something the caller chose to say about itself, which is
+      exactly why it works where the blocklist did not.
+
+      Gone entirely: `Blocklist`, `Paths::blocks`, `Gate::block`,
+      `Gate::unblock`, `Gate::is_blocked`, `Gate::blocked_member`,
+      `AccessError::Blocked`, `refuse_if_blocked`, and the `unblock` and
+      `blocks` commands in both clients. Dead machinery that looks alive is the
+      thing the old item called the worst of the three outcomes.
+
+      Added: `store::revoke_invitation`, `rotelyx invitations` to list what can
+      be withdrawn, and `rotelyx block <n|code>`. The desktop panel says the
+      same thing in the same words. `a_revoked_invitation_is_refused_over_the_wire`
+      replaces the blocking test it used to be, and now proves something true.
+
+      What the interface says out loud, because it would otherwise be assumed:
+      withdrawing stops the next connection and not one already open, and there
+      is no undo. To let somebody back in, issue a new invitation
+- [x] **Decided: the relay stays open.** Open costs capacity and a connection
+      log covering people with no relationship to the operator; it costs no
+      confidentiality, because it forwards ciphertext it cannot read either way.
+      Closing it is one file and one flag and the unit says how, so this is
+      reversible on any day it stops being the right answer
 - [x] **The desktop and web clients bind per invitation now, so they have
       per-conversation names too.** Both listened under the identity, which put
       every caller at one address and left the host unable to tell which
@@ -547,8 +640,47 @@ Everything needed for this is built.
 
 - [?] Which device authorises the next one, and what the user sees when it
       happens
-- [ ] MLS multi device as separate leaves rather than shared keys
-- [ ] Device revocation that is visible to every conversation partner
+- [x] **MLS multi device as separate leaves rather than shared keys.**
+      `Member::for_device(person, device)` gives each device its own signing key
+      and its own leaf. The alternative is devices sharing one key, which is
+      simpler and wrong where it counts: a shared key cannot be taken from one
+      device without taking it from all of them, and nothing in the group can
+      tell which device sent a message, so a stolen phone is indistinguishable
+      from its owner until somebody notices.
+
+      The credential carries `person_len ‖ person ‖ device`, one byte of length
+      rather than a delimiter because a person's bytes are a hash and can contain
+      anything a delimiter could be. `Participant` keeps `identity` meaning the
+      person, so every caller comparing it against a name still works, and gains
+      `device` and `well_formed`. A credential from another implementation is
+      reported as unparseable rather than split at a plausible place, and two
+      unparseable credentials are never "the same person" however identical their
+      bytes.
+
+      **What this does not prove** is written into the doc comment rather than
+      left to be assumed: a credential says what its holder chose to say. What
+      makes it mean anything is who committed the Add, so an interface should say
+      "a device was added by Ana" rather than "Ana added a device"
+- [x] **Device revocation that is visible to every conversation partner**,
+      `Conversation::remove`. A lost device is a leaf that can still decrypt, and
+      forgetting it locally changes nothing, so revocation has to be a commit.
+      Being a commit is what makes it visible: everybody who applies it moves to
+      an epoch derived without that leaf and sees the device in
+      `MembershipChange::removed`. A revocation nobody else notices is one the
+      removed device does not have to respect.
+
+      Keyed on the signature key rather than a leaf index, because an index is a
+      position in a tree that shifts as members come and go and a caller holding
+      one across an epoch would remove somebody else. Removing yourself is
+      refused by name: the commit would be encrypted under a key schedule you
+      have just left.
+
+      **Building this found a live bug.** `receive` computed who joined and left
+      by comparing credential identities. That was wrong twice: the identity is
+      self-asserted, so two members claiming the same one hid a real change, and
+      once devices became separate leaves sharing a person, **adding a second
+      device looked like nothing happening at all**. It compares signature keys
+      now, which is what MLS authenticates
 
 ### 6. Audio calls
 
@@ -574,9 +706,52 @@ wide margin the largest single task remaining in the project.
       a frame the energies alone need 18, the last bands were cut off and read
       back out of zero padding, and the frame decoded 6 dB quiet with no error.
       It had been published as the 6 kbit/s row of the rate table
-- [ ] **Pre-echo, measured at 14.8 dB below the burst that causes it.** A 40 ms
-      window spreads quantisation error over its whole length, so a plosive puts
-      noise into the silence before it. The fix is block switching
+- [x] **Pre-echo, was 14.8 dB below the burst that causes it, now 40.7.** A 40 ms
+      window spreads quantisation error over its whole length, so a plosive put
+      noise into the silence before it. The item said the fix is block switching.
+      It is not the only one, and it is the wrong one here.
+
+      Block switching means noticing the transient and transforming it as
+      several short windows: two more window shapes for the transitions, a
+      second band layout, and a decoder that has to agree with the encoder about
+      every frame's shape or the overlap-add stops reconstructing. This codec
+      has one hop, 20 ms, chosen for a conversation, and the band tables and the
+      pyramid quantiser are built on it.
+
+      `crates/rotelyx-codec/src/tns.rs` reaches the same problem from the other
+      end. A transient in time is a smooth ridge across frequency, so linear
+      prediction *along the coefficients* has something to predict; code the
+      prediction error and the decoder's synthesis filter shapes the noise by
+      the temporal envelope it is rebuilding. The noise lands under the burst
+      that masks it. One flag bit, three of order, four bits per tap, no change
+      to the framing or the latency.
+
+      | measurement | before | after |
+      |---|---:|---:|
+      | plosive, base codec | -14.8 dB | -40.7 dB |
+      | plosive, layered at 30 bytes | -13.6 dB | -29.3 dB |
+      | plosive, layered at 60 bytes | -13.9 dB | -30.9 dB |
+      | gaps between words, `transients_amy` | -28.4 dB | -33.4 dB |
+      | gaps between words, `fricatives_jenny` | -35.0 dB | -38.9 dB |
+
+      Both are bounded now rather than reported, and both codecs are measured,
+      because they were not: the shaping went into the layered codec, the
+      pre-echo test drove the base one, and the first measurement read as no
+      improvement whatsoever. Two encoders sharing one transform drift apart
+      exactly there.
+
+      **The gate is in the time domain, and that is the whole tuning.** The
+      obvious trigger is prediction gain across frequency, and it is wrong: a
+      nasal has harmonics evenly spaced in frequency, predicts beautifully, and
+      has no transient at all. Shaping it flattens the comb the band energies
+      were exploiting. Gating on prediction gain cost 2.1 dB of signal to noise
+      on nasals for a problem they do not have; gating on whether one eighth of
+      the window stands three times above the frame's average costs 0.4 dB and
+      keeps every decibel of the gain. Swept, not guessed: at a ratio of 8 the
+      filter never fires on real speech, at 2 it fires on held sounds
+
+      Still not built, and now a smaller question: block switching, for the case
+      shaping cannot reach
 - [x] **Measure it on speech.** Six neural TTS clips at 48 kHz, in
       `rotelyx-codec/tests/speech/`. Real speech scores 11.7 to 21.1 dB at
       24 kbit/s against 28.2 for the synthetic vowel every published figure
@@ -716,11 +891,94 @@ wide margin the largest single task remaining in the project.
       saving left. Codec 2 700C spends 18 bits on a K=20 mel-spaced envelope
       where Telyx spends about 100 on 24 bands. It needs a speech corpus and it
       ships a codebook, which is why it is not done
-- [ ] **Analysis by synthesis in the residual quantiser.** CELP picks the index
-      minimising perceptual error; Telyx picks the one nearest in the parameter
-      domain. Unmeasured
-- [ ] **A noise pre-processor**, the one part of MELPe built for a loud room.
-      Needs device capture first
+- [x] **Analysis by synthesis in the residual quantiser.** Measured, and the
+      answer moved most of the item somewhere else. The residual quantiser was
+      already doing it: `rvq::encode` projects the residual onto each stage's
+      shape and subtracts the *quantised* gain, so the next stage corrects the
+      error the decoder will really make, and the pyramid search maximises the
+      match with the target rather than rounding in a parameter. For a
+      one-dimensional gain the error is a parabola with its minimum at the
+      projection, so the nearest level is the best level and there is nothing to
+      win.
+
+      The gap was one level up, in the **band energy**. The encoder measured a
+      band's energy and rounded it to the grid, which is the best answer to "how
+      loud was this band" and not to "which level, times the shape the decoder
+      will hold, lands closest to the coefficients". The pyramid's shape is not
+      the direction the energy was measured along, so the band always came out
+      slightly too loud, always in the same direction.
+
+      **It turns out to be free.** The pyramid codes direction and every search
+      normalises before it starts, so a band's shape bits do not depend on its
+      level at all. Only the bit allocation does. `refine_levels` proposes the
+      best level and keeps it only when the split of bits across bands comes out
+      identical, which costs no bits, no second search, and cannot make a frame
+      worse because a change that does not reduce the error is not taken.
+
+      | bytes a frame | nearest the energy | what ships now | the unreachable ideal |
+      |---|---:|---:|---:|
+      | 20 | 8.45 dB | 8.85 dB | 9.01 dB |
+      | 30 | 14.07 dB | 14.39 dB | 14.74 dB |
+      | 60 | 26.26 dB | 26.32 dB | 26.77 dB |
+      | 120 | 28.23 dB | 28.23 dB | 28.95 dB |
+
+      End to end on the recorded speech it is 0.1 to 0.3 dB, never negative. A
+      small number, stated as small: the per-band figure is larger because it
+      counts only funded bands, and full-band error is dominated by the bands
+      that got no bits at all
+- [x] **The same for the layered codec, and the trim moved inside it.** The
+      trick above rests on the encoder knowing the shape the decoder will hold,
+      and here it did not: `encode` produced every layer and `rotelyx-audio`
+      called `frame.within(budget)` afterwards, against a budget taken from live
+      congestion. The best level given four layers is not the best level given
+      one, so the choice was being made against a frame nobody would receive.
+
+      **Decision taken: the budget goes into the encoder.** `encode_within`
+      trims the layers itself, then chooses each band's level against the stages
+      that actually survived. `encode` is that call with no ceiling, so nothing
+      else had to change. The pacer's number is now read before the encode
+      rather than after it, which it always could have been.
+
+      **Accepting band by band is what made it worth anything.** A level may
+      only move if the frame comes out the same shape, because the energies
+      decide the plan and the coded size of those energies decides the budget
+      the plan is computed against. Proposing every band at once was refused
+      four times in five, 2938 of 3552 frames, since one band moving is usually
+      enough to change the arithmetic-coded length of the whole stream. Tried
+      one band at a time, what one band spoils no longer costs the other twenty
+      three.
+
+      | clip | 12 kbit/s | 16 | 24 |
+      |---|---|---|---|
+      | digits_alan | 4.3 to 4.4 | 7.7 to 7.8 | 10.9 to 11.1 |
+      | fricatives_jenny | 5.8 to 5.9 | 9.0 to 9.2 | 11.8 to 11.9 |
+      | nasals_libritts | 8.5 to 8.7 | 13.2 to 13.3 | 17.9 to 17.9 |
+      | plosives_ryan | 6.2 to 6.2 | 10.0 to 10.1 | 13.8 to 14.0 |
+      | sibilants_lessac | 7.7 to 7.8 | 11.1 to 11.2 | 14.7 to 14.9 |
+      | transients_amy | 3.8 to 3.8 | 7.7 to 7.7 | 11.3 to 11.4 |
+
+      Better in fourteen of eighteen, unchanged in four, worse in none. Costs
+      2.4% of real time against 1.9% for the base codec, where the bar is 25%.
+
+      Two measurements exist now that did not: `layered_speech_across_the_budgets`
+      and `the_layered_codec_runs_faster_than_real_time`. **Nothing measured the
+      shipping codec on speech or on the clock at all**, which is how temporal
+      noise shaping came to be wired into one codec and measured on the other
+- [x] **A noise pre-processor**, `crates/rotelyx-audio/src/denoise.rs`, spectral
+      subtraction over minimum-statistics noise estimation, taking 8 dB off a
+      steady room. It sits between the echo canceller and the encoder, which is
+      the only order that works: the canceller is predicting what the speaker
+      played, and denoising before it would change the thing it is predicting.
+
+      The stated prerequisite was wrong. This needs a capture stream, not a
+      capture device, and the loopback the call already runs on is one. Writing
+      "needs device capture first" is how an item nobody can start stays open.
+
+      What it cannot do is written into a test rather than left implied:
+      `a_sound_that_never_stops_is_treated_as_noise` pins the limitation that a
+      minimum-statistics estimator learns any continuous sound as the floor. That
+      is correct for a fan and wrong for a held note, and speech survives it only
+      because speech stops
 - [x] **A fast transform.** The MDCT was written from its definition and cost
       270% of real time on one core for one call, which meant the codec could
       not have run at all: 1.8 million multiplies and as many calls to `cos` per
@@ -728,7 +986,50 @@ wide margin the largest single task remaining in the project.
       0.5%, and the whole codec is 1.2%. It is also 775 times more accurate,
       because an FFT accumulates in a tree of depth nine and the definition
       accumulates in a line of length 1920
-- [ ] Block switching, long term prediction
+- [x] **Block switching, long term prediction.** Both answered, neither built,
+      and the reasons are different.
+
+      **Block switching** was wanted for pre-echo, and pre-echo is fixed: `tns`
+      took it from -14.8 dB to -40.7. Block switching would cost two more window
+      shapes, a second band layout and a decoder that has to agree with the
+      encoder about every frame's shape, for a problem that is now bounded and
+      tested. It stays unbuilt on purpose rather than by omission.
+
+      **Long term prediction was built, measured, and removed.** It is worth
+      writing down in full because the measurement that justified it was wrong in
+      a way that looked right.
+
+      The first measurement predicted each window from the genuinely delayed
+      signal and reported a median gain of 1.8 to 5.4 dB, with 60 to 87 percent
+      of frames over a decibel. Convincing, and **unreachable**: with a 20 ms hop
+      everything reconstructed ends where the current window begins, so
+      predicting 1920 samples at a lag of 120 to 600 reads samples from after
+      that point, which no decoder has.
+
+      What is available is the last `lag` samples repeated, which is what a
+      periodic signal's continuation is and is what CELP's adaptive codebook does
+      for the same reason. That is worth **0.3 to 1.0 dB** on the recorded
+      speech, against fourteen bits, which at 30 bytes a frame is 6% of it.
+
+      Built before that was understood: `ltp.rs`, closed loop, with a decoder
+      inside the encoder so both sides predicted from the same reconstruction.
+      The plumbing was correct, confirmed by disabling the predictor and watching
+      every number return exactly to baseline. It still made **every clip worse
+      at every rate, by 0.6 to 3.0 dB**, and raising the gate to fire only on
+      frames with 6 dB of gain walked the loss back towards zero and never past
+      it.
+
+      Two reasons. The reconstruction is not the main one: open loop on the clean
+      signal is worth no more than closed loop, 0.7 dB against 0.6. The hop is.
+      And the second generalises past this feature: subtracting the periodic part
+      flattens the spectrum, and band energies plus normalised shapes are
+      efficient *because* a speech spectrum is peaky. This codec pays twice for
+      the same idea, which is the same mechanism that made temporal noise shaping
+      cost 2.1 dB on nasals until it was gated on the time domain instead.
+
+      Removed rather than left switched off. What survives is
+      `measure_what_long_term_prediction_would_buy`, which now reports open loop
+      and closed loop side by side, because the two being equal is the finding
 - [x] **A call, end to end, in one binary**: `cargo run -p rotelyx-media
       --example call -- in.wav out.wav [loss%] [fidelity]`. The codec had no
       consumer and the media layer had no application; nothing in this
@@ -834,10 +1135,47 @@ wide margin the largest single task remaining in the project.
       concealment and echo cancellation are decades of work each. Taking them
       as libraries while keeping our own transport and frame encryption is the
       only version of this that ships
-- [ ] A forwarding unit for group calls. The frame format already suits one:
-      the header is authenticated but not encrypted, so it can route by sender
-      without reading anything. What it will see is who speaks and when, which
-      with silence suppression is the rhythm of the conversation
+- [x] **A forwarding unit for group calls**, `rotelyx-media::forward`. The frame
+      format already suited one: the header is authenticated but not encrypted,
+      so it routes by sender without reading anything. Below a handful of people
+      nothing is needed, but a six-way mesh asks a phone on a home connection to
+      upload five streams at once, and that is where calls happen.
+
+      **The leak this item named turned out to be two leaks, and one of them
+      closes.** Sizes were the first: speech is not a constant bit rate, a coded
+      frame of silence is smaller than a vowel, so datagram lengths alone are a
+      voice activity detector anybody on the path can run. `Sender::pad_to` makes
+      every frame come out the same size, padded **inside** the encryption,
+      because padding after the tag tells anybody counting bytes exactly how much
+      of it is padding.
+
+      ISO/IEC 7816-4, and the marker is written on every frame whether or not
+      anything is padded. That costs one byte always, overhead 18 to 19, and it
+      buys there being no flag in the clear saying which frames were padded,
+      which would have been most of what the padding was hiding.
+
+      The second leak does not close: the forwarder knows which connection a
+      datagram arrived on, so it knows who sent it. Hiding that needs onion
+      routing or a group small enough not to need a forwarder, and it is written
+      down rather than implied.
+
+      **The routing does check one thing.** The sender id in the header is
+      associated data: the recipients can tell it was not altered, the forwarder
+      holds no key and cannot check anything. So a participant could put somebody
+      else's id in its header, and the recipients would refuse it *after* the
+      impersonated stream had consumed their replay window at those counters,
+      which silences a person without ever holding their key. `route` refuses a
+      claimed id that does not match the connection it arrived on, which is the
+      thing the forwarder actually knows.
+
+      Ten tests, including that a speaker is not sent their own voice back, that
+      what comes out still opens, and that a replay is still forwarded, because
+      refusing one is the recipient's job and a forwarder dropping it would be
+      deciding something it cannot check.
+
+      Not a server: no sockets, no admission, no spawning. That shell belongs to
+      whatever runs it, the way `rotelyx-relay` wraps its admission around
+      `rotelyx-relay-proto`
 
 ### 7. Mobile clients
 
@@ -926,8 +1264,15 @@ wide margin the largest single task remaining in the project.
 
 - [x] Deploy `rotelyx-mailbox-server` to `mail-rotelyx.ideoa.co:3341`, verified
       end to end: `101 Switching Protocols` through Cloudflare, pfSense and nginx
-- [ ] Upload `site/` to `rotelyx.ideoa.co`, and add the same `location /mailbox`
-      block there so the page finds the mailbox at its own origin
+- [x] Upload `site/` to `rotelyx.ideoa.co`, and add the same `location /mailbox`
+      block there so the page finds the mailbox at its own origin. Verified from
+      outside on 2026-08-22: `scripts/verify-deployment` reports both served wasm
+      artifacts matching the source, and `scripts/browser-test/run` against
+      `https://rotelyx.ideoa.co/chat.html` drives two real browsers through a
+      whole conversation, safety numbers agreeing and messages delivered both
+      ways. Delivery is what proves the proxy block: the page derives its mailbox
+      from its own origin, so a message arriving at all means `wss://.../mailbox`
+      is being routed
 - [x] Persist mailbox state, encrypted under an operator passphrase, so a
       restart does not drop every uncollected envelope
 - [x] Message history survives a reload, sealed under the same key as the
@@ -991,10 +1336,8 @@ wide margin the largest single task remaining in the project.
       deliberate: no `--allow <file>` and no `--open`, because an open relay
       should be a decision somebody made rather than the result of forgetting a
       flag. No allowlist exists on this machine, so it runs `--open`
-- [ ] **Decide whether the relay stays open.** Open costs capacity and logs, not
-      confidentiality: it forwards ciphertext it cannot read either way. But its
-      connection log covers people with no relationship to the operator. Closing
-      it is one file and one flag, and the unit says how
+- [x] **Decided: the relay stays open**, recorded in section 3 with what it
+      costs. Reversible: one file and one flag, and the unit says how
 - [x] **Verified the module in a browser before deploying it.** Built it, served
       `site/` locally against a mailbox of its own, and ran
       `scripts/browser-test/run` at it: two tabs, conversation established,
@@ -1013,10 +1356,52 @@ wide margin the largest single task remaining in the project.
 
 ## Ongoing
 
-- [ ] **Upstream security patch watch.** Vendoring means fixes no longer arrive
-      on their own. Somebody has to watch the upstream repository and port
-      security patches by hand. This is the price of owning the code and it is
-      not optional in a cryptographic project
+- [x] **Upstream security patch watch**, `scripts/watch-upstream` and a weekly
+      job in `.github/workflows/upstream.yml`, with the verdict on every
+      advisory written down in `docs/UPSTREAM.md`. Vendoring means fixes no
+      longer arrive on their own, and the first run found one that had been
+      missing for two months: **RUSTSEC-2026-0185**, remote memory exhaustion in
+      the QUIC stream assembler, reachable before a handshake completes. A peer
+      that leaves a gap between every fragment leaves defragmentation nothing to
+      join, so each one-byte frame keeps a whole packet buffer alive. Ported
+      from quinn PR 2694 and pinned by
+      `fragments_that_never_touch_are_refused_before_memory_runs_out`.
+
+      What makes this worth having is why version numbers could not have found
+      it. Every vendored crate was level with the newest release its upstream
+      had published. The QUIC crates come from N0's fork of quinn, renamed and
+      renumbered to 1.x: `noq-proto 1.1.1` was the newest `noq-proto` in
+      existence and was still behind quinn. The advisory is filed under
+      `quinn-proto`, and searching for `noq` finds nothing. So the watch looks
+      advisories up under the original name, and clears each one by reading this
+      tree rather than by comparing versions
+- [x] **Dependency advisory check**, `scripts/audit-dependencies`, in the same
+      weekly job. The watch above covers the 124,000 vendored lines where fixes
+      never arrive on their own; this covers the other 719 packages, where fixes
+      do arrive and still only when somebody is given a reason to run
+      `cargo update`. Nothing had ever looked at that side. It matches every
+      locked version against the RustSec database, separates vulnerabilities
+      from unmaintained notices, and exits non-zero until every advisory id has
+      a written verdict in `docs/UPSTREAM.md`.
+
+      The first run found eight. One was real and fixed by updating: **h2**
+      queueing empty DATA frames without limit, reached through the DNS
+      resolver, 0.4.15 to 0.4.18. Six were unreachable and the reading is what
+      established that: the libcrux AEAD crates are in `Cargo.lock` through a
+      dev-dependency of a dependency and are never compiled, and the two
+      `libcrux-sha3` bugs are in the incremental and AVX2 APIs while `hpke-rs`
+      calls only the one-shot one. A checker that reads the lock file cannot
+      tell a package apart from a package that is actually built, which is why
+      the verdicts are written down rather than computed.
+
+      The eighth has no fix and is a constraint on future work rather than a
+      finding: **RUSTSEC-2023-0071**, the Marvin timing attack on `rsa`, with no
+      patched version in existence. It reaches nothing today because no shipped
+      binary performs an RSA private-key operation: `blind_sign` appears only
+      under `#[cfg(test)]`, and both the mailbox server and the clients hold
+      only the issuer's public key. **An issuer built on this crate and exposed
+      to the network would leak the key that mints capability tokens.** That is
+      a decision to take when the issuer is built, not after
 - [x] **Hostile input tests on every parser reachable from the network**, in
       `hostile_input.rs` in five crates, the fifth being `rotelyx-net`: the
       relay URL and the endpoint id, which are the two things it parses from
@@ -1064,8 +1449,28 @@ wide margin the largest single task remaining in the project.
       `Tag` derived `PartialEq`, so it short-circuited on secret-derived bytes.
       **It was not exploitable** (reaching the comparison requires already
       knowing the tag) and it is constant time now regardless
-- [ ] Measure whether the primitive libraries are constant time, which this
-      review explicitly did not do and did not claim
+- [x] **Measure whether the primitive libraries are constant time**, which that
+      review explicitly did not do and did not claim.
+      `crates/rotelyx-crypto/tests/constant_time.rs` is a dudect measurement:
+      time an operation over two classes of input chosen so a leak separates
+      them, Welch's t-test, |t| over 10 is not noise. In release, the control
+      leaks at -650, `subtle::ConstantTimeEq` reads 1.3 and XChaCha20-Poly1305
+      rejecting a forged tag reads 0.2. Those two carry every first-party secret
+      comparison and every sealed file.
+
+      **The null control is what makes it worth anything.** An earlier version
+      gave each class its own array and reported `subtle::ConstantTimeEq`
+      leaking at t = 65, reproducibly across runs. It was measuring the distance
+      between two addresses: two buffers holding data that differed in the *same*
+      byte produced t = -26 on their own. Both classes now read one buffer,
+      flipped and restored outside the timed region. Without a control that
+      nothing real could separate, that would have been written up as a finding
+      in `subtle`.
+
+      The harness also refuses to report an all-clear it did not earn: it
+      measures a comparison written to leak first, and if the machine is too
+      noisy to see that, it says so and stops rather than passing. Still
+      unmeasured: `ed25519-dalek`, `ml-kem`, and the RSA blind signature path
 
 ---
 

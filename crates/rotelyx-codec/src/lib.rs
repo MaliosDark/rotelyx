@@ -76,6 +76,7 @@ pub mod grouped;
 pub mod layered;
 pub mod pvq;
 pub mod rvq;
+pub mod tns;
 pub mod mdct;
 pub mod rangecoder;
 
@@ -242,7 +243,23 @@ impl TelyxEncoder {
             return Err(CodecError::WrongFrameSize { got: audio.len() });
         }
 
-        let coefficients = mdct::forward(audio, &self.window);
+        let mut coefficients = mdct::forward(audio, &self.window);
+
+        // Shaping happens before the energies are measured: what gets quantised
+        // from here on is the prediction error, and the levels have to describe
+        // that rather than the coefficients it came from.
+        // Two separate questions. Whether the frame carries shaping bits at all
+        // depends only on the rate, which the decoder also knows, so it stays out
+        // of the bitstream. Whether the filter in those bits is active depends on
+        // the audio, which the decoder does not know, so it travels as the flag.
+        let shaping = tns::allowed(self.bytes_per_frame);
+        let filter = if shaping && tns::is_transient(audio) {
+            tns::analyse(&coefficients)
+        } else {
+            tns::Filter::default()
+        };
+        filter.apply(&mut coefficients);
+
         let measured = bands::energies(&coefficients);
 
         // Quantise the energies **first**, and use the quantised values for
@@ -254,15 +271,40 @@ impl TelyxEncoder {
         // wrong bits for every band and the output is noise. It was written
         // that way first, and the symptom was a codec that appeared to work at
         // every stage in isolation.
-        let levels: Vec<u8> = measured
+        let measured_levels: Vec<u8> = measured
             .iter()
             .map(|&e| coarsen(energy_to_level(e), self.quantum))
             .collect();
-        let energies: Vec<f32> = levels.iter().map(|&l| level_to_energy(l)).collect();
+        let energies: Vec<f32> = measured_levels.iter().map(|&l| level_to_energy(l)).collect();
 
         let shape = bands::normalise(&coefficients, &energies);
 
+        // The shapes are quantised before the levels are written, so the levels
+        // can be chosen against the shape the decoder will hold rather than
+        // against the energy that was measured. The level section is a fixed
+        // number of bits, so the budget is known without having written it.
+        let spent = if shaping { filter.bits() } else { 0 } + BANDS * self.level_bits;
+        let budget = self.bytes_per_frame.saturating_mul(8).saturating_sub(spent);
+        let allocation = bands::allocate(&energies, budget);
+
+        let coded: Vec<Option<CodedShape>> = (0..BANDS)
+            .map(|b| quantise_band_shape(&shape[bands::range(b)], allocation[b]))
+            .collect();
+
+        let levels = refine_levels(
+            &coefficients,
+            &coded,
+            measured_levels,
+            self.quantum,
+            self.coded_levels,
+            &allocation,
+            budget,
+        );
+
         let mut encoder = Encoder::new();
+        if shaping {
+            filter.write(&mut encoder);
+        }
 
         for b in 0..BANDS {
             if self.started {
@@ -282,12 +324,14 @@ impl TelyxEncoder {
         self.started = true;
 
         // --- shape, with what is left of the budget ---
-        let spent = encoder.len_bits();
-        let budget = self.bytes_per_frame.saturating_mul(8).saturating_sub(spent);
-        let allocation = bands::allocate(&energies, budget);
+        debug_assert_eq!(
+            encoder.len_bits(),
+            spent,
+            "the level section is not the size the allocation was computed against"
+        );
 
-        for b in 0..BANDS {
-            write_band_shape(&mut encoder, &shape[bands::range(b)], allocation[b]);
+        for coded in &coded {
+            write_coded_shape(&mut encoder, coded.as_ref());
         }
 
         let mut out = encoder.finish();
@@ -360,6 +404,11 @@ impl TelyxDecoder {
         self.frames_decoded = self.frames_decoded.wrapping_add(1);
 
         let mut decoder = Decoder::new(frame);
+        let filter = if tns::allowed(self.bytes_per_frame) {
+            tns::Filter::read(&mut decoder)
+        } else {
+            tns::Filter::default()
+        };
 
         let mut levels = [0u8; BANDS];
         for b in 0..BANDS {
@@ -391,7 +440,8 @@ impl TelyxDecoder {
             read_band_shape(&mut decoder, &mut shape[bands::range(b)], allocation[b], seed);
         }
 
-        let coefficients = bands::denormalise(&shape, &energies);
+        let mut coefficients = bands::denormalise(&shape, &energies);
+        filter.undo(&mut coefficients);
         Ok(self.overlap.push(&mdct::inverse(&coefficients, &self.window)))
     }
 }
@@ -409,30 +459,159 @@ impl TelyxDecoder {
 /// coefficients, and `k` sets the rate continuously. A 32 coefficient band can
 /// be coded in six bits or in thirty two, and both are real descriptions of the
 /// whole band rather than a precise description of a fraction of it.
-fn write_band_shape(encoder: &mut Encoder, shape: &[f32], bits: usize) {
+/// One band's shape once quantised: what goes on the wire, and what the decoder
+/// will hold when it comes back off.
+///
+/// Both, because the encoder needs the second to answer a question it cannot
+/// answer from the first. See [`refine_levels`].
+struct CodedShape {
+    index: u64,
+    width: usize,
+    decoded: Vec<f32>,
+}
+
+/// Quantise one band's shape, without writing it anywhere yet.
+fn quantise_band_shape(shape: &[f32], bits: usize) -> Option<CodedShape> {
     let n = shape.len();
     if n == 0 {
-        return;
+        return None;
     }
-
     let k = pvq::pulses_for(n, bits);
     if k == 0 {
         // Nothing affordable. The band is reconstructed from its energy alone,
         // which is noise at the right level rather than silence.
-        return;
+        return None;
     }
+    let y = pvq::search(shape, k);
+    Some(CodedShape {
+        index: pvq::index(&y),
+        width: pvq::bits(n, k).ceil() as usize,
+        decoded: pvq::to_shape(&y),
+    })
+}
 
-    let index = pvq::index(&pvq::search(shape, k));
-    let width = pvq::bits(n, k).ceil() as usize;
-
+fn write_coded_shape(encoder: &mut Encoder, coded: Option<&CodedShape>) {
+    let Some(coded) = coded else {
+        return;
+    };
     // The index fits in `width` bits by construction, but a codebook can need
     // more than 32, so it is written in two halves.
-    if width > 32 {
-        encoder.write_bits((index >> 32) as u32, width - 32);
-        encoder.write_bits(index as u32, 32);
+    if coded.width > 32 {
+        encoder.write_bits((coded.index >> 32) as u32, coded.width - 32);
+        encoder.write_bits(coded.index as u32, 32);
     } else {
-        encoder.write_bits(index as u32, width);
+        encoder.write_bits(coded.index as u32, coded.width);
     }
+}
+
+/// Choose each band's level against the shape the decoder will actually hold,
+/// rather than against the energy that was measured.
+///
+/// # The two questions that are not the same question
+///
+/// The encoder measures a band's energy and rounds it to the nearest level on
+/// the grid. That is the best answer to "how loud was this band". It is not the
+/// best answer to "which level, times *this* shape, lands closest to the
+/// coefficients", and the second is the one that decides what is heard, because
+/// the decoder rebuilds the band as level times shape.
+///
+/// They differ because the pyramid's shape is not the direction the energy was
+/// measured along. The error is a parabola in the gain with its minimum at the
+/// projection `<x, s> / <s, s>`, and the measured energy sits above that
+/// whenever the shape is imperfect, which is always. So the band comes out
+/// slightly too loud, and always in the same direction.
+///
+/// # Why this is free
+///
+/// The pyramid codes direction and every search normalises before it starts, so
+/// a band's shape bits do not depend on its level at all. Only the bit
+/// allocation does. A level may therefore move at no cost whenever the
+/// allocation does not follow it, which is what the check below is for: propose
+/// the best level, keep it only if the split of bits across bands comes out
+/// identical. No extra bits, no second search, and it cannot make the frame
+/// worse because a change that does not reduce the error is not taken.
+///
+/// # What it is worth, measured
+///
+/// `measure_the_gain_left_on_the_table` reports it per rate, and the shape of
+/// the answer is that it grows as the rate falls, because a starved band gets a
+/// cruder shape and a cruder shape projects further from the energy:
+///
+/// | bytes a frame | as sent | with this | the unreachable ideal |
+/// |---|---:|---:|---:|
+/// | 20 | 8.45 dB | 8.85 dB | 9.01 dB |
+/// | 30 | 14.07 dB | 14.39 dB | 14.74 dB |
+/// | 60 | 26.26 dB | 26.32 dB | 26.77 dB |
+/// | 120 | 28.23 dB | 28.23 dB | 28.95 dB |
+///
+/// Nothing at the top of the range and a third of a decibel at the bottom,
+/// which is where a call spends its worst moments.
+fn refine_levels(
+    coefficients: &[f32],
+    coded: &[Option<CodedShape>],
+    mut levels: Vec<u8>,
+    quantum: u8,
+    coded_levels: usize,
+    allocation: &[usize],
+    budget: usize,
+) -> Vec<u8> {
+    let ceiling = (coded_levels * quantum as usize).min(256) as i16;
+
+    for b in 0..BANDS {
+        let Some(shape) = coded[b].as_ref() else {
+            continue;
+        };
+        let x = &coefficients[bands::range(b)];
+        let ss: f32 = shape.decoded.iter().map(|s| s * s).sum();
+        if ss <= 1e-12 {
+            continue;
+        }
+
+        let error_at = |gain: f32| -> f64 {
+            x.iter()
+                .zip(&shape.decoded)
+                .map(|(&c, &s)| {
+                    let d = (c - gain * s) as f64;
+                    d * d
+                })
+                .sum()
+        };
+
+        let here = levels[b];
+        let mut best = error_at(level_to_energy(here));
+        let mut best_at = here;
+
+        // Four steps either way is more than the projection can ever move a
+        // level, and stopping there keeps this from being a search.
+        for step in -4i16..=4 {
+            let candidate = (here as i16 + step * quantum as i16).clamp(0, ceiling - 1) as u8;
+            let candidate = coarsen(candidate, quantum);
+            if candidate == here {
+                continue;
+            }
+            let e = error_at(level_to_energy(candidate));
+            if e < best {
+                best = e;
+                best_at = candidate;
+            }
+        }
+
+        if best_at == here {
+            continue;
+        }
+
+        // Only if the bits fall the same way. Otherwise the decoder would split
+        // the budget differently from the encoder that wrote the shapes, and
+        // read every band from the wrong place.
+        let mut trial = levels.clone();
+        trial[b] = best_at;
+        let trial_energies: Vec<f32> = trial.iter().map(|&l| level_to_energy(l)).collect();
+        if bands::allocate(&trial_energies, budget) == allocation {
+            levels = trial;
+        }
+    }
+
+    levels
 }
 
 /// Invent a band's texture at unit level.
@@ -578,6 +757,53 @@ mod tests {
         );
     }
 
+    /// The same, on the codec a call actually runs.
+    ///
+    /// The one above drives `TelyxEncoder`. Voice goes through
+    /// `LayeredEncoder`, which does strictly more work: it codes every band
+    /// into stages, trims to the link's budget, and then chooses each band's
+    /// level against the stages that survived, one band at a time. That last
+    /// part is an arithmetic encode per band it wants to move, so it is the
+    /// part worth watching.
+    #[test]
+    fn the_layered_codec_runs_faster_than_real_time() {
+        use crate::layered::{LayeredDecoder, LayeredEncoder};
+        use std::time::Instant;
+
+        let signal = voice_like(mdct::FRAME * 60);
+        let bytes = 60;
+
+        let mut encoder = LayeredEncoder::new(bytes);
+        let mut decoder = LayeredDecoder::new(bytes);
+
+        let frames: Vec<&[f32]> = (0..signal.len() - mdct::WINDOW)
+            .step_by(mdct::FRAME)
+            .map(|s| &signal[s..s + mdct::WINDOW])
+            .collect();
+
+        let start = Instant::now();
+        let mut sink = 0.0f32;
+        for f in &frames {
+            let frame = encoder.encode_within(f, bytes).expect("encode");
+            sink += decoder.decode(&frame).expect("decode")[0];
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+
+        let audio_seconds = frames.len() as f64 * mdct::FRAME as f64 / mdct::SAMPLE_RATE as f64;
+        let load = elapsed / audio_seconds;
+
+        assert!(
+            load < 0.25,
+            "the layered codec costs {:.0}% of real time on one core, so a call \
+             would not run (sink {sink})",
+            load * 100.0
+        );
+        println!(
+            "\n  layered encode and decode together: {:.1}% of real time on one core",
+            load * 100.0
+        );
+    }
+
     fn snr_db(original: &[f32], decoded: &[f32]) -> f32 {
         let signal: f32 = original.iter().map(|s| s * s).sum();
         let noise: f32 = original
@@ -668,6 +894,168 @@ mod tests {
         let funded: f32 = (0..BANDS).filter(|&b| alloc[b] > 0).map(|b| e[b]*e[b]*bands::range(b).len() as f32).sum();
         let total: f32 = (0..BANDS).map(|b| e[b]*e[b]*bands::range(b).len() as f32).sum();
         println!("\n  energy in funded bands: {:.1}%", 100.0*funded/total);
+    }
+
+    /// How much is left on the table by choosing a band's level before its shape
+    /// is known.
+    ///
+    /// The encoder measures a band's energy, rounds it to the nearest level on
+    /// the grid, and sends that. The decoder rebuilds the band as that level
+    /// times a shape the pyramid quantiser approximated. Those are two different
+    /// questions. The level nearest the measured energy is the best answer to
+    /// "how loud was this band"; it is not the best answer to "which level, times
+    /// *this* shape, lands closest to the coefficients", because the shape is not
+    /// the direction the energy was measured along.
+    ///
+    /// The gap is the projection: the error is smallest at the level nearest
+    /// `<c, s> / <s, s>`, and the measured energy overshoots that whenever the
+    /// shape is imperfect, which is always.
+    ///
+    /// Four numbers, and they are compared against each other rather than
+    /// against what the encoder does today, because the encoder now does the
+    /// second of them. See [`refine_levels`].
+    ///
+    /// - **nearest the energy**: round the measured energy to the grid, which is
+    ///   what was done before this was measured.
+    /// - **allocation kept**: the best level that leaves the split of bits
+    ///   across bands untouched, so the shape bits do not change and it is free.
+    ///   This is what ships.
+    /// - **best level**: the best the grid can express, ignoring what it does to
+    ///   the allocation. Not reachable without coding the frame twice.
+    /// - **projection**: the exact `<x, s> / <s, s>`, off the grid entirely. The
+    ///   ceiling, and only here to show how much of the gap is the grid's
+    ///   coarseness rather than the choice of level.
+    #[test]
+    #[ignore = "a measurement, not a bound"]
+    fn measure_the_gain_left_on_the_table() {
+        let signal = voice_like(FRAME * 40);
+        let window = mdct::window();
+        println!();
+        for rate in [20usize, 30, 60, 120] {
+        let quantum = level_quantum(rate);
+
+        let mut current = 0.0f64;
+        let mut best_level = 0.0f64;
+        let mut projection = 0.0f64;
+        let mut original = 0.0f64;
+        let mut moved = 0usize;
+        let mut bands_counted = 0usize;
+        let mut constrained = 0.0f64;
+
+        for start in (0..signal.len() - WINDOW).step_by(FRAME) {
+            let coefficients = mdct::forward(&signal[start..start + WINDOW], &window);
+            let measured = bands::energies(&coefficients);
+            let levels: Vec<u8> = measured
+                .iter()
+                .map(|&e| coarsen(energy_to_level(e), quantum))
+                .collect();
+            let energies: Vec<f32> = levels.iter().map(|&l| level_to_energy(l)).collect();
+            let shape = bands::normalise(&coefficients, &energies);
+
+            let spent = BANDS * 6;
+            let allocation =
+                bands::allocate(&energies, rate * 8 - spent.min(rate * 8));
+
+            let mut candidate_levels = levels.clone();
+            let mut per_band: Vec<(usize, f64, f64, u8)> = Vec::new();
+
+            for b in 0..BANDS {
+                let range = bands::range(b);
+                let n = range.len();
+                if allocation[b] == 0 {
+                    continue;
+                }
+
+                // Exactly what the decoder will hold for this band.
+                let mut encoder = Encoder::new();
+                let quantised = quantise_band_shape(&shape[range.clone()], allocation[b]);
+                write_coded_shape(&mut encoder, quantised.as_ref());
+                let bytes = encoder.finish();
+                let mut decoder = Decoder::new(&bytes);
+                let mut decoded = vec![0.0f32; n];
+                read_band_shape(&mut decoder, &mut decoded, allocation[b], 1);
+
+                let c = &coefficients[range];
+                let ss: f32 = decoded.iter().map(|s| s * s).sum();
+                if ss <= 1e-12 {
+                    continue;
+                }
+                let cs: f32 = c.iter().zip(&decoded).map(|(&x, &s)| x * s).sum();
+
+                let error_at = |gain: f32| -> f64 {
+                    c.iter()
+                        .zip(&decoded)
+                        .map(|(&x, &s)| {
+                            let d = (x - gain * s) as f64;
+                            d * d
+                        })
+                        .sum()
+                };
+
+                let sent = energies[b];
+                let now = error_at(sent);
+
+                // Every level the grid can express, near the one being sent.
+                let here = levels[b];
+                let mut best = now;
+                let mut best_at = here;
+                for step in -4i16..=4 {
+                    let candidate = (here as i16 + step * quantum as i16).clamp(0, 255) as u8;
+                    let candidate = coarsen(candidate, quantum);
+                    let e = error_at(level_to_energy(candidate));
+                    if e < best {
+                        best = e;
+                        best_at = candidate;
+                    }
+                }
+                if best_at != here {
+                    moved += 1;
+                }
+                candidate_levels[b] = best_at;
+
+                current += now;
+                best_level += best;
+                projection += error_at(cs / ss);
+                original += c.iter().map(|&x| (x * x) as f64).sum::<f64>();
+                bands_counted += 1;
+                per_band.push((b, now, best, best_at));
+            }
+
+            // Shape bits do not depend on the level: the pyramid codes direction
+            // and every search normalises first. Only the allocation does. So a
+            // level may move for free exactly when the allocation does not
+            // follow it.
+            let mut kept = levels.clone();
+            for &(b, _, _, best_at) in &per_band {
+                if best_at == kept[b] {
+                    continue;
+                }
+                let mut trial = kept.clone();
+                trial[b] = best_at;
+                let trial_energies: Vec<f32> =
+                    trial.iter().map(|&l| level_to_energy(l)).collect();
+                if bands::allocate(&trial_energies, rate * 8 - spent.min(rate * 8))
+                    == allocation
+                {
+                    kept = trial;
+                }
+            }
+            for &(b, now, best, best_at) in &per_band {
+                constrained += if kept[b] == best_at { best } else { now };
+            }
+        }
+
+        let db = |err: f64| 10.0 * (original / err.max(1e-30)).log10();
+        println!(
+            "  {rate:3} bytes a frame, {bands_counted:5} funded bands:  \
+             nearest the energy {:6.2}   allocation kept {:6.2}   \
+             best level {:6.2}   projection {:6.2} dB   moved {moved}",
+            db(current),
+            db(constrained),
+            db(best_level),
+            db(projection),
+        );
+        }
     }
 
     #[test]

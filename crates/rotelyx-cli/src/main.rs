@@ -14,12 +14,12 @@ mod keyfile;
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use rotelyx_core::store::{self, Blocklist, Paths, StoredInvitation};
+use rotelyx_core::store::{self, Paths, StoredInvitation};
 use rotelyx_core::{
-    epoch_at, Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, Session,
+    epoch_at, Admission, Frame, FrameKind, Gate, Invitation, ReachabilityPolicy, Session,
     RotelyxEndpoint, RotelyxId,
 };
 use rotelyx_crypto::{Conversation, Member, Received};
@@ -75,20 +75,20 @@ enum Command {
         relay: Option<String>,
     },
 
-    /// Refuse a specific identity from now on. Persists across restarts.
+    /// Withdraw an invitation, so its holder cannot connect again.
+    ///
+    /// This is what blocking means here. There is no identity to ban: a caller
+    /// arrives on a key belonging to one invitation and nothing else, and the
+    /// name anybody sees is derived per conversation. What can be withdrawn is
+    /// the invitation, which is a thing this side issued and holds the secret
+    /// for.
     Block {
-        /// The identity to refuse.
-        id: String,
+        /// The invitation code, or its number from `rotelyx invitations`.
+        which: String,
     },
 
-    /// Stop refusing an identity.
-    Unblock {
-        /// The identity to allow again.
-        id: String,
-    },
-
-    /// List blocked identities.
-    Blocks,
+    /// List the invitations this device has issued and not withdrawn.
+    Invitations,
 
     /// Dial a peer, then chat.
     Connect {
@@ -159,12 +159,33 @@ fn now_epoch() -> Result<u64> {
 /// against a secret the issuer holds, so retiring the invitation refuses the
 /// holder and there is nothing for them to rename. Blocking a person is not a
 /// thing this design can do; ending a conversation is.
-fn refuse_if_blocked(gate: &Gate, conversation: &Conversation) -> Result<()> {
-    let identities: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
-    if let Some(id) = gate.blocked_member(&identities) {
-        bail!("{id} is blocked. Closing.");
+/// Resolve what somebody typed into one of the invitations they have issued.
+///
+/// A number, because that is what the list prints and what a person can retype
+/// without pasting; or the code itself, for the case where they kept it and the
+/// list has since renumbered. Nothing else: guessing at a prefix would make
+/// `block` ambiguous, and this is the command that takes something away.
+fn pick_invitation<'a>(
+    live: &'a [store::StoredInvitation],
+    which: &str,
+) -> Result<&'a store::StoredInvitation> {
+    if live.is_empty() {
+        bail!("no live invitations to withdraw. `rotelyx invitations` lists them.");
     }
-    Ok(())
+
+    if let Ok(n) = which.parse::<usize>() {
+        return live
+            .get(n.wrapping_sub(1))
+            .filter(|_| n >= 1)
+            .ok_or_else(|| match live.len() {
+                1 => anyhow!("there is no invitation {n}. There is one."),
+                many => anyhow!("there is no invitation {n}. There are {many}."),
+            });
+    }
+
+    live.iter()
+        .find(|inv| inv.code() == which)
+        .ok_or_else(|| anyhow!("that is neither a number from `rotelyx invitations` nor a code this device issued"))
 }
 
 /// The safety number, over the names the two sides use in this conversation.
@@ -436,50 +457,48 @@ async fn main() -> Result<()> {
             println!("identity, and a relay carrying the traffic never sees one.");
         }
 
-        Command::Block { id } => {
-            let target: RotelyxId = id.parse().context("not a valid identity")?;
-            let mut blocks = Blocklist::load(&paths.blocks)?;
-            if blocks.insert(target) {
-                blocks.save(&paths.blocks)?;
-                println!("blocked {target}");
+        Command::Block { which } => {
+            let epoch = now_epoch()?;
+            let live = store::load_invitations(&paths.invitations, epoch)?;
+            let target = pick_invitation(&live, &which)?;
+            let secret = target.secret;
+
+            if store::revoke_invitation(&paths.invitations, &secret, epoch)? {
+                println!("withdrawn. That invitation admits nobody from now on.");
+                println!();
+                println!("A session already open stays open until it closes: this");
+                println!("stops the next connection, it is not a hang-up. To let");
+                println!("that person back in, issue a new invitation.");
             } else {
-                println!("{target} was already blocked");
+                println!("nothing to withdraw: that invitation is already gone.");
             }
         }
 
-        Command::Unblock { id } => {
-            let target: RotelyxId = id.parse().context("not a valid identity")?;
-            let mut blocks = Blocklist::load(&paths.blocks)?;
-            if blocks.remove(&target) {
-                blocks.save(&paths.blocks)?;
-                println!("unblocked {target}");
+        Command::Invitations => {
+            let epoch = now_epoch()?;
+            let live = store::load_invitations(&paths.invitations, epoch)?;
+            if live.is_empty() {
+                println!("no live invitations. Run `rotelyx invite` to make one.");
             } else {
-                println!("{target} was not blocked");
-            }
-        }
-
-        Command::Blocks => {
-            let blocks = Blocklist::load(&paths.blocks)?;
-            if blocks.is_empty() {
-                println!("no blocked identities");
-            } else {
-                let mut ids: Vec<_> = blocks.iter().map(ToString::to_string).collect();
-                ids.sort();
-                for id in ids {
-                    println!("{id}");
+                println!("{} live. Withdraw one with `rotelyx block <n>`.", live.len());
+                println!();
+                for (n, inv) in live.iter().enumerate() {
+                    // An epoch is an hour, so this is already hours.
+                    let hours = inv.expires_at_epoch.saturating_sub(epoch);
+                    println!("  {}. expires in {hours}h", n + 1);
+                    println!("     {}", inv.code());
                 }
             }
         }
 
         Command::Listen { open, relay } => {
             let epoch = now_epoch()?;
-            let blocks = Blocklist::load(&paths.blocks)?;
 
             // Loaded before the gate, because they decide two things now: who is
             // admitted, and which key this endpoint answers on.
             let live = store::load_invitations(&paths.invitations, epoch)?;
 
-            let mut gate = if open {
+            let gate = if open {
                 eprintln!("WARNING: accepting anyone who connects");
                 Gate::new(ReachabilityPolicy::Open)
             } else {
@@ -499,15 +518,6 @@ async fn main() -> Result<()> {
                 eprintln!("admitting holders of {count} live invitation(s)");
                 gate
             };
-
-            // Blocks are loaded from disk, so they survive a restart. A block
-            // that does not is not a block.
-            for id in blocks.iter() {
-                gate.block(*id);
-            }
-            if !blocks.is_empty() {
-                eprintln!("refusing {} blocked identity(ies)", blocks.len());
-            }
 
             // Without --relay this is direct only: no relay, no discovery, and
             // both peers must be reachable to each other, which on one machine
@@ -623,7 +633,6 @@ async fn main() -> Result<()> {
             let my_name = identity.in_conversation(&shared);
             let me = Member::new(my_name.as_bytes()).context("creating member")?;
             let conversation = handshake::host(&mut session, &me).await?;
-            refuse_if_blocked(&gate, &conversation)?;
             print_safety_number(my_name, &conversation);
             chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
             endpoint.close().await;
@@ -711,17 +720,6 @@ async fn main() -> Result<()> {
             let my_name = identity.in_conversation(&shared);
             let me = Member::new(my_name.as_bytes()).context("creating member")?;
             let conversation = handshake::join(&mut session, &me).await?;
-
-            // The caller checks too. Blocking somebody and then dialling them
-            // and talking is not blocking, and the person on the other end has
-            // no way to know you meant to refuse.
-            {
-                let mut gate = Gate::invitation_only();
-                for id in Blocklist::load(&paths.blocks)?.iter() {
-                    gate.block(*id);
-                }
-                refuse_if_blocked(&gate, &conversation)?;
-            }
 
             print_safety_number(my_name, &conversation);
             chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;

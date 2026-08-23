@@ -22,6 +22,7 @@
 
 use rotelyx_codec::bands::{self, BANDS};
 use rotelyx_codec::mdct::{self, FRAME, WINDOW};
+use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder};
 use rotelyx_codec::{TelyxDecoder, TelyxEncoder};
 use std::fs;
 use std::path::Path;
@@ -168,6 +169,196 @@ fn speech_across_the_rates() {
         "some clip decoded with more error than signal ({worst:.1} dB), which on \
          speech rather than noise means something is wrong rather than merely \
          hard to measure"
+    );
+}
+
+/// How much of a voiced frame is already in the frame before it.
+///
+/// Long term prediction is the other half of the item block switching sits in,
+/// and it is a different question: not "where in the window does the error go"
+/// but "how much of this window did we already send". Speech is periodic at the
+/// pitch, 80 to 400 Hz, which at 48 kHz is a lag of 120 to 600 samples. If a
+/// window really is its own past shifted by that much, the residual is what has
+/// to be coded and the rest is a lag and a gain.
+///
+/// Two numbers per clip, and the gap between them is the whole finding.
+///
+/// **Open loop** predicts the clean input from the clean input. It is the number
+/// the theory promises and it is not reachable: the decoder does not have the
+/// clean input, so a prediction it cannot reproduce is one it cannot add back.
+///
+/// **Closed loop** predicts from what the decoder will actually hold, which is
+/// the codec's own output at the rate it is running. That is the number that
+/// decides whether long term prediction pays, and it is a fraction of the first.
+///
+/// This was measured after building the thing and finding it made every clip
+/// worse. See the note at the end.
+#[test]
+#[ignore = "a measurement, not a bound"]
+fn measure_what_long_term_prediction_would_buy() {
+    let clips = clips();
+    if clips.is_empty() {
+        println!("\n  no clips in tests/speech, skipping. scripts/make-speech rebuilds them.");
+        return;
+    }
+
+    // 80 Hz to 400 Hz at 48 kHz.
+    const MIN_LAG: usize = 120;
+    const MAX_LAG: usize = 600;
+
+    /// The best prediction gain for one window against one history, in dB.
+    fn best_gain(window: &[f32], history: &[f32]) -> Option<f32> {
+        let energy: f32 = window.iter().map(|s| s * s).sum();
+        // A silent window predicts perfectly and means nothing.
+        if energy < 1e-6 {
+            return None;
+        }
+
+        let mut best_residual = energy;
+        for lag in MIN_LAG..=MAX_LAG {
+            if lag > history.len() {
+                continue;
+            }
+            // The last `lag` samples, repeated. With a 20 ms hop everything
+            // reconstructed ends where the window begins, so the delayed signal
+            // a pitch lag would ask for is not available and its periodic
+            // continuation is what stands in for it.
+            let period = &history[history.len() - lag..];
+            let mut xy = 0.0f32;
+            let mut yy = 0.0f32;
+            for (i, &t) in window.iter().enumerate() {
+                let c = period[i % lag];
+                xy += t * c;
+                yy += c * c;
+            }
+            if yy <= 1e-12 || xy <= 0.0 {
+                continue;
+            }
+            let residual = energy - xy * xy / yy;
+            if residual < best_residual {
+                best_residual = residual;
+            }
+        }
+        Some(10.0 * (energy / best_residual.max(1e-12)).log10())
+    }
+
+    println!("\n  clip                    frames   open loop median   closed loop median");
+    for (name, signal) in &clips {
+        // What the decoder will hold, at the rate a call falls back to.
+        let decoded = {
+            let bytes = 30usize;
+            let mut encoder = LayeredEncoder::new(bytes);
+            let mut decoder = LayeredDecoder::new(bytes);
+            let mut out = Vec::new();
+            for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
+                let frame = encoder
+                    .encode_within(&signal[start..start + WINDOW], bytes)
+                    .expect("encode");
+                out.extend(decoder.decode(&frame).expect("decode"));
+            }
+            out
+        };
+
+        let mut open: Vec<f32> = Vec::new();
+        let mut closed: Vec<f32> = Vec::new();
+
+        for start in (MAX_LAG..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
+            let window = &signal[start..start + WINDOW];
+            if let Some(g) = best_gain(window, &signal[..start]) {
+                open.push(g);
+            }
+            if start <= decoded.len() {
+                if let Some(g) = best_gain(window, &decoded[..start]) {
+                    closed.push(g);
+                }
+            }
+        }
+
+        if open.is_empty() || closed.is_empty() {
+            println!("  {name:<22}  nothing loud enough to measure");
+            continue;
+        }
+        open.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        closed.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        println!(
+            "  {name:<22}{:6}  {:13.1} dB  {:15.1} dB",
+            open.len(),
+            open[open.len() / 2],
+            closed[closed.len() / 2]
+        );
+    }
+
+    println!(
+        "\n  A lag and a gain cost about 14 bits, which at 30 bytes a frame is 6% of\n  \
+         it. Neither column pays for that.\n\n  \
+         The two columns being the same is the finding. The obvious suspect was\n  \
+         the reconstruction: predict from a 4 dB decode and the prediction\n  \
+         carries that decode's noise. It is not the suspect. Open loop, on the\n  \
+         clean signal, is worth no more.\n\n  \
+         What limits it is the hop. Everything reconstructed ends where the\n  \
+         current window begins, so predicting 1920 samples at a lag of 120 to\n  \
+         600 would need samples from after that point, and there are none. What\n  \
+         stands in is the last `lag` samples repeated, which is what a periodic\n  \
+         signal's continuation is and is worth 0.3 to 1.0 dB on real speech.\n\n  \
+         An earlier version of this measurement used the genuinely delayed\n  \
+         window and reported 1.8 to 5.4 dB. That number was **unreachable**: it\n  \
+         read samples the decoder cannot have. It was convincing enough to build\n  \
+         on, and the thing built from it was wired into both ends of the layered\n  \
+         codec and made every clip worse at every rate, 0.6 to 3.0 dB. Raising\n  \
+         the gate so it fired only on frames with 6 dB of gain walked the loss\n  \
+         back towards zero and never past it. Removed.\n\n  \
+         Whitening is the second reason and it is the one that generalises:\n  \
+         subtracting the periodic part flattens the spectrum, and band energies\n  \
+         plus normalised shapes are efficient precisely because a speech\n  \
+         spectrum is peaky. This codec pays twice for the same idea."
+    );
+}
+
+/// The same, on the codec a call actually runs.
+///
+/// The measurement above drives `TelyxEncoder`. Voice goes through
+/// `LayeredEncoder`, which spends the same budget across a base layer and
+/// refinements the network may drop, and until this existed nothing measured it
+/// on speech at all. The two have already drifted apart once: temporal noise
+/// shaping went into one and was measured on the other, and read as no
+/// improvement whatsoever.
+///
+/// The budget here is the whole datagram, so it is the number the pacer hands
+/// the encoder, and the encoder decides how many layers fit inside it.
+#[test]
+fn layered_speech_across_the_budgets() {
+    let clips = clips();
+    if clips.is_empty() {
+        println!("\n  no clips in tests/speech, skipping. scripts/make-speech rebuilds them.");
+        return;
+    }
+
+    println!("\n  clip                     12 kbit/s   16 kbit/s   24 kbit/s");
+    let mut worst = f32::MAX;
+    for (name, signal) in &clips {
+        let mut row = String::new();
+        for bytes in [30usize, 40, 60] {
+            let mut encoder = LayeredEncoder::new(bytes);
+            let mut decoder = LayeredDecoder::new(bytes);
+            let mut out = Vec::new();
+            for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
+                let frame = encoder
+                    .encode_within(&signal[start..start + WINDOW], bytes)
+                    .expect("encode");
+                out.extend(decoder.decode(&frame).expect("decode"));
+            }
+            let snr = snr_db(signal, &out);
+            row += &format!("{snr:9.1} dB");
+            worst = worst.min(snr);
+        }
+        println!("  {name:<22}{row}");
+    }
+
+    assert!(
+        worst > 0.0,
+        "some clip decoded with more error than signal ({worst:.1} dB) through the \
+         layered codec, which on speech means something is wrong rather than \
+         merely hard to measure"
     );
 }
 

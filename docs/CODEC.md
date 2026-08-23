@@ -193,11 +193,45 @@ frame the band energies alone need 18, so the last bands were cut off, read back
 out of the zero padding, and the whole frame decoded 6 dB quiet. Silently. It
 had been published as the 6 kbit/s row of the table above.
 
-**Pre-echo is real and unfixed.** A plosive puts noise 14.8 dB below itself into
-the silence *before* it, because a 40 ms window spreads quantisation error over
-its whole length. That is the known cost of the long window and the fix is block
-switching, which is not built. It is measured and written down now instead of
-being discovered by a listener.
+**Pre-echo was real, and is shaped rather than switched away.** A plosive used to
+put noise 14.8 dB below itself into the silence *before* it, because a 40 ms
+window spreads quantisation error over its whole length. That is the known cost
+of a long window.
+
+The usual fix is block switching: notice the transient, transform it as several
+short windows. It works and it costs the whole framing, two more window shapes
+for the transitions, a second band layout, and a decoder that has to agree with
+the encoder about every frame's shape or the overlap-add stops reconstructing.
+This codec has one hop, 20 ms, and the band tables and the pyramid quantiser are
+built on it.
+
+Temporal noise shaping reaches the same problem from the other end. A transient
+in time is a smooth ridge across frequency, so linear prediction *along the
+coefficients* has something to predict; code the prediction error instead, and
+the decoder's synthesis filter shapes the quantisation noise by the temporal
+envelope it is reconstructing. The noise lands under the burst, where the burst
+masks it, rather than in front of it. One flag bit, three of order, four per tap.
+
+| measurement | before | after |
+|---|---:|---:|
+| plosive, base codec | -14.8 dB | **-40.7 dB** |
+| plosive, layered codec at 30 bytes a frame | -13.6 dB | **-29.3 dB** |
+| plosive, layered codec at 60 bytes a frame | -13.9 dB | **-30.9 dB** |
+| gaps between words, `transients_amy` | -28.4 dB | **-33.4 dB** |
+| gaps between words, `fricatives_jenny` | -35.0 dB | **-38.9 dB** |
+
+**What it costs, stated rather than buried:** 0.4 dB of signal to noise on nasals
+and 0.2 dB or less on everything else. That is not free, and the trade is a
+judgement about masking that the number cannot make: noise in a gap between
+words is audible and noise under a plosive is not, while signal to noise counts
+them the same.
+
+The filter fires only on frames whose energy is concentrated in time, judged in
+the time domain on purpose. Prediction gain across frequency was the obvious
+gate and it is the wrong one: a nasal has harmonics evenly spaced in frequency,
+predicts beautifully, and has no transient at all. Gating on prediction gain
+cost 2.1 dB on nasals for a problem they do not have. Gating on the temporal
+envelope cost 0.4.
 
 ### What the band energies cost, and what they were costing us
 
@@ -230,6 +264,65 @@ bit above 24 kbit/s was refining a shape that was then multiplied by the wrong
 number. The step is now chosen from the frame size, which both sides already
 know, so it costs nothing to signal: coarse where the envelope would crowd out
 the shapes, fine where the envelope is what limits us.
+
+### The band was always slightly too loud, and fixing it cost nothing
+
+The encoder measured a band's energy and rounded it to the nearest level on the
+grid. That is the right answer to "how loud was this band". The decoder does not
+ask that question: it rebuilds the band as *level times shape*, where the shape
+is whatever the pyramid quantiser managed. So the question that decides what is
+heard is "which level, times **this** shape, lands closest to the coefficients",
+and the two have different answers, because the pyramid's shape is not the
+direction the energy was measured along.
+
+The error is a parabola in the gain with its minimum at the projection
+`<x, s> / <s, s>`, and the measured energy sits above that whenever the shape is
+imperfect. Which is always. So every band came out a little too loud, always in
+the same direction.
+
+**The fix is free, and the reason is worth knowing.** The pyramid codes
+direction, and every search normalises before it starts, so a band's shape bits
+do not depend on its level at all. Only the bit allocation does. So a level can
+move at no cost whenever the allocation does not follow it: propose the best
+level, keep it only if the split of bits across bands comes out identical. No
+extra bits, no second search, and it cannot make a frame worse, because a change
+that does not reduce the error is not taken.
+
+| bytes a frame | nearest the energy | what ships | the unreachable ideal |
+|---|---:|---:|---:|
+| 20 | 8.45 dB | 8.85 dB | 9.01 dB |
+| 30 | 14.07 dB | 14.39 dB | 14.74 dB |
+| 60 | 26.26 dB | 26.32 dB | 26.77 dB |
+| 120 | 28.23 dB | 28.23 dB | 28.95 dB |
+
+Those are per funded band. End to end on the recorded speech it is 0.1 to 0.3 dB
+and never negative, which is a small number and is stated as one: full-band error
+is dominated by the bands that got no bits at all, and this cannot help those.
+
+The gain grows as the rate falls, for the reason the table's shape suggests: a
+starved band gets a cruder shape, and a cruder shape projects further from the
+energy that was measured.
+
+**The layered codec gets it too, and the trim moved inside to make that
+possible.** It rests on the encoder knowing the shape the decoder will hold, and
+it did not: `encode` produced every layer and the caller trimmed afterwards with
+`frame.within(budget)`, against a budget taken from live congestion. The best
+level given four layers is not the best level given one, so the choice was being
+made against a frame nobody would receive. `encode_within` takes the budget,
+trims the layers itself, and then chooses the levels against the stages that
+survived.
+
+One difference from the base codec is worth writing down, because it decided
+whether any of this was worth having. There the level section is a fixed number
+of bits, so a level moves or it does not. Here the energies are arithmetic
+coded, and their coded *length* sets the budget the plan is computed against, so
+a single band moving usually changes the length of the whole stream. Proposing
+every band at once was refused four times in five, 2938 frames of 3552. Tried
+one band at a time, what one band spoils no longer costs the other twenty three,
+and the result is better in fourteen of eighteen clip-and-rate combinations,
+unchanged in four, and worse in none.
+
+It costs 2.4% of real time against the base codec's 1.9%, where the bar is 25%.
 
 ### What the military vocoders had to teach us
 
@@ -301,9 +394,39 @@ and the payoff waits on a smaller base. Coding the energies across a group of
 frames gets them from 20.3 bytes to 12.4, but it costs 200 ms of batching, which
 the mailbox can spend and a call cannot.
 
-What is not built: block switching, long term prediction, device capture, echo
-cancellation, and a trained vector quantiser for the envelope, which is the
-largest remaining saving and needs a speech corpus.
+What is not built: block switching, which temporal noise shaping made a smaller
+question rather than an answered one; device capture; and a trained vector
+quantiser for the envelope, which is the largest remaining saving and needs a
+speech corpus. Echo cancellation and noise suppression were on this list and are
+in `rotelyx-audio` now, at 38.3 dB of echo removed and 8 dB off a steady room.
+
+**Long term prediction was built and taken out again**, and it is the most
+useful thing on this list to have written down.
+
+The measurement that justified it predicted each window from the genuinely
+delayed signal: a median gain of 1.8 to 5.4 dB across the recorded speech, 60 to
+87 percent of frames over a decibel. It was unreachable. With a 20 ms hop,
+everything reconstructed ends where the current window begins, so predicting
+1920 samples at a pitch lag of 120 to 600 reads samples from after that point,
+and no decoder has them.
+
+What is available is the last `lag` samples repeated, which is what a periodic
+signal's continuation is, and on the same speech it is worth **0.3 to 1.0 dB**
+against fourteen bits of lag and gain.
+
+It was built before that was understood, closed loop, with a decoder inside the
+encoder so both ends predicted from the same reconstruction. The plumbing was
+right: disabling the predictor returned every number exactly to baseline. It
+still made every clip worse at every rate by 0.6 to 3.0 dB, and raising the gate
+to fire only on frames with 6 dB of gain walked the loss back towards zero and
+never past it.
+
+The second reason is the one worth keeping. Subtracting the periodic part
+flattens the spectrum, and band energies plus normalised shapes are efficient
+*because* a speech spectrum is peaky. This codec pays twice for the same idea:
+once in bits for the prediction, and again in a residual its quantiser is worse
+at coding. It is the same mechanism that made temporal noise shaping cost 2.1 dB
+on nasals until it was gated on the time domain rather than on prediction gain.
 
 ---
 

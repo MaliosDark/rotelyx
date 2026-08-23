@@ -205,9 +205,15 @@ fn what_each_kind_of_sound_costs() {
 /// consonant and it is the single most audible artefact a long window produces.
 ///
 /// This measures it directly: the level in the silence before the plosive,
-/// against the level of the plosive itself. Reported, not bounded, because the
-/// fix is block switching and block switching is not built. Writing the number
-/// down is what stops it being a surprise later.
+/// against the level of the plosive itself. It stood at -14.8 dB for as long as
+/// there was nothing shaping the error in time, and this was written to report
+/// the number rather than bound it, because the usual fix is block switching
+/// and block switching is not built.
+///
+/// It is bounded now. `tns` shapes the quantisation noise by the frame's own
+/// temporal envelope, which puts it under the burst instead of in front of it,
+/// and the number is -40.7 dB. The bound is set well clear of that: this is a
+/// guard against the shaping quietly stopping, not a quality target.
 #[test]
 fn a_plosive_smears_backwards_into_the_silence_before_it() {
     let n = FRAME * 20;
@@ -234,13 +240,55 @@ fn a_plosive_smears_backwards_into_the_silence_before_it() {
         "the test signal is not silent before the burst, so this measures nothing"
     );
 
-    // Not a quality bar: a guard that the number stays a number. If pre-echo
-    // ever reaches the level of the burst itself, something is broken rather
-    // than merely untuned.
     assert!(
-        leak_db < 0.0,
-        "pre-echo is at or above the level of the burst that caused it"
+        leak_db < -30.0,
+        "pre-echo is {leak_db:.1} dB below the burst. It was -14.8 before temporal \
+         noise shaping and -40.7 after, so a number in between means the shaping \
+         is no longer reaching this frame"
     );
+}
+
+/// The same measurement on the codec a call actually runs.
+///
+/// The one above drives `TelyxEncoder`. Voice goes through `LayeredEncoder`,
+/// and for a while temporal noise shaping was wired into one of them and
+/// measured on the other, which read as no improvement at all. Two encoders
+/// with one transform between them will drift apart exactly here, so both are
+/// measured.
+///
+/// The layered path shows less improvement than the base path, and the reason
+/// is worth stating: it spends its budget in refinement layers, so the base
+/// layer alone carries a coarser residual for the shaping to work on.
+#[test]
+fn the_layered_codec_keeps_the_plosive_from_smearing_backwards() {
+    use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder};
+
+    let n = FRAME * 20;
+    let signal = plosive(n);
+
+    for bytes in [30usize, 60, 120] {
+        let mut encoder = LayeredEncoder::new(bytes);
+        let mut decoder = LayeredDecoder::new(bytes);
+        let mut decoded = Vec::new();
+        for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
+            let frame = encoder.encode(&signal[start..start + WINDOW]).expect("encode");
+            decoded.extend(decoder.decode(&frame).expect("decode"));
+        }
+
+        let onset = n / 2;
+        let from = onset.saturating_sub(WINDOW);
+        let to = onset.saturating_sub(FRAME / 2);
+        let before = rms(&decoded[from.min(decoded.len())..to.min(decoded.len())]);
+        let burst = rms(&signal[onset..(onset + FRAME).min(n)]);
+        let leak_db = 20.0 * (before.max(1e-9) / burst.max(1e-9)).log10();
+
+        println!("  {bytes:3} bytes a frame: pre-echo {leak_db:.1} dB below the burst");
+        assert!(
+            leak_db < -25.0,
+            "pre-echo at {bytes} bytes a frame is {leak_db:.1} dB below the burst. \
+             Without shaping it sat near -14"
+        );
+    }
 }
 
 /// A fricative has no harmonics, so what matters is that the level survives
