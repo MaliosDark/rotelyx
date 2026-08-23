@@ -20,6 +20,7 @@ members = [
     "crates/rotelyx-wasm",
     "crates/rotelyx-mobile",
     "crates/rotelyx-status",
+    "crates/rotelyx-mailbox-client",
     "crates/rotelyx-mailbox-server",
 ]
 

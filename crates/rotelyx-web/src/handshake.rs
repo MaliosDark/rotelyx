@@ -19,7 +19,7 @@
 //! numbers are for, and the caller must show them.
 
 use anyhow::{bail, Context, Result};
-use rotelyx_core::{Frame, FrameKind, Session};
+use rotelyx_core::{Frame, FrameKind, Session, WIRE_VERSION};
 use rotelyx_crypto::{Conversation, Member};
 
 /// Wire form of the inviter's reply: welcome and ratchet tree, length-prefixed.
@@ -54,32 +54,69 @@ fn decode_welcome(bytes: &[u8]) -> Result<(&[u8], &[u8])> {
     Ok((welcome, &rest[..t_len]))
 }
 
-/// Listener side: create the conversation and invite the peer.
-pub async fn host(session: &mut Session, me: &Member) -> Result<Conversation> {
-    let frame = session.recv().await.context("waiting for key package")?;
-    if frame.kind != FrameKind::Handshake {
-        bail!("expected a handshake frame, got {:?}", frame.kind);
-    }
-
-    let key_package = rotelyx_crypto::deserialize_key_package(&frame.payload)
-        .context("parsing the peer's key package")?;
-
-    let mut conversation = Conversation::create(me).context("creating the conversation")?;
-    let (_commit, welcome) = conversation
-        .invite(me, &key_package)
-        .context("inviting the peer")?;
-    let tree = conversation.ratchet_tree().context("exporting ratchet tree")?;
-
+/// Say which wire this build speaks, before anything that depends on it.
+///
+/// This costs one round trip at the start of a conversation, and it is written
+/// down rather than hidden because an earlier draft of this comment claimed it
+/// did not. It could be folded into the frame that follows and it is not worth
+/// the tangle: this runs once when two people start talking, not once per
+/// message, and the thing it buys is that a build which cannot be talked to is
+/// named instead of misunderstood.
+///
+/// See [`WIRE_VERSION`].
+async fn say_hello(session: &mut Session) -> Result<()> {
     session
         .send(&Frame::new(
-            FrameKind::Handshake,
-            encode_welcome(&welcome, &tree),
+            FrameKind::Hello,
+            WIRE_VERSION.to_be_bytes().to_vec(),
         ))
         .await
-        .context("sending welcome")?;
-
-    Ok(conversation)
+        .context("announcing the wire version")
 }
+
+/// Read the other side's version and refuse a build that cannot be talked to.
+///
+/// A peer that says nothing is older than this check, which is worth naming
+/// rather than reporting as a parse failure three frames later.
+fn check_hello(frame: &Frame) -> Result<()> {
+    if frame.kind != FrameKind::Hello {
+        bail!(
+            "the other side did not say which wire it speaks, so it is running a \
+             build older than this one. Both ends have to be rebuilt from the \
+             same source: they will not fail cleanly otherwise"
+        );
+    }
+    let theirs = match frame.payload.as_slice() {
+        [a, b] => u16::from_be_bytes([*a, *b]),
+        _ => bail!("the other side's version is not a version"),
+    };
+    if theirs != WIRE_VERSION {
+        bail!(
+            "the other side speaks wire version {theirs} and this build speaks \
+             {WIRE_VERSION}. Rebuild both ends from the same source"
+        );
+    }
+    Ok(())
+}
+
+/// What happened when the two sides asked each other about a conversation they
+/// might both still hold.
+pub enum Opened {
+    /// Newly created. Nobody had been here before, or only one of them had, and
+    /// the caller keeps using the member it built.
+    Fresh(Conversation),
+    /// Carried across a restart. The listener has already committed a fresh
+    /// epoch and the dialer has processed it.
+    ///
+    /// The member comes back with it because it is not the one the caller made:
+    /// it is the one that was restored, holding the signing key the group knows.
+    Resumed {
+        member: Member,
+        conversation: Conversation,
+    },
+}
+
+impl Opened {}
 
 /// Dialer side: publish a key package and join the group we are welcomed into.
 pub async fn join(session: &mut Session, me: &Member) -> Result<Conversation> {
@@ -104,6 +141,44 @@ pub async fn join(session: &mut Session, me: &Member) -> Result<Conversation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A build that cannot be talked to is named, not misunderstood.
+    ///
+    /// # Why this matters more than it looks
+    ///
+    /// Two builds that disagree about a format do not fail cleanly. On the
+    /// change that made a credential `person_len ‖ person ‖ device`, a peer on
+    /// the older build was understood seven times in eight and misunderstood the
+    /// eighth, depending on the first byte of a key. The eighth is not an error:
+    /// it is a safety number that does not match, with no reason given, for that
+    /// pair, for ever.
+    #[test]
+    fn a_peer_on_another_wire_is_refused_by_name() {
+        let ours = Frame::new(FrameKind::Hello, WIRE_VERSION.to_be_bytes().to_vec());
+        assert!(check_hello(&ours).is_ok());
+
+        let theirs = Frame::new(FrameKind::Hello, (WIRE_VERSION + 1).to_be_bytes().to_vec());
+        let refused = check_hello(&theirs).expect_err("a different wire was accepted");
+        let said = format!("{refused}");
+        assert!(
+            said.contains("wire version") && said.contains("Rebuild"),
+            "the refusal does not say what to do about it: {said}"
+        );
+
+        // A build older than this check says nothing at all, which is its own
+        // answer and a different one.
+        let silent = Frame::new(FrameKind::Handshake, b"a key package".to_vec());
+        let refused = check_hello(&silent).expect_err("a silent peer was accepted");
+        assert!(
+            format!("{refused}").contains("older"),
+            "a peer that said nothing was not identified as an older build"
+        );
+
+        // And a version that is not a version.
+        for payload in [vec![], vec![1u8], vec![1u8, 2, 3]] {
+            assert!(check_hello(&Frame::new(FrameKind::Hello, payload)).is_err());
+        }
+    }
 
     #[test]
     fn welcome_framing_roundtrips() {
@@ -141,4 +216,147 @@ mod tests {
         bytes.extend_from_slice(b"short");
         assert!(decode_welcome(&bytes).is_err());
     }
+}
+
+/// Listener side, with a conversation it may already hold.
+///
+/// # The exchange, and why it cannot deadlock
+///
+/// The dialer speaks first, as it always has. If it has state for this address
+/// it says so with a [`FrameKind::Resume`] frame carrying the group it holds; if
+/// it has none it sends a key package and nothing here changes.
+///
+/// A listener that gets a resume request and has nothing answers with an empty
+/// payload, and the dialer then sends a key package as usual. So the two never
+/// end up waiting for different frames: whoever has less decides, and the
+/// fallback is the path that already worked.
+pub async fn host_resuming(
+    session: &mut Session,
+    me: &Member,
+    saved: Option<(Member, Conversation)>,
+) -> Result<Opened> {
+    // Their version, then ours. Read first so a build that cannot be talked to
+    // is named here rather than misunderstood three frames later.
+    //
+    // One round trip, once per conversation. See `say_hello`.
+    let hello = session.recv().await.context("waiting for the first frame")?;
+    check_hello(&hello)?;
+    say_hello(session).await?;
+
+    let frame = session.recv().await.context("waiting for the first frame")?;
+
+    match frame.kind {
+        FrameKind::Handshake => {
+            // An ordinary dialer. Whatever we were holding is not what they want.
+            let conversation = host_from_key_package(session, me, &frame.payload).await?;
+            Ok(Opened::Fresh(conversation))
+        }
+        FrameKind::Resume => {
+            let Some((saved_member, mut conversation)) = saved else {
+                // Nothing here. Say so, and let them start again.
+                session
+                    .send(&Frame::new(FrameKind::Resume, Vec::new()))
+                    .await
+                    .context("declining to resume")?;
+
+                let frame = session.recv().await.context("waiting for key package")?;
+                if frame.kind != FrameKind::Handshake {
+                    bail!("expected a key package after declining, got {:?}", frame.kind);
+                }
+                let conversation = host_from_key_package(session, me, &frame.payload).await?;
+                return Ok(Opened::Fresh(conversation));
+            };
+
+            if frame.payload != conversation.group_id() {
+                bail!(
+                    "the other side is holding a different conversation for this \
+                     address. Neither can be resumed into the other"
+                );
+            }
+
+            // A restored copy may not speak until it has moved to an epoch the
+            // other side has not seen. See `Conversation::rekey_after_restore`.
+            let commit = conversation
+                .rekey_after_restore(&saved_member)
+                .context("rekeying after restore")?;
+
+            session
+                .send(&Frame::new(FrameKind::Resume, commit))
+                .await
+                .context("sending the rekey")?;
+
+            Ok(Opened::Resumed {
+                member: saved_member,
+                conversation,
+            })
+        }
+        other => bail!("expected a handshake or resume frame, got {other:?}"),
+    }
+}
+
+/// Dialer side, with a conversation it may already hold.
+pub async fn join_resuming(
+    session: &mut Session,
+    me: &Member,
+    saved: Option<(Member, Conversation)>,
+) -> Result<Opened> {
+    say_hello(session).await?;
+    let hello = session.recv().await.context("waiting for the wire version")?;
+    check_hello(&hello)?;
+
+    let Some((saved_member, mut conversation)) = saved else {
+        return Ok(Opened::Fresh(join(session, me).await?));
+    };
+
+    session
+        .send(&Frame::new(FrameKind::Resume, conversation.group_id()))
+        .await
+        .context("asking to resume")?;
+
+    let frame = session.recv().await.context("waiting for the answer")?;
+    if frame.kind != FrameKind::Resume {
+        bail!("expected an answer about resuming, got {:?}", frame.kind);
+    }
+
+    if frame.payload.is_empty() {
+        // They have nothing. Start again, with the member we would have used
+        // anyway rather than the one we restored.
+        let conversation = join(session, me).await?;
+        return Ok(Opened::Fresh(conversation));
+    }
+
+    conversation
+        .receive(&saved_member, &frame.payload)
+        .context("processing the rekey")?;
+
+    Ok(Opened::Resumed {
+        member: saved_member,
+        conversation,
+    })
+}
+
+/// The original listener path, once a key package has arrived.
+async fn host_from_key_package(
+    session: &mut Session,
+    me: &Member,
+    payload: &[u8],
+) -> Result<Conversation> {
+    let key_package = rotelyx_crypto::deserialize_key_package(payload)
+        .context("parsing the peer's key package")?;
+
+    let mut conversation = Conversation::create(me).context("creating the conversation")?;
+    let (_commit, welcome) = conversation
+        .invite(me, &key_package)
+        .context("inviting the peer")?;
+    let tree = conversation.ratchet_tree().context("exporting ratchet tree")?;
+
+    session
+        .send(&Frame::new(
+            FrameKind::Handshake,
+            encode_welcome(&welcome, &tree),
+        ))
+        .await
+        .context("sending welcome")?;
+
+    Ok(conversation)
 }

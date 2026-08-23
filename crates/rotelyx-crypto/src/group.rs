@@ -1334,6 +1334,56 @@ mod tests {
     /// impossible: every member processes the commit. That guarantee is only
     /// worth something if it reaches a person, and this layer used to hand the
     /// client the same value for an addition, a rekey and a message it did not
+    /// Saving after a rekey must save the rekey.
+    ///
+    /// # The failure this catches
+    ///
+    /// A conversation that resumes and rekeys, is saved, and resumes again must
+    /// come back at the epoch it reached, not the one it started from. Measured
+    /// across three runs of the command line client it went 1, 2, 2: every
+    /// resume was reopening the *same* old state and moving one epoch forward
+    /// from it, for ever.
+    ///
+    /// That is not merely stale. Reopening the same epoch repeatedly is exactly
+    /// the rollback `restored_needs_rekey` exists to prevent, arrived at through
+    /// the door marked "save".
+    #[test]
+    fn a_saved_conversation_remembers_the_epoch_it_reached() {
+        let alice = Member::new(b"alice").expect("alice");
+        let bob = Member::new(b"bob").expect("bob");
+
+        let mut group = Conversation::create(&alice).expect("create");
+        group
+            .invite(&alice, bob.key_package().expect("kp").key_package())
+            .expect("invite");
+        let group_id = group.group_id();
+        let first = group.epoch();
+
+        // Round one: export, restore, reopen, rekey.
+        let state = alice.export().expect("export");
+        let restored = Member::restore(state).expect("restore");
+        let mut reopened = Conversation::reopen(&restored, &group_id)
+            .expect("reopen")
+            .expect("the group is in the storage");
+        reopened.rekey_after_restore(&restored).expect("rekey");
+        let second = reopened.epoch();
+        assert!(second > first, "the rekey did not advance the epoch");
+
+        // Round two: export *that*, and it must come back where it was left.
+        let state = restored.export().expect("export again");
+        let again = Member::restore(state).expect("restore again");
+        let reopened = Conversation::reopen(&again, &group_id)
+            .expect("reopen again")
+            .expect("the group is still in the storage");
+
+        assert_eq!(
+            reopened.epoch(),
+            second,
+            "the conversation was saved at epoch {first} after reaching {second}, so \
+             every resume reopens the same state and the group never moves"
+        );
+    }
+
     /// A device is a member, so revoking one is a commit everybody processes.
     #[test]
     fn revoking_a_device_is_visible_to_everybody_else() {

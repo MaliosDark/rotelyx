@@ -11,6 +11,7 @@
 
 mod handshake;
 mod keyfile;
+mod resume;
 
 use std::path::PathBuf;
 
@@ -270,9 +271,9 @@ fn sender_index(conversation: &Conversation, me: &Member) -> Result<u8> {
 async fn chat(
     session: Session,
     mut conversation: Conversation,
-    me: Member,
+    me: &Member,
     paths: PathPolicy,
-) -> Result<()> {
+) -> Result<Conversation> {
     let (mut send, mut recv, conn) = session.split_for_chat();
 
     let reader = BufReader::new(tokio::io::stdin());
@@ -410,7 +411,7 @@ async fn chat(
     let _ = send.finish();
     let _ = send.stopped().await;
     conn.close(0u32.into(), b"bye");
-    Ok(())
+    Ok(conversation)
 }
 
 #[tokio::main]
@@ -425,7 +426,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let paths = Paths::from_identity(&cli.identity);
-    let identity = keyfile::load_or_create(&paths.identity)?;
+    let (identity, passphrase) = keyfile::load_with_passphrase(&paths.identity)?;
 
     match cli.command {
         Command::Id => {
@@ -463,8 +464,15 @@ async fn main() -> Result<()> {
             let target = pick_invitation(&live, &which)?;
             let secret = target.secret;
 
+            // The conversation that ran on it goes too. An invitation withdrawn
+            // while its conversation stays on the disk is a person told they are
+            // blocked and a file that still decrypts everything they said.
+            let address = target.to_invitation().address();
+
             if store::revoke_invitation(&paths.invitations, &secret, epoch)? {
-                println!("withdrawn. That invitation admits nobody from now on.");
+                resume::forget(&paths, &address)?;
+                println!("withdrawn. That invitation admits nobody from now on,");
+                println!("and the conversation it carried is off this disk.");
                 println!();
                 println!("A session already open stays open until it closes: this");
                 println!("stops the next connection, it is not a hang-up. To let");
@@ -632,9 +640,43 @@ async fn main() -> Result<()> {
                 .to_vec();
             let my_name = identity.in_conversation(&shared);
             let me = Member::new(my_name.as_bytes()).context("creating member")?;
-            let conversation = handshake::host(&mut session, &me).await?;
+
+            // The address is the name of the conversation, so it is also the
+            // name of the file. See `resume`.
+            let here = session.answered_at().unwrap_or_else(|| identity.id());
+            let saved = resume::reopen(&paths, &here, &passphrase)?;
+            let opened = handshake::host_resuming(&mut session, &me, saved).await?;
+
+            let (me, conversation) = match opened {
+                handshake::Opened::Fresh(conversation) => (me, conversation),
+                handshake::Opened::Resumed {
+                    member,
+                    conversation,
+                } => {
+                    println!("carried on from where this conversation left off.");
+                    (member, conversation)
+                }
+            };
+
+            // Saved before a word is typed, and again on the way out.
+            //
+            // A conversation that is only written when the program exits
+            // cleanly is one that people lose: terminals get closed, laptops
+            // sleep, power goes. Worse, this side has just committed a fresh
+            // epoch that the other side has already processed, so leaving
+            // without recording it means coming back to an epoch they have
+            // moved past.
+            resume::save(&paths, &here, &me, &conversation, &passphrase)?;
+
             print_safety_number(my_name, &conversation);
-            chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
+            let conversation = chat(
+                session,
+                conversation,
+                &me,
+                net_config(relay.as_deref())?.paths(),
+            )
+            .await?;
+            resume::save(&paths, &here, &me, &conversation, &passphrase)?;
             endpoint.close().await;
         }
 
@@ -705,7 +747,7 @@ async fn main() -> Result<()> {
             // What an open host derives from when there is no invitation: the
             // address that was dialled, which both sides know and which is the
             // identity itself in that case.
-            let dialled_id = addr.id;
+            let dialled_id = RotelyxId::from(addr.id);
 
             let endpoint =
                 RotelyxEndpoint::bind_as(&identity, transport, net_config(relay.as_deref())?)
@@ -719,10 +761,40 @@ async fn main() -> Result<()> {
             let shared = dialled_id.as_bytes().to_vec();
             let my_name = identity.in_conversation(&shared);
             let me = Member::new(my_name.as_bytes()).context("creating member")?;
-            let conversation = handshake::join(&mut session, &me).await?;
+
+            let saved = resume::reopen(&paths, &dialled_id, &passphrase)?;
+            let opened = handshake::join_resuming(&mut session, &me, saved).await?;
+
+            let (me, conversation) = match opened {
+                handshake::Opened::Fresh(conversation) => (me, conversation),
+                handshake::Opened::Resumed {
+                    member,
+                    conversation,
+                } => {
+                    println!("carried on from where this conversation left off.");
+                    (member, conversation)
+                }
+            };
+
+            // Saved before a word is typed, and again on the way out.
+            //
+            // A conversation that is only written when the program exits
+            // cleanly is one that people lose: terminals get closed, laptops
+            // sleep, power goes. Worse, this side has just committed a fresh
+            // epoch that the other side has already processed, so leaving
+            // without recording it means coming back to an epoch they have
+            // moved past.
+            resume::save(&paths, &dialled_id, &me, &conversation, &passphrase)?;
 
             print_safety_number(my_name, &conversation);
-            chat(session, conversation, me, net_config(relay.as_deref())?.paths()).await?;
+            let conversation = chat(
+                session,
+                conversation,
+                &me,
+                net_config(relay.as_deref())?.paths(),
+            )
+            .await?;
+            resume::save(&paths, &dialled_id, &me, &conversation, &passphrase)?;
             endpoint.close().await;
         }
     }

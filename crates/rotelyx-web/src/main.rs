@@ -15,6 +15,7 @@
 //! page says so, prominently, so nobody mistakes this for a secure web client.
 
 mod handshake;
+mod resume;
 mod session;
 
 use std::net::SocketAddr;
@@ -139,6 +140,16 @@ struct InviteRequest {
     hours: u64,
 }
 
+#[derive(serde::Deserialize)]
+struct WithdrawRequest {
+    code: String,
+}
+
+#[derive(serde::Serialize)]
+struct WithdrawResponse {
+    withdrawn: bool,
+}
+
 #[derive(serde::Serialize)]
 struct InviteResponse {
     code: String,
@@ -167,6 +178,43 @@ async fn api_invite(
     store::add_invitation(&path, stored, epoch).map_err(|e| err(e.into()))?;
 
     Ok(Json(InviteResponse { code }))
+}
+
+/// Withdraw an invitation, which is what blocking means here.
+///
+/// There is no identity to ban: a caller arrives on a key belonging to one
+/// invitation and the name anybody sees is derived per conversation. What can be
+/// withdrawn is the invitation, and that is checked against a secret this side
+/// holds rather than against something the caller said about itself.
+///
+/// The conversation that ran on it goes with it. An invitation withdrawn while
+/// its conversation stays on the disk is a person told they are blocked and a
+/// file that still decrypts everything they said.
+async fn api_withdraw(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<WithdrawRequest>,
+) -> std::result::Result<Json<WithdrawResponse>, (axum::http::StatusCode, String)> {
+    let err = |e: anyhow::Error| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+
+    let epoch = now_epoch().map_err(err)?;
+    let path = invitations_path(&state.identity_path);
+    let live = store::load_invitations(&path, epoch).map_err(|e| err(e.into()))?;
+
+    let code = req.code.trim();
+    let target = live.iter().find(|inv| inv.code() == code).ok_or((
+        axum::http::StatusCode::NOT_FOUND,
+        "that is not a code this device issued".to_string(),
+    ))?;
+
+    let address = target.to_invitation().address();
+    let withdrawn =
+        store::revoke_invitation(&path, &target.secret, epoch).map_err(|e| err(e.into()))?;
+    if withdrawn {
+        let paths = store::Paths::from_identity(&state.identity_path);
+        crate::resume::forget(&paths, &address).map_err(err)?;
+    }
+
+    Ok(Json(WithdrawResponse { withdrawn }))
 }
 
 async fn ws_handler(
@@ -217,7 +265,13 @@ async fn drive(socket: WebSocket, state: Arc<AppState>) {
     let identity = Identity::from_bytes(*state.identity.to_storage_bytes());
     let invitations =
         load_invitations(&invitations_path(&state.identity_path), epoch).unwrap_or_default();
-    let mut driver = Driver::new(identity, invitations, epoch, event_tx.clone());
+    let mut driver = Driver::new(
+        identity,
+        rotelyx_core::store::Paths::from_identity(&state.identity_path),
+        invitations,
+        epoch,
+        event_tx.clone(),
+    );
 
     // The first command decides the role for the whole session.
     let outcome = match cmd_rx.recv().await {
@@ -262,6 +316,7 @@ async fn main() -> Result<()> {
         .route("/", get(index))
         .route("/api/state", get(api_state))
         .route("/api/invite", post(api_invite))
+        .route("/api/withdraw", post(api_withdraw))
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
 

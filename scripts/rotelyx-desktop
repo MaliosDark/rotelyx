@@ -1,32 +1,108 @@
 #!/usr/bin/env bash
-# Launch the Rotelyx desktop window.
 #
-# Why this wrapper exists: when a terminal is started from inside a snap, for
-# example VS Code's, the snap runtime leaks its own library and GTK paths into
-# the environment. A normally linked binary then picks up the snap's
-# libpthread and dies with:
+# Start the desktop client, with a relay of its own.
+#
+#   scripts/rotelyx-desktop                 a scratch identity, for trying it
+#   scripts/rotelyx-desktop my.key          an identity you keep
+#
+# # Run this from an ordinary terminal
+#
+# Not from a terminal inside VS Code when VS Code is installed as a snap. A snap
+# puts its own runtime over `/lib` in the mount namespace of everything it
+# spawns, so GTK and WebKit load the snap's glibc and the process dies with
 #
 #   symbol lookup error: /snap/core20/.../libpthread.so.0:
-#   undefined symbol: __libc_pthread_init
+#   undefined symbol: __libc_pthread_init, version GLIBC_PRIVATE
 #
-# Clearing those variables is enough. Nothing here changes how Rotelyx behaves,
-# it only stops a foreign runtime being injected under it.
+# which looks like a bug in this program and is not one. `ldd` shows nothing,
+# because the libraries that pull it in are opened at runtime rather than linked.
+set -uo pipefail
+cd "$(dirname "$0")/.."
 
-set -euo pipefail
+# Ideoa Labs production, the same two the phone client ships with. A desktop
+# pointed at a relay on this machine can only ever reach somebody else on this
+# machine, which is a test and was never the default it should have had.
+#
+#   scripts/rotelyx-desktop                 production
+#   scripts/rotelyx-desktop --local         a relay here, for trying things
+#   scripts/rotelyx-desktop my.key          production, with an identity of yours
+PROD_RELAY="https://relay-rotelyx.ideoa.co"
+PROD_MAILBOX="wss://mail-rotelyx.ideoa.co/mailbox"
 
-BIN="${ROTELYX_BIN:-$(dirname "$0")/../target/debug/rotelyx-desktop}"
-
-if [ ! -x "$BIN" ]; then
-  echo "not built yet: $BIN" >&2
-  echo "run: cargo build -p rotelyx-desktop" >&2
-  exit 1
+LOCAL=0
+if [ "${1:-}" = "--local" ]; then
+    LOCAL=1
+    shift
 fi
 
-exec env \
-  -u SNAP -u SNAP_REVISION -u SNAP_NAME -u SNAP_INSTANCE_NAME \
-  -u SNAP_LIBRARY_PATH -u SNAP_USER_COMMON -u SNAP_USER_DATA \
-  -u GTK_PATH -u GIO_MODULE_DIR -u GSETTINGS_SCHEMA_DIR \
-  -u GDK_PIXBUF_MODULE_FILE -u LOCPATH -u LD_LIBRARY_PATH \
-  -u XDG_DATA_DIRS -u XDG_DATA_HOME -u XDG_CONFIG_DIRS \
-  DISPLAY="${DISPLAY:-:0}" \
-  "$BIN" "$@"
+IDENTITY="${1:-$PWD/rotelyx-identity.key}"
+
+if [ "$LOCAL" = 1 ]; then
+    RELAY_PORT="${ROTELYX_RELAY_PORT:-9455}"
+    RELAY="http://127.0.0.1:$RELAY_PORT"
+    MAILBOX="ws://127.0.0.1:3341/mailbox"
+else
+    RELAY="$PROD_RELAY"
+    MAILBOX="$PROD_MAILBOX"
+fi
+
+# Always, rather than only when the binary is missing.
+#
+# It was written the second way and that is how an edit to the window silently
+# did not appear: the binary existed, so nothing rebuilt it, and the change
+# looked like it had not been made. Cargo does nothing when there is nothing to
+# do, so the only cost of asking every time is the question.
+for bin in rotelyx-desktop rotelyx-relay; do
+    echo "building $bin"
+    cargo build -p "$bin" || exit 1
+done
+
+# A relay here only when asked for one. Against production there is already one
+# and starting a second would just be a second thing to get wrong.
+if [ "$LOCAL" = 1 ] && ! curl -s -o /dev/null -m 2 "$RELAY/ping"; then
+    echo "starting a relay on $RELAY"
+    nohup ./target/debug/rotelyx-relay --bind "127.0.0.1:$RELAY_PORT" --open \
+        > "${TMPDIR:-/tmp}/rotelyx-relay.log" 2>&1 &
+    for _ in $(seq 1 20); do
+        curl -s -o /dev/null -m 1 "$RELAY/ping" && break
+        sleep 0.5
+    done
+fi
+
+echo "identity $IDENTITY"
+echo "relay    $RELAY"
+echo "mailbox  $MAILBOX"
+
+# A passphrase for the scratch identity, so trying this out does not begin with
+# a prompt.
+#
+# The identity is generated either way: that part never needed asking. The
+# passphrase cannot be, because it is the whole of what protects the key at
+# rest, and a program that picked one and kept it next to the key would be
+# sealing a door and taping the key to it.
+#
+# So for the default path, which is a scratch identity for trying things, this
+# uses a known passphrase and says out loud that it is known. For any other path
+# it asks, because that one might be somebody's.
+DEFAULT_IDENTITY="$PWD/rotelyx-identity.key"
+if [ "$IDENTITY" = "$DEFAULT_IDENTITY" ] && [ -z "${ROTELYX_PASSPHRASE:-}" ]; then
+    export ROTELYX_PASSPHRASE="rotelyx-scratch"
+    echo
+    echo "Using the scratch passphrase 'rotelyx-scratch' so this starts without a"
+    echo "prompt. That identity is for trying things: its passphrase is in this"
+    echo "script, so anybody who can read the file can open it."
+    echo
+    echo "For one that is yours, give it a path and choose a passphrase:"
+    echo "  scripts/rotelyx-desktop ~/my-rotelyx.key"
+elif [ ! -f "$IDENTITY" ]; then
+    echo
+    echo "That file does not exist, so an identity is made there and sealed with"
+    echo "the passphrase you choose now. There is no recovery for it, and an empty"
+    echo "one is refused because it seals with a value everybody knows."
+fi
+echo
+# ROTELYX_RELAY rather than a flag: this binary parses no command line, and a
+# flag it silently ignores is worse than none. The window reads this and fills
+# the relay box with it.
+exec env ROTELYX_IDENTITY="$IDENTITY" ROTELYX_RELAY="$RELAY" ROTELYX_MAILBOX="$MAILBOX" \
+    ./target/debug/rotelyx-desktop

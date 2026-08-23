@@ -14,25 +14,28 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use zeroize::Zeroizing;
 use rotelyx_core::{sealed, Identity};
 
 const PASSPHRASE_ENV: &str = "ROTELYX_PASSPHRASE";
 
 /// Read a passphrase, preferring the environment so unattended runs work.
-fn read_passphrase(prompt: &str) -> Result<String> {
+fn read_passphrase(prompt: &str) -> Result<Zeroizing<String>> {
     if let Ok(from_env) = std::env::var(PASSPHRASE_ENV) {
         eprintln!(
             "using {PASSPHRASE_ENV}. The environment of a process is readable by \
              anything running as this user; prefer the prompt for real keys."
         );
-        return Ok(from_env);
+        return Ok(Zeroizing::new(from_env));
     }
-    rpassword::prompt_password(prompt).context("reading passphrase")
+    Ok(Zeroizing::new(
+        rpassword::prompt_password(prompt).context("reading passphrase")?,
+    ))
 }
 
-fn confirm_new_passphrase() -> Result<String> {
+fn confirm_new_passphrase() -> Result<Zeroizing<String>> {
     if let Ok(from_env) = std::env::var(PASSPHRASE_ENV) {
-        return Ok(from_env);
+        return Ok(Zeroizing::new(from_env));
     }
     let first = rpassword::prompt_password("Choose a passphrase for this identity: ")
         .context("reading passphrase")?;
@@ -46,7 +49,7 @@ fn confirm_new_passphrase() -> Result<String> {
         // is sealed with a key an attacker already knows.
         bail!("an empty passphrase seals the key with a value everybody knows");
     }
-    Ok(first)
+    Ok(Zeroizing::new(first))
 }
 
 fn restrict(path: &Path) -> Result<()> {
@@ -65,7 +68,14 @@ fn restrict(path: &Path) -> Result<()> {
 /// A plaintext key file left over from an earlier build is migrated in place
 /// rather than rejected: refusing to start would just push people back to the
 /// old binary.
-pub fn load_or_create(path: &Path) -> Result<Identity> {
+/// The same, keeping the passphrase.
+///
+/// A saved conversation is sealed under the identity's passphrase, because it
+/// is the same secret protecting the same person and asking for a second one
+/// would mean two things to remember and one of them written down. The caller
+/// gets it back rather than prompting again: a person asked twice for the same
+/// passphrase in one command reasonably concludes the first attempt failed.
+pub fn load_with_passphrase(path: &Path) -> Result<(Identity, Zeroizing<String>)> {
     if !path.exists() {
         let passphrase = confirm_new_passphrase()?;
         let identity = Identity::generate();
@@ -79,16 +89,17 @@ pub fn load_or_create(path: &Path) -> Result<Identity> {
         eprintln!();
         eprintln!("There is no way to recover this key. There is no server holding a");
         eprintln!("copy and no password reset. Losing it loses the identity.");
-        return Ok(identity);
+        return Ok((identity, passphrase));
     }
 
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
 
     if sealed::is_sealed(&bytes) {
         let passphrase = read_passphrase("Passphrase: ")?;
-        return sealed::open(&bytes, &passphrase)
+        let identity = sealed::open(&bytes, &passphrase)
             .map_err(|e| anyhow::anyhow!("{e}"))
-            .context("opening sealed identity");
+            .context("opening sealed identity")?;
+        return Ok((identity, passphrase));
     }
 
     // Legacy plaintext key.
@@ -105,7 +116,7 @@ pub fn load_or_create(path: &Path) -> Result<Identity> {
     restrict(path)?;
     eprintln!("sealed. The plaintext key is gone from {}.", path.display());
 
-    Ok(identity)
+    Ok((identity, passphrase))
 }
 
 #[cfg(test)]
@@ -154,14 +165,14 @@ mod tests {
         let _passphrase = Passphrase::set();
         let path = tmp("new");
 
-        let identity = load_or_create(&path).expect("create");
+        let (identity, _) = load_with_passphrase(&path).expect("create");
         let bytes = std::fs::read(&path).expect("read");
 
         assert!(sealed::is_sealed(&bytes), "the key file is not sealed");
         assert_ne!(bytes.len(), 32, "the key was written raw");
 
         // And it opens again to the same identity.
-        let again = load_or_create(&path).expect("reopen");
+        let (again, _) = load_with_passphrase(&path).expect("reopen");
         assert_eq!(identity.id(), again.id());
 
         let _ = std::fs::remove_file(&path);
@@ -176,7 +187,7 @@ mod tests {
         std::fs::write(&path, &*original.to_storage_bytes()).expect("write raw");
         assert_eq!(std::fs::read(&path).unwrap().len(), 32);
 
-        let loaded = load_or_create(&path).expect("migrate");
+        let (loaded, _) = load_with_passphrase(&path).expect("migrate");
 
         assert_eq!(loaded.id(), original.id(), "migration changed the identity");
         assert!(

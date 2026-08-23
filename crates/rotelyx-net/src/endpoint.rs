@@ -161,6 +161,33 @@ impl NetEndpoint {
         })
     }
 
+    /// Accept a connection without waiting for a stream on it.
+    ///
+    /// # Why this exists beside `accept`
+    ///
+    /// [`NetEndpoint::accept`] waits for a bidirectional stream, which is right
+    /// for everything that talks in frames. It is wrong for anything that talks
+    /// only in datagrams, and a call is exactly that: audio never touches a
+    /// stream.
+    ///
+    /// The trap is that a stream is invisible until it carries a byte. A dialler
+    /// that opens one and writes nothing has, as far as the peer is concerned,
+    /// opened nothing, so `accept` waits forever while the dialler believes it
+    /// is connected and starts sending audio into a call that was never
+    /// answered. Both ends look connected and neither hears anything, which is
+    /// what a real phone and a real desktop did.
+    ///
+    /// So a caller that only wants datagrams asks for this instead, and does not
+    /// depend on the other side happening to write first.
+    pub async fn accept_media(&self) -> Result<(EndpointId, Connection)> {
+        let incoming = self.inner.accept().await.context("endpoint closed")?;
+        let conn = incoming.await.context("completing inbound handshake")?;
+        // Authenticated during the QUIC handshake, so this is the real remote
+        // key rather than a self-asserted one.
+        let peer = conn.remote_id();
+        Ok((peer, conn))
+    }
+
     /// Whether traffic to `peer` is currently on a direct path.
     ///
     /// Returns `None` when the peer is unknown. Surface this in the UI: a user

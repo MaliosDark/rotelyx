@@ -38,6 +38,14 @@ pub enum Command {
     /// Stop talking. The session stays up.
     EndCall,
     Hangup,
+    /// Remove a member, by the key that identifies them.
+    ///
+    /// A key rather than a name: two members can choose the same label, and a
+    /// position in the tree shifts as people come and go, so a caller holding
+    /// one across an epoch would remove somebody else.
+    Remove { key: String },
+    /// Say who is here, so the window can offer to remove one of them.
+    WhoIsHere,
 }
 
 /// A member's identity, short enough to read and long enough to mean something.
@@ -80,14 +88,31 @@ pub enum Event {
         added: Vec<String>,
         removed: Vec<String>,
     },
+    /// Everybody in the conversation, with the key each is removed by.
+    Members { members: Vec<Present> },
     Disconnected { reason: String },
     Error { text: String },
+}
+
+/// One member, as the window needs to show and act on them.
+///
+/// Not `rotelyx_crypto::Member`, which is this side's own signing identity. A
+/// name collision worth keeping apart: one is who we are, the other is a row on
+/// a list of who is here.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Present {
+    /// What they called themselves. It proves nothing on its own.
+    pub label: String,
+    /// What removing them takes.
+    pub key: String,
 }
 
 /// Everything one window needs to run a session.
 pub struct Engine {
     identity: Identity,
     paths: Paths,
+    /// Seals a conversation between runs. See `resume`.
+    passphrase: zeroize::Zeroizing<String>,
     epoch: u64,
     events: Arc<dyn Fn(Event) + Send + Sync>,
     /// The network configuration for this session, and what decides whether a
@@ -106,6 +131,7 @@ impl Engine {
     pub fn new(
         identity: Identity,
         paths: Paths,
+        passphrase: zeroize::Zeroizing<String>,
         epoch: u64,
         events: Arc<dyn Fn(Event) + Send + Sync>,
         relay: Option<&str>,
@@ -122,6 +148,7 @@ impl Engine {
         Ok(Self {
             identity,
             paths,
+            passphrase,
             epoch,
             events,
             net,
@@ -223,12 +250,38 @@ impl Engine {
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
-        let conversation = crate::handshake::host(&mut session, &me)
+        // The address is the name of the conversation, so it is also the name of
+        // the file. See `resume`.
+        let here = session.answered_at().unwrap_or_else(|| self.identity.id());
+        let saved = crate::resume::reopen(&self.paths, &here, &self.passphrase)?;
+        let opened = crate::handshake::host_resuming(&mut session, &me, saved)
             .await
             .context("MLS handshake")?;
+
+        let (me, conversation) = match opened {
+            crate::handshake::Opened::Fresh(conversation) => (me, conversation),
+            crate::handshake::Opened::Resumed {
+                member,
+                conversation,
+            } => {
+                self.emit(Event::Status {
+                    text: "Carried on from where this conversation left off".into(),
+                });
+                (member, conversation)
+            }
+        };
+
+        // Written before a word is typed. A conversation only saved on a clean
+        // exit is one people lose, and this side has just committed an epoch the
+        // other has already processed.
+        crate::resume::save(&self.paths, &here, &me, &conversation, &self.passphrase)?;
+
         self.announce(&endpoint, &conversation, my_name).await;
 
-        self.chat(session, conversation, me, rx).await;
+        let conversation = self.chat(session, conversation, &me, rx).await;
+        if let Some(conversation) = conversation {
+            crate::resume::save(&self.paths, &here, &me, &conversation, &self.passphrase)?;
+        }
         endpoint.close().await;
         Ok(())
     }
@@ -284,7 +337,7 @@ impl Engine {
             }
             None => (Admission::None, addr),
         };
-        let dialled_id = addr.id;
+        let dialled_id = rotelyx_core::RotelyxId::from(addr.id);
 
         let endpoint = RotelyxEndpoint::bind_as(&self.identity, transport, self.net.clone())
             .await
@@ -305,12 +358,32 @@ impl Engine {
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
-        let conversation = crate::handshake::join(&mut session, &me)
+        let saved = crate::resume::reopen(&self.paths, &dialled_id, &self.passphrase)?;
+        let opened = crate::handshake::join_resuming(&mut session, &me, saved)
             .await
             .context("MLS handshake")?;
+
+        let (me, conversation) = match opened {
+            crate::handshake::Opened::Fresh(conversation) => (me, conversation),
+            crate::handshake::Opened::Resumed {
+                member,
+                conversation,
+            } => {
+                self.emit(Event::Status {
+                    text: "Carried on from where this conversation left off".into(),
+                });
+                (member, conversation)
+            }
+        };
+
+        crate::resume::save(&self.paths, &dialled_id, &me, &conversation, &self.passphrase)?;
+
         self.announce(&endpoint, &conversation, my_name).await;
 
-        self.chat(session, conversation, me, rx).await;
+        let conversation = self.chat(session, conversation, &me, rx).await;
+        if let Some(conversation) = conversation {
+            crate::resume::save(&self.paths, &dialled_id, &me, &conversation, &self.passphrase)?;
+        }
         endpoint.close().await;
         Ok(())
     }
@@ -387,13 +460,18 @@ impl Engine {
         )
     }
 
+    /// Returns the conversation as it ended, so the caller can save it.
+    ///
+    /// `None` when the session fell over rather than closing, in which case what
+    /// is already on disk is the last thing both sides agreed on and is better
+    /// than whatever half state this one is in.
     async fn chat(
         &self,
         session: Session,
         mut conversation: Conversation,
-        me: Member,
+        me: &Member,
         rx: &mut mpsc::UnboundedReceiver<Command>,
-    ) {
+    ) -> Option<Conversation> {
         let (mut send, mut recv, conn) = session.split_for_chat();
 
         // No call until somebody asks for one, so a window that only types opens
@@ -414,6 +492,10 @@ impl Engine {
             tokio::select! {
                 command = rx.recv() => {
                     match command {
+                        // Both belong to a conversation met through a code,
+                        // which is the other transport. A session on this one
+                        // has exactly two members and no roster to act on.
+                        Some(Command::Remove { .. }) | Some(Command::WhoIsHere) => {}
                         Some(Command::Send { text }) => {
                             match conversation.send(&me, text.as_bytes()) {
                                 Ok(ciphertext) => {
@@ -537,5 +619,6 @@ impl Engine {
         let _ = send.finish();
         let _ = send.stopped().await;
         conn.close(0u32.into(), b"bye");
+        Some(conversation)
     }
 }

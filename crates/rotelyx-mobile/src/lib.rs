@@ -459,6 +459,63 @@ pub unsafe extern "C" fn rotelyx_string_free(s: *mut c_char) {
 }
 
 /// The request and response shape this library speaks. Never freed: static.
+/// Hand the audio backend the Android context, once, before any call.
+///
+/// # Why this is needed and why it is a separate entry point
+///
+/// Audio on Android goes through oboe, which asks `ndk-context` for the JavaVM
+/// and the Activity. Those cannot be discovered from Rust: the VM is created by
+/// the runtime and the Activity belongs to Java, so somebody on the Java side
+/// has to pass them down.
+///
+/// An `ndk-glue` application gets this for free because glue owns `main`. This
+/// is a library inside a Flutter application, which owns nothing, so nothing was
+/// setting it and `ndk_context::android_context()` aborted the process. Not an
+/// exception a caller could catch and not an error code: an abort, which the
+/// operating system reports as the application closing. Pressing call killed the
+/// app with no message anywhere, which is what a real phone did.
+///
+/// # Safety
+///
+/// Called by the JVM through JNI with a live `JNIEnv` and a `Context`. The
+/// context is turned into a global reference and deliberately leaked: it has to
+/// outlive this call and every audio stream opened afterwards, and the process
+/// ending is the only thing that ends it.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_ideoalabs_rotelyx_Native_initAndroidContext(
+    env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    context: jni::objects::JObject,
+) {
+    use std::sync::Once;
+
+    // Once, because a second call would leak a second global reference and
+    // replace a pointer the audio backend may already be holding.
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let Ok(vm) = env.get_java_vm() else {
+            return;
+        };
+        let Ok(context) = env.new_global_ref(context) else {
+            return;
+        };
+
+        unsafe {
+            ndk_context::initialize_android_context(
+                vm.get_java_vm_pointer() as *mut std::ffi::c_void,
+                context.as_obj().as_raw() as *mut std::ffi::c_void,
+            );
+        }
+
+        // Leaked on purpose. The global reference has to outlive every stream
+        // the backend opens, and there is no later moment that could free it
+        // safely.
+        std::mem::forget(context);
+        std::mem::forget(vm);
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn rotelyx_abi_version() -> *const c_char {
     concat!("1", "\0").as_ptr() as *const c_char

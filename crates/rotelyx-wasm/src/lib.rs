@@ -486,23 +486,25 @@ impl Session {
         fn short(identity: &[u8]) -> String {
             identity.iter().take(8).map(|b| format!("{b:02x}")).collect()
         }
-        fn quoted(names: &[String]) -> String {
-            names
-                .iter()
-                .map(|n| format!("\"{n}\""))
-                .collect::<Vec<_>>()
-                .join(",")
-        }
 
-        Ok(match outcome {
+        // Built by serde rather than by hand.
+        //
+        // It was written by hand, on the reasoning that `escape_default` covers
+        // "everything that could break the string". It does not: it produces
+        // Rust escapes, and Rust writes a unit separator as `\u{1f}` where JSON
+        // requires `\u001f`. Any parser reading the result answered "invalid
+        // escape at line 1 column 41" and the caller took that for a failed
+        // session.
+        //
+        // The same is true of every character above ASCII, which is the part
+        // that matters most: `escape_default` renders an accented letter the
+        // same way. A message with an accent in it produced a document no
+        // parser would accept, which in Spanish is most messages.
+        let value = match outcome {
             rotelyx_crypto::Received::Message(plaintext) => {
                 let text = String::from_utf8(plaintext)
                     .map_err(|_| Error::new("decrypted payload is not valid UTF-8"))?;
-                // Written by hand rather than pulling in a JSON crate for one
-                // field. `escape_default` covers quotes, backslashes and control
-                // characters, which is everything that could break the string.
-                let escaped: String = text.escape_default().collect();
-                format!("{{\"kind\":\"message\",\"text\":\"{escaped}\"}}")
+                serde_json::json!({ "kind": "message", "text": text })
             }
             rotelyx_crypto::Received::MembershipChanged(change) => {
                 let added: Vec<String> = change.added.iter().map(|p| short(&p.identity)).collect();
@@ -513,15 +515,17 @@ impl Session {
                     .as_ref()
                     .map(|c| c.member_count())
                     .unwrap_or(0);
-                format!(
-                    "{{\"kind\":\"membership\",\"added\":[{}],\"removed\":[{}],\"members\":{}}}",
-                    quoted(&added),
-                    quoted(&removed),
-                    members
-                )
+                serde_json::json!({
+                    "kind": "membership",
+                    "added": added,
+                    "removed": removed,
+                    "members": members,
+                })
             }
-            rotelyx_crypto::Received::Nothing => "{\"kind\":\"nothing\"}".to_string(),
-        })
+            rotelyx_crypto::Received::Nothing => serde_json::json!({ "kind": "nothing" }),
+        };
+
+        serde_json::to_string(&value).map_err(|e| Error::new(format!("{e}")))
     }
 
     // ---- mailbox -----------------------------------------------------------
@@ -579,7 +583,88 @@ impl Session {
             .collect())
     }
 
-    /// The tag this member listens on.
+    /// What names this conversation, for as long as it exists.
+    ///
+    /// The group id, as hex. It does not move when the epoch does, when somebody
+    /// joins, or when somebody is removed, which is what makes it the right name
+    /// for a file: a label collides the moment two people choose the same one,
+    /// and a meeting code is spent as soon as the conversation exists.
+    #[wasm_bindgen(js_name = groupId)]
+    pub fn group_id(&self) -> Result<String, Error> {
+        let group = self
+            .conversation
+            .as_ref()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+        Ok(hex(&group.group_id()))
+    }
+
+    /// Everyone in the conversation, with the key that identifies each of them.
+    ///
+    /// Returns JSON: `[{"label":…,"key":…}]`, where `key` is a base64 signature
+    /// key. `roster` gives the labels alone, which is right for showing who is
+    /// here and useless for acting on one of them: two members can choose the
+    /// same label, and a label is not what removal takes.
+    ///
+    /// The key rather than a position in the tree, for the reason `Group::remove`
+    /// gives: an index shifts as members come and go, and a caller holding one
+    /// across an epoch would remove somebody else.
+    #[wasm_bindgen(js_name = rosterDetail)]
+    pub fn roster_detail(&self) -> Result<String, Error> {
+        let group = self
+            .conversation
+            .as_ref()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+
+        let members: Vec<serde_json::Value> = group
+            .roster()
+            .into_iter()
+            .map(|p| {
+                serde_json::json!({
+                    "label": String::from_utf8_lossy(&p.identity).into_owned(),
+                    "key": BASE64.encode(&p.signature_key),
+                })
+            })
+            .collect();
+
+        serde_json::to_string(&members).map_err(|e| Error::new(format!("{e}")))
+    }
+
+    /// Remove a member, returning the commit every other member must apply.
+    ///
+    /// # What removal is and is not
+    ///
+    /// It is a commit, not a local setting. A device that is gone is a leaf that
+    /// can still decrypt, and forgetting it here changes nothing about that: the
+    /// key schedule includes it until the group says otherwise. Everybody who
+    /// applies this commit moves to an epoch derived without that leaf.
+    ///
+    /// What it does not do is reach backwards. The removed member keeps
+    /// everything it could already read, which is what forward secrecy means:
+    /// what comes next is encrypted under a schedule it is no longer part of.
+    ///
+    /// The caller sends the commit to the members who have **not** applied it,
+    /// which is all of them, so it is addressed one epoch back. See
+    /// `sealCommitForGroup`.
+    #[wasm_bindgen(js_name = removeMember)]
+    pub fn remove_member(&mut self, signature_key_b64: &str) -> Result<String, Error> {
+        let key = decode(signature_key_b64)?;
+
+        let member = &self.member;
+        let group = self
+            .conversation
+            .as_mut()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+
+        let commit = group.remove(member, &key).map_err(err)?;
+
+        // The removal is merged locally by `Group::remove`, so this side is
+        // already at the new epoch and needs its key before it addresses
+        // anybody.
+        self.sync_tag_keys()?;
+        Ok(BASE64.encode(&commit))
+    }
+
+    /// The tag this member listens on.    /// The tag this member listens on.
     ///
     /// Derived from the group's pinned key and this member's own signature
     /// key, so every other member computes the same value for us and nobody
@@ -1104,6 +1189,150 @@ fn tag_from_hex(hex_str: &str) -> Result<Tag, Error> {
 }
 
 // ---------------------------------------------------------------------------
+// Meeting codes
+// ---------------------------------------------------------------------------
+
+/// The prefix, so a scanner can tell a Rotelyx code from any other QR before it
+/// tries to use one.
+pub const MEETING_PREFIX: &str = "RTLX1";
+
+/// The alphabet: base32 as RFC 4648 defines it.
+///
+/// Two properties earn it the job. Every character is legal in the QR standard's
+/// alphanumeric mode, so an encoder can pack two characters into eleven bits
+/// rather than spending eight on each. And it omits 0, 1 and 8, which are the
+/// digits people mistake for O, I and B when reading a code aloud.
+const MEETING_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/// How many random bytes a code carries.
+///
+/// Fifteen bytes is 120 bits, an exact multiple of the five bits a base32
+/// character holds, so the code needs no padding and comes to 29 characters.
+const MEETING_ENTROPY: usize = 15;
+
+/// How many characters those bytes become.
+const MEETING_BODY: usize = MEETING_ENTROPY * 8 / 5;
+
+/// Mint a meeting code.
+///
+/// # What this is and is not
+///
+/// It is not a key and it is not an identity. It is an address at the mailbox,
+/// in the same sense as a table number in a cafe. Both sides run it through
+/// [`rendezvous_tag`], arrive at the same tag, and hand each other the real keys
+/// there, where their size costs nothing.
+///
+/// The obvious alternative, putting the invitation in the QR, cannot be done. An
+/// X-Wing public key is 1216 bytes because that is what resisting a quantum
+/// computer costs, and with the key package and base64 alongside it the
+/// invitation comes to roughly three thousand characters. A QR tops out at 2953,
+/// at the weakest correction level, and at the level that leaves room for a logo
+/// the ceiling is 1273.
+///
+/// # What it is worth to an attacker
+///
+/// Exactly one attempt at being first. Whoever reaches the meeting place before
+/// the intended person completes the handshake in their place, and nothing in
+/// the code prevents it, because a code is not proof of who is holding it. The
+/// only thing that detects it is comparing the safety number out of band.
+///
+/// This is the same format `lib/rotelyx/meeting_code.dart` mints in the phone
+/// client, character for character, because a code minted on one and scanned by
+/// the other has to name the same place.
+#[wasm_bindgen(js_name = newMeetingCode)]
+pub fn new_meeting_code() -> Result<String, Error> {
+    let mut bytes = [0u8; MEETING_ENTROPY];
+    getrandom::fill(&mut bytes)
+        .map_err(|e| Error::new(format!("no randomness available: {e}")))?;
+
+    let mut out = String::with_capacity(MEETING_PREFIX.len() + MEETING_BODY);
+    out.push_str(MEETING_PREFIX);
+
+    let mut buffer: u32 = 0;
+    let mut bits = 0;
+    for byte in bytes {
+        buffer = (buffer << 8) | u32::from(byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(char::from(MEETING_ALPHABET[((buffer >> bits) & 0x1F) as usize]));
+        }
+    }
+    debug_assert_eq!(bits, 0, "entropy must divide into whole base32 characters");
+
+    Ok(out)
+}
+
+/// Recognise a meeting code in whatever a scan or a paste produced.
+///
+/// Returns the code in its canonical form, or an error if this is not one.
+///
+/// Tolerant on the way in and strict on the way out. A code may arrive wrapped
+/// in a link, with a trailing space, in lower case, or split into groups by
+/// whoever typed it. None of those are the user's mistake to fix.
+///
+/// The canonical form is what goes into [`rendezvous_tag`]. Both clients derive
+/// the tag from this string and not from what was displayed, so the grouping
+/// used for reading a code aloud cannot change where the meeting happens.
+#[wasm_bindgen(js_name = readMeetingCode)]
+pub fn read_meeting_code(input: &str) -> Result<String, Error> {
+    let mut text = input.trim();
+
+    // A code shared as a link, which is what a person naturally does when they
+    // want it tappable in whatever they are pasting into. Only the custom
+    // scheme: an `https://` form would mean naming a web host in the client.
+    const SCHEME: &str = "rotelyx://";
+    if text.len() >= SCHEME.len() && text[..SCHEME.len()].eq_ignore_ascii_case(SCHEME) {
+        text = &text[SCHEME.len()..];
+    }
+
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .flat_map(char::to_uppercase)
+        .collect();
+
+    let body = cleaned
+        .strip_prefix(MEETING_PREFIX)
+        .ok_or_else(|| Error::new("that does not look like a meeting code"))?;
+
+    if body.len() != MEETING_BODY {
+        return Err(Error::new(
+            "a meeting code is the prefix and twenty nine characters",
+        ));
+    }
+    if !body.bytes().all(|b| MEETING_ALPHABET.contains(&b)) {
+        return Err(Error::new(
+            "a meeting code holds only the letters A to Z and the digits 2 to 7",
+        ));
+    }
+
+    Ok(format!("{MEETING_PREFIX}{body}"))
+}
+
+/// Break a code into groups for display.
+///
+/// A twenty nine character run is unreadable and unspeakable. Groups of four are
+/// what people are used to from card numbers and licence keys.
+///
+/// The prefix stays, as its own group. Dropping it would make the displayed code
+/// something [`read_meeting_code`] refuses, so copying what is on screen would
+/// fail in a way nobody could diagnose.
+#[wasm_bindgen(js_name = prettyMeetingCode)]
+pub fn pretty_meeting_code(code: &str) -> String {
+    let body = code.strip_prefix(MEETING_PREFIX).unwrap_or(code);
+
+    let mut out = String::from(MEETING_PREFIX);
+    for (at, ch) in body.chars().enumerate() {
+        if at % 4 == 0 {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Sealing
 // ---------------------------------------------------------------------------
 
@@ -1165,6 +1394,10 @@ impl Session {
 /// So the cost is paid once, at unlock, and the key is held. It is zeroized on
 /// drop, and it lives only as long as the tab.
 #[wasm_bindgen]
+/// Clone, because one window holds one of these and hands a copy to every
+/// conversation it runs. Deriving a second one instead would mean a second
+/// Argon2id at 64 MiB, which is the cost this type exists to pay once.
+#[derive(Clone)]
 pub struct SessionKey {
     key: Zeroizing<[u8; 32]>,
     salt: [u8; 16],
@@ -2179,6 +2412,202 @@ mod tests {
                     "hello"
                 );
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Meeting codes
+    // -----------------------------------------------------------------------
+
+    /// The shape the phone client mints, character for character.
+    ///
+    /// `lib/rotelyx/meeting_code.dart` is the other implementation of this, and
+    /// a code minted on one and scanned by the other has to name the same
+    /// place. The prefix, the length and the alphabet are the whole contract.
+    #[test]
+    fn a_minted_code_is_the_shape_the_phone_mints() {
+        let code = new_meeting_code().expect("entropy");
+
+        assert!(code.starts_with("RTLX1"), "no prefix: {code}");
+        assert_eq!(code.len(), 5 + 24, "not the length the phone produces");
+        assert!(
+            code[5..]
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() && b != b'0' && b != b'1' && b != b'8'
+                    || (b'2'..=b'7').contains(&b)),
+            "outside the base32 alphabet: {code}"
+        );
+    }
+
+    /// Two codes are not the same code.
+    ///
+    /// A guessable meeting code is a meeting somebody else can attend, and the
+    /// failure that produces one is a generator seeded from the clock rather
+    /// than the operating system. Two calls in the same millisecond is exactly
+    /// the case that catches it.
+    #[test]
+    fn two_codes_differ() {
+        let a = new_meeting_code().expect("entropy");
+        let b = new_meeting_code().expect("entropy");
+        assert_ne!(a, b, "the generator is not seeded from the OS");
+    }
+
+    /// What comes back from a minted code is the code.
+    #[test]
+    fn a_minted_code_reads_back() {
+        let code = new_meeting_code().expect("entropy");
+        assert_eq!(read_meeting_code(&code).expect("its own output"), code);
+    }
+
+    /// A real code the phone client minted, read here.
+    ///
+    /// Not a code this file produced: that would only prove this file agrees
+    /// with itself. This one came out of `newMeetingCode` in the Dart
+    /// implementation, run through `tool/mint_meeting_code.dart` in the phone
+    /// client, and it is here so that a change to either side that breaks the
+    /// other fails a test rather than a pairing.
+    #[test]
+    fn a_code_the_phone_minted_is_accepted() {
+        let from_the_phone = "RTLX122IOBRVXL5C6EH2RCMVH4TRU";
+        assert_eq!(from_the_phone.len(), 29);
+
+        let read = read_meeting_code(from_the_phone).expect("the phone minted this");
+        assert_eq!(read, from_the_phone);
+
+        // And the tag both sides derive from it, which is the thing that has to
+        // match. Derived from the canonical form, never from what was shown.
+        let tag = rendezvous_tag(&read).expect("a code is long enough to be a phrase");
+        assert_eq!(tag.len(), 64);
+    }
+
+    /// However it arrives, it is the same code.
+    ///
+    /// A camera may read one wrapped in a link, a person may paste it with a
+    /// trailing space, and a keyboard may have lower-cased it. Each of these
+    /// must reach the same meeting place, because otherwise the two sides sit
+    /// at different tags and the pairing simply never happens, with nothing on
+    /// either screen saying why.
+    #[test]
+    fn the_ways_a_code_arrives_all_name_one_place() {
+        let canonical = "RTLX122IOBRVXL5C6EH2RCMVH4TRU";
+
+        for arrival in [
+            "  RTLX122IOBRVXL5C6EH2RCMVH4TRU  ",
+            "rtlx122iobrvxl5c6eh2rcmvh4tru",
+            "rotelyx://RTLX122IOBRVXL5C6EH2RCMVH4TRU",
+            "ROTELYX://RTLX122IOBRVXL5C6EH2RCMVH4TRU",
+            // Exactly what `prettyMeetingCode` puts on the phone's screen.
+            "RTLX1 22IO BRVX L5C6 EH2R CMVH 4TRU",
+            "RTLX1-22IO-BRVX-L5C6-EH2R-CMVH-4TRU",
+        ] {
+            assert_eq!(
+                read_meeting_code(arrival).expect("this is a code"),
+                canonical,
+                "arrived as {arrival:?} and named somewhere else"
+            );
+        }
+    }
+
+    /// And what is not a code is refused rather than half accepted.
+    #[test]
+    fn what_is_not_a_code_is_refused() {
+        for not_one in [
+            "",
+            "RTLX1",
+            "hello",
+            // The desktop's own transport invitation, which is what its QR
+            // carried before this existed. Scanned into the phone it produced
+            // an error the person holding it could do nothing about.
+            "HqKKk-8fPRC7cTEaXLt1cxsKF3vOTkJKC1j6kmrZ3BJXxnFKQmifUbaqDsR3TWfYLKkImwQ2xWpR9sW9mr_UqA",
+            // Right length, wrong alphabet: 0, 1 and 8 are the characters it
+            // leaves out precisely because they are misread aloud.
+            "RTLX1000000000000000000000000",
+            // One short and one long, either of which is a misread rather than
+            // a code, and neither of which may be quietly padded or trimmed.
+            "RTLX122IOBRVXL5C6EH2RCMVH4TR",
+            "RTLX122IOBRVXL5C6EH2RCMVH4TRUU",
+            // A web link is not the custom scheme, deliberately: stripping one
+            // would mean this client agreeing that some host speaks for it.
+            "https://example.invalid/RTLX122IOBRVXL5C6EH2RCMVH4TRU",
+        ] {
+            assert!(
+                read_meeting_code(not_one).is_err(),
+                "accepted something that is not a meeting code: {not_one:?}"
+            );
+        }
+    }
+
+    /// The displayed form is still a code.
+    ///
+    /// Somebody reading a code off a screen copies what is on the screen. If
+    /// the pretty form were not accepted, copying what is displayed would fail,
+    /// and the person doing it would have no way to know they had been given
+    /// something to look at rather than something to use.
+    #[test]
+    fn the_pretty_form_is_still_readable() {
+        let code = new_meeting_code().expect("entropy");
+        let shown = pretty_meeting_code(&code);
+
+        assert!(shown.contains(' '), "nothing was grouped: {shown}");
+        assert_eq!(read_meeting_code(&shown).expect("what is on screen"), code);
+    }
+
+    /// Both sides of one code arrive at one tag.
+    ///
+    /// This is the whole mechanism in a line: the QR carries no keys, and what
+    /// makes it work is that two independent readings of the same code derive
+    /// the same address at the mailbox.
+    #[test]
+    fn one_code_is_one_meeting_place() {
+        let code = new_meeting_code().expect("entropy");
+
+        let host = rendezvous_tag(&code).expect("tag");
+        let guest = rendezvous_tag(&read_meeting_code(&pretty_meeting_code(&code)).expect("read"))
+            .expect("tag");
+
+        assert_eq!(host, guest, "the two sides would wait in different places");
+    }
+
+    /// A message comes back as JSON a parser will accept, whatever is in it.
+    ///
+    /// This was written by hand with `escape_default`, which produces Rust
+    /// escapes rather than JSON ones: a unit separator became `\u{1f}` where
+    /// JSON requires `\u001f`, and every character above ASCII went the same
+    /// way. The reader answered "invalid escape at line 1 column 41" and the
+    /// session it belonged to was taken for dead.
+    ///
+    /// The cases below are not exotic. An accent is most Spanish, an emoji is
+    /// most conversations, and the separator is what a read receipt is built
+    /// from, which is how this was found.
+    #[test]
+    fn what_receive_returns_is_json_whatever_the_message_held() {
+        let mut group = group_of(2);
+        let (host, guest) = group.split_at_mut(1);
+        let host = &mut host[0];
+        let guest = &mut guest[0];
+
+        for message in [
+            "plain",
+            "acentos y eñes: qué más añadir",
+            "an emoji 🔐 and another 🎧",
+            // What a read receipt is made of.
+            "rx-signal\u{1f}read\u{1f}1787519663000",
+            // The characters that break a hand-written string.
+            "quotes \" and \\ backslashes",
+            "a newline\nand a tab\t",
+        ] {
+            let ciphertext = host.send(message).expect("send");
+            let received = guest.receive(&ciphertext).expect("receive");
+
+            let parsed: serde_json::Value = serde_json::from_str(&received)
+                .unwrap_or_else(|e| panic!("not JSON for {message:?}: {e}\n  {received}"));
+
+            assert_eq!(parsed["kind"], "message", "for {message:?}");
+            assert_eq!(
+                parsed["text"].as_str().expect("a text field"),
+                message,
+                "what came back is not what went in"
+            );
         }
     }
 

@@ -64,6 +64,25 @@ impl Paths {
             identity,
         }
     }
+
+    /// Where the conversation reached at `address` is kept.
+    ///
+    /// # Why per address rather than one file
+    ///
+    /// A device has as many conversations as it has live invitations, because
+    /// every invitation is answered on its own transport key and therefore at
+    /// its own address. One file would mean the second conversation overwrote
+    /// the first, silently, and the person would find one of them gone.
+    ///
+    /// The address is the right name for the file for the same reason it is the
+    /// right thing to derive a per-conversation name from: it is what both sides
+    /// share and neither chose. It is also not secret, so a filename carrying it
+    /// tells somebody reading the directory exactly what the directory listing
+    /// already told them, which is that a conversation exists.
+    pub fn conversation_at(&self, address: &crate::identity::RotelyxId) -> PathBuf {
+        let short: String = address.to_string().chars().take(16).collect();
+        self.conversation.with_extension(format!("{short}.conversation"))
+    }
 }
 
 /// Restrict a file to its owner. A world readable key or blocklist tells

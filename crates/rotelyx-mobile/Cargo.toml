@@ -32,3 +32,15 @@ tokio = { workspace = true }
 data-encoding = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
+
+# Android only, and only for one thing: handing the audio backend the Android
+# context it cannot start without.
+#
+# cpal on Android goes through oboe, which asks `ndk-context` for the JavaVM and
+# the Activity. Nothing here is an `ndk-glue` application, so nobody was setting
+# them, and the answer to "who is asking" was an abort: `android context was not
+# initialized`, taken by the operating system as a crash of the whole app the
+# moment somebody pressed call. See `android_context` in src/lib.rs.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"

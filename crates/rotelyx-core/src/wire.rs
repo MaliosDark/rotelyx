@@ -57,6 +57,23 @@ pub enum FrameKind {
     /// Always the first frame a dialer sends. Anything else before it is a
     /// protocol violation and the session is dropped.
     Admission = 0x06,
+    /// The first thing a dialer says: which wire this build speaks.
+    ///
+    /// See [`WIRE_VERSION`]. Sent before anything else and not waited on, so it
+    /// costs no round trip; the listener reads it, decides, and then reads the
+    /// frame that was already on its way.
+    Hello = 0x08,
+    /// Asking whether the other side still holds the conversation we had here.
+    ///
+    /// Sent by the dialer in place of a key package, and only when it has state
+    /// of its own for this address. A listener that has none answers with an
+    /// empty payload, and both sides fall back to the ordinary handshake, so the
+    /// two are never left waiting for different things.
+    ///
+    /// A client too old to know this kind refuses the frame by name rather than
+    /// misreading it. That case is a downgrade: state is only ever saved by a
+    /// build that understands this.
+    Resume = 0x07,
 }
 
 impl FrameKind {
@@ -68,10 +85,31 @@ impl FrameKind {
             0x04 => Self::Ping,
             0x05 => Self::Pong,
             0x06 => Self::Admission,
+            0x07 => Self::Resume,
+            0x08 => Self::Hello,
             other => return Err(WireError::UnknownKind(other)),
         })
     }
 }
+
+/// Which wire this build speaks.
+///
+/// # Why a number on the wire and not a version string somewhere
+///
+/// Two builds that disagree about a format do not fail cleanly. Measured, on
+/// the change that made a credential `person_len ‖ person ‖ device`: a peer
+/// running the older build is understood **seven times in eight** and
+/// misunderstood the eighth, depending on the first byte of a key, and the
+/// misunderstanding is not an error. It is a safety number that does not match,
+/// with no reason given, for that pair, for ever.
+///
+/// A version that is only reported to the local caller cannot catch that. It has
+/// to cross, and it has to cross first.
+///
+/// Bump this whenever anything either side parses changes shape. It is cheaper
+/// to bump it once too often than to spend an afternoon finding out why one
+/// conversation in eight will not verify.
+pub const WIRE_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {

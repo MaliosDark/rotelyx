@@ -1,0 +1,37 @@
+[package]
+name = "rotelyx-mailbox-client"
+description = "Talking to a blind mailbox: the client half of the protocol the server defines."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The engine, not a copy of it. `seal_under`, `open_under` and `rendezvous_tag`
+# are the same functions the browser calls, so a desktop and a phone cannot
+# disagree about what an envelope is.
+rotelyx-wasm = { path = "../rotelyx-wasm" }
+rotelyx-mailbox = { path = "../rotelyx-mailbox" }
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json = "1"
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
+# TLS, and rustls rather than the platform's.
+#
+# Not optional: the production mailbox is `wss://`, and without a TLS feature
+# `connect_async` cannot open one at all. The client was written and tested
+# against a local `ws://` server, so every test passed while the only mailbox
+# anybody actually uses was unreachable.
+#
+# Webpki roots rather than the system store so the same binary behaves the same
+# on a machine whose certificate store is empty or unusual.
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+data-encoding.workspace = true

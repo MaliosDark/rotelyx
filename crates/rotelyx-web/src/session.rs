@@ -84,6 +84,22 @@ pub enum Event {
 /// Everything one browser tab drives.
 pub struct Driver {
     identity: Identity,
+    paths: store::Paths,
+    /// What a saved conversation is sealed under.
+    ///
+    /// # Why this is derived and not asked for
+    ///
+    /// This binary keeps its identity **unsealed**, 32 bytes on disk, so there is
+    /// no passphrase to reuse and inventing a prompt would put one secret behind
+    /// a door while its key lay next to it.
+    ///
+    /// Derived from the identity instead, which is worth saying plainly: against
+    /// somebody who can read the identity file this protects nothing, because
+    /// they can derive it too. What it does is keep a conversation out of a
+    /// backup that caught the conversation file and not the key, and stop the
+    /// group state sitting in the clear where a stray `cat` will print it. It is
+    /// exactly as strong as the identity file beside it and no stronger.
+    conversation_key: zeroize::Zeroizing<String>,
     invitations: Vec<store::StoredInvitation>,
     epoch: u64,
     tx: mpsc::UnboundedSender<Event>,
@@ -92,12 +108,23 @@ pub struct Driver {
 impl Driver {
     pub fn new(
         identity: Identity,
+        paths: store::Paths,
         invitations: Vec<store::StoredInvitation>,
         epoch: u64,
         tx: mpsc::UnboundedSender<Event>,
     ) -> Self {
+        let conversation_key = zeroize::Zeroizing::new(data_encoding::HEXLOWER.encode(
+            blake3::derive_key(
+                "rotelyx web conversation-at-rest v1",
+                &*identity.to_storage_bytes(),
+            )
+            .as_slice(),
+        ));
+
         Self {
             identity,
+            paths,
+            conversation_key,
             invitations,
             epoch,
             tx,
@@ -204,12 +231,32 @@ impl Driver {
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
-        let conversation = super::handshake::host(&mut session, &me)
+        let here = session.answered_at().unwrap_or_else(|| self.identity.id());
+        let saved = super::resume::reopen(&self.paths, &here, &self.conversation_key)?;
+        let opened = super::handshake::host_resuming(&mut session, &me, saved)
             .await
             .context("MLS handshake")?;
+
+        let (me, conversation) = match opened {
+            super::handshake::Opened::Fresh(conversation) => (me, conversation),
+            super::handshake::Opened::Resumed {
+                member,
+                conversation,
+            } => {
+                self.emit(Event::Status {
+                    text: "Carried on from where this conversation left off".into(),
+                });
+                (member, conversation)
+            }
+        };
+
+        super::resume::save(&self.paths, &here, &me, &conversation, &self.conversation_key)?;
+
         self.announce(&endpoint, &conversation, my_name).await;
 
-        self.chat(session, conversation, me, rx).await;
+        if let Some(conversation) = self.chat(session, conversation, &me, rx).await {
+            super::resume::save(&self.paths, &here, &me, &conversation, &self.conversation_key)?;
+        }
         endpoint.close().await;
         Ok(())
     }
@@ -263,7 +310,7 @@ impl Driver {
             }
             None => (Admission::None, None, addr),
         };
-        let dialled_id = addr.id;
+        let dialled_id = rotelyx_core::RotelyxId::from(addr.id);
 
         let endpoint = RotelyxEndpoint::bind_as(&self.identity, transport, NetConfig::direct_only())
             .await
@@ -284,12 +331,43 @@ impl Driver {
         let my_name = self.identity.in_conversation(&shared);
         let me = Member::new(my_name.as_bytes()).context("creating member")?;
 
-        let conversation = super::handshake::join(&mut session, &me)
+        let saved = super::resume::reopen(&self.paths, &dialled_id, &self.conversation_key)?;
+        let opened = super::handshake::join_resuming(&mut session, &me, saved)
             .await
             .context("MLS handshake")?;
+
+        let (me, conversation) = match opened {
+            super::handshake::Opened::Fresh(conversation) => (me, conversation),
+            super::handshake::Opened::Resumed {
+                member,
+                conversation,
+            } => {
+                self.emit(Event::Status {
+                    text: "Carried on from where this conversation left off".into(),
+                });
+                (member, conversation)
+            }
+        };
+
+        super::resume::save(
+            &self.paths,
+            &dialled_id,
+            &me,
+            &conversation,
+            &self.conversation_key,
+        )?;
+
         self.announce(&endpoint, &conversation, my_name).await;
 
-        self.chat(session, conversation, me, rx).await;
+        if let Some(conversation) = self.chat(session, conversation, &me, rx).await {
+            super::resume::save(
+                &self.paths,
+                &dialled_id,
+                &me,
+                &conversation,
+                &self.conversation_key,
+            )?;
+        }
         endpoint.close().await;
         Ok(())
     }
@@ -335,13 +413,17 @@ impl Driver {
     }
 
     /// Pump messages between the browser and the peer until one side stops.
+    /// Returns the conversation as it ended, so the caller can save it.
+    ///
+    /// `None` when the session fell over rather than closing: what is already on
+    /// disk is the last thing both sides agreed on, and better than half of this.
     async fn chat(
         &self,
         session: Session,
         mut conversation: Conversation,
-        me: Member,
+        me: &Member,
         rx: &mut mpsc::UnboundedReceiver<Command>,
-    ) {
+    ) -> Option<Conversation> {
         let (mut send, mut recv, conn) = session.split_for_chat();
 
         loop {
@@ -409,5 +491,6 @@ impl Driver {
         let _ = send.finish();
         let _ = send.stopped().await;
         conn.close(0u32.into(), b"bye");
+        Some(conversation)
     }
 }

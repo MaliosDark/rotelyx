@@ -36,10 +36,21 @@
     padding: .7rem 1rem; border-bottom: 1px solid var(--rule);
     background: var(--surface); flex: 0 0 auto;
   }
-  .mark {
-    width: 18px; height: 18px; border-radius: 50%;
-    border: 3px solid var(--accent); flex: 0 0 auto;
+  /* The real lockup, the same file the phone ships, rather than a circle and
+     the word typed out beside it. Two drawings of one identity drift. */
+  .lockup { height: 20px; width: auto; flex: 0 0 auto; display: block; }
+
+  /* A QR is black on white and this window is not. Without a white field around
+     it the quiet zone is the dark background, and a decoder needs that margin to
+     find the code at all: the picture would be there and the phone would see
+     nothing. Centred and given room, because somebody is holding a camera at it. */
+  .qr-svg {
+    background: #ffffff; padding: 12px; border-radius: 6px;
+    display: inline-block; line-height: 0;
   }
+  .qr-svg svg { width: 240px; height: 240px; }
+  .qr { text-align: center; margin-top: .6rem; }
+  #qr svg { display: block; width: 240px; height: 240px; }
   .bar h1 { font-size: .95rem; font-weight: 650; margin: 0; letter-spacing: .01em; }
   .bar .spacer { flex: 1; }
   .chip {
@@ -61,6 +72,45 @@
   .group { display: flex; flex-direction: column; gap: .6rem; }
   .group + .group { padding-top: 1.1rem; border-top: 1px solid var(--rule); }
   .group h2 { font-size: .82rem; font-weight: 650; margin: 0; }
+
+  /* A step inside a group, so an order that matters looks like one. The two
+     halves of inviting somebody were separate panels before, and which came
+     first was not something the screen said anywhere. */
+  .step { font-weight: 600; color: var(--ink); margin-top: .3rem; }
+
+  .member {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .35rem 0; border-bottom: 1px solid var(--rule);
+  }
+  .member .who { flex: 1; font-size: .82rem; }
+  .member .key { font-family: var(--mono); font-size: .62rem; color: var(--ink-2); }
+
+  .chat {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .4rem 0; border-bottom: 1px solid var(--rule);
+    cursor: pointer;
+  }
+  .chat:hover { background: var(--raised); }
+  .chat .name { flex: 1; font-size: .84rem; }
+  .chat .last { font-size: .7rem; color: var(--ink-2); }
+
+  /* Everything here is real and none of it is needed to hold a conversation,
+     so it is one line until somebody wants it. */
+  details.group > summary {
+    cursor: pointer;
+    font-size: .82rem;
+    font-weight: 650;
+    list-style: none;
+  }
+  details.group > summary::before { content: "\25b8  "; }
+  details.group[open] > summary::before { content: "\25be  "; }
+  details.group[open] > summary { margin-bottom: .6rem; }
+
+  /* Block rather than the flex the class carries: a `details` laid out as a
+     flex container leaves its contents on screen while closed in WebKit, which
+     is the engine the window actually runs on. The gap is put back by hand. */
+  details.group { display: block; }
+  details.group > * + * { margin-top: .6rem; }
   label {
     font-family: var(--mono); font-size: .63rem; letter-spacing: .12em;
     text-transform: uppercase; color: var(--ink-2);
@@ -147,8 +197,7 @@
 <body>
 
 <div class="bar">
-  <div class="mark" aria-hidden="true"></div>
-  <h1>Rotelyx</h1>
+  <img class="lockup" src="rotelyx-lockup-dark.png" alt="Rotelyx">
   <span class="chip" id="state">idle</span>
   <span class="chip" id="path" hidden></span>
   <div class="spacer"></div>
@@ -163,40 +212,112 @@
     </div>
 
     <div class="group">
-      <h2>Invitations</h2>
+      <h2>Invite someone</h2>
       <p class="hint">
-        You are unreachable until you issue one. Hand the code over a channel
-        you trust.
+        Two steps, and in this order. Nothing can reach this machine until both
+        are done.
+      </p>
+
+      <label class="step">1. Issue an invitation</label>
+      <p class="hint">
+        One invitation, one guest. Hand it over a channel you trust. The hours
+        are how long it stays good for, after which it expires by itself.
       </p>
       <div class="row">
         <input id="hours" type="number" value="24" min="1" aria-label="Hours valid">
         <button id="issue">Issue</button>
       </div>
       <div class="val selectable" id="code" hidden></div>
+      <div id="qr" class="qr" hidden>
+        <p class="hint">
+            Scan this from the phone: New conversation, then Scan their code.
+            It is a meeting code and not the invitation above it, because an
+            invitation is answered at an address and a phone has none.
+          </p>
+        <div id="qr-svg" class="qr-svg"></div>
+          <div class="val selectable" id="meeting-code"></div>
+      </div>
       <p class="hint" id="counts"></p>
-    </div>
 
-    <div class="group">
-      <h2>Relay</h2>
+      <label class="step">2. Start listening</label>
       <p class="hint">
-        Leave empty for a direct connection. A call needs a relay: over a direct
-        path the other side sees this machine's address.
-      </p>
-      <input id="relay" placeholder="http://relay.example:3340">
-    </div>
-
-    <div class="group">
-      <h2>Wait for someone</h2>
-      <p class="hint" style="display:flex;align-items:center;gap:.4rem">
-        <input type="checkbox" id="open" style="width:auto">
-        <span>Accept anyone, no invitation</span>
+        This prints the address that invitation is answered at. The guest needs
+        both of them: the code above and the address below.
       </p>
       <button id="listen" class="primary">Listen</button>
       <div class="val selectable" id="addr" hidden></div>
+      <p class="hint" style="display:flex;align-items:center;gap:.4rem">
+        <input type="checkbox" id="open" style="width:auto">
+        <span>Accept anyone, with no invitation</span>
+      </p>
     </div>
 
     <div class="group">
-      <h2>Reach someone</h2>
+      <h2>Conversations</h2>
+      <p class="hint">
+        Kept on this machine, sealed under the same passphrase as the identity.
+        The transcript is the one thing Rotelyx writes down in a form that can be
+        read back, which is why it is behind that passphrase and not beside it.
+      </p>
+      <div id="chats"></div>
+      <p class="hint" id="chats-note">None yet.</p>
+    </div>
+
+    <div class="group">
+      <h2>Meet a phone</h2>
+      <p class="hint">
+        A phone has no address to connect to. It moves between networks and is
+        asleep most of the time, so it is reached through a mailbox instead, and
+        this is the way to talk to one. Messages only: a mailbox holds envelopes
+        and hands them over when somebody asks, which carries a message that
+        arrives in a second and cannot carry a call.
+      </p>
+
+      <label class="step">Read the phone's code</label>
+      <p class="hint">
+        The phone can show one instead. Spaces and capitals do not matter.
+      </p>
+      <input id="their-code" placeholder="RTLX1 ABCD EFGH ...">
+      <button id="read-code">Join that code</button>
+
+      <label class="step">Mailbox</label>
+      <p class="hint">
+        Where the two of you meet. It sees sealed envelopes addressed to opaque
+        tags and never a message.
+      </p>
+      <input id="mailbox" placeholder="wss://...">
+
+      <p class="hint" style="display:flex;align-items:center;gap:.4rem">
+        <input type="checkbox" id="receipts" style="width:auto">
+        <span>Tell them when their messages were read</span>
+      </p>
+      <p class="hint">
+        Off by default, and the phone client is too. A receipt is one more
+        envelope every time something is read, and envelopes are what the
+        operator of a mailbox can count. With this off, their messages show as
+        delivered and never as read, which is the honest picture rather than a
+        tick nobody sent.
+      </p>
+    </div>
+
+    <div class="group">
+      <h2>Who is here</h2>
+      <p class="hint">
+        Everybody the conversation currently holds. Removing somebody is a
+        commit: everyone moves to a key schedule derived without that leaf, and
+        everyone sees it happen. It does not reach backwards, so they keep what
+        they could already read.
+      </p>
+      <div id="members"></div>
+      <p class="hint" id="members-note">No conversation yet.</p>
+    </div>
+
+    <div class="group">
+      <h2>Join someone</h2>
+      <p class="hint">
+        Both of these come from whoever invited you: the address their Rotelyx
+        printed when it started listening, and the invitation code itself.
+      </p>
       <label>Their address</label>
       <textarea id="peer-addr" rows="3" placeholder="eyJpZCI6"></textarea>
       <label>Their invitation</label>
@@ -204,8 +325,17 @@
       <button id="connect" class="primary">Connect</button>
     </div>
 
-    <div class="group">
-      <h2>Live invitations</h2>
+    <details class="group">
+      <summary>Relay, and withdrawing an invitation</summary>
+
+      <label class="step">Relay</label>
+      <p class="hint">
+        Leave empty for a direct connection. A call needs a relay: over a direct
+        path the other side sees this machine's address.
+      </p>
+      <input id="relay" placeholder="none: direct only, and no calls">
+
+      <label class="step">Withdrawing</label>
       <p class="hint">
         Blocking somebody is withdrawing the invitation they came in on. There
         is no identity to ban: a caller arrives on a key belonging to one
@@ -217,12 +347,12 @@
         <button id="do-block">Withdraw</button>
       </div>
       <div class="val" id="block-list" hidden></div>
-    </div>
+    </details>
   </aside>
 
   <main>
     <div class="status">
-      <div class="line" id="line">Issue an invitation and listen, or paste an address to connect.</div>
+      <div class="line" id="line">Invite someone with the two steps on the left, or join one with their address and code.</div>
       <div class="safety" id="safety">
         <label>Safety number</label>
         <div class="digits selectable" id="digits"></div>
@@ -318,6 +448,11 @@
   async function refresh() {
     try {
       const s = await invoke("snapshot");
+      // Filled from the environment the window was started in, once, so typing
+      // over it is never undone by a later refresh.
+      if (s.relay && !$("relay").value) $("relay").value = s.relay;
+        if (s.mailbox && !$("mailbox").value) $("mailbox").value = s.mailbox;
+        await drawChats();
       $("me").textContent = s.id;
       $("counts").textContent =
         s.invitations === 0
@@ -339,6 +474,36 @@
       const code = await invoke("issue_invitation", { hours });
       $("code").hidden = false;
       $("code").textContent = code;
+
+      // The picture is a meeting code, not the invitation above it.
+      //
+      // It used to draw the invitation, and that is the one code no phone can
+      // use: an invitation is answered at an address, and a phone has none.
+      // Pointed at a phone it produced "that is not a Rotelyx code", which was
+      // the phone being right. A meeting code is what a phone reads, so that is
+      // what this draws, and the waiting starts before it appears.
+      try {
+        const meeting = await invoke("meeting_code");
+        await invoke("meet", {
+          code: meeting,
+          role: "show",
+          mailbox: $("mailbox").value.trim(),
+          receipts: $("receipts").checked,
+          relay: $("relay").value.trim() || null,
+        });
+        $("qr-svg").innerHTML = await invoke("invitation_qr", { code: meeting });
+        $("meeting-code").textContent = await invoke("meeting_code_shown", { code: meeting });
+        $("qr").hidden = false;
+        setState("waiting", "note");
+        log("waiting at the meeting place. Scan this from the phone.", "sys");
+      } catch (e) {
+        // Loud, and naming the field. This failed quietly once because the
+        // mailbox was empty: the invitation appeared, the picture did not, and
+        // the only thing left on screen was the one code a phone refuses.
+        $("qr").hidden = true;
+        log(`no code to scan: ${e}`, "sys bad");
+        log("the mailbox field is where a phone is met. Fill it in and press Issue again.", "sys bad");
+      }
       await refresh();
     } catch (e) { log(String(e), "sys bad"); }
   };
@@ -370,6 +535,139 @@
         });
     } catch (e) { log(String(e), "sys bad"); setState("idle"); }
   };
+
+  $("read-code").onclick = async () => {
+    const code = $("their-code").value.trim();
+    if (!code) { log("type the code the phone is showing", "sys bad"); return; }
+    const mailbox = $("mailbox").value.trim();
+    if (!mailbox) { log("a meeting needs a mailbox: it is the only place a phone can be reached", "sys bad"); return; }
+
+    $("log").innerHTML = "";
+    setState("meeting", "note");
+    try {
+      await invoke("meet", {
+        code, role: "read", mailbox,
+        receipts: $("receipts").checked,
+        relay: $("relay").value.trim() || null,
+      });
+    } catch (e) { log(String(e), "sys bad"); setState("idle"); }
+  };
+
+  // Who is in the conversation, with what removing each of them takes.
+  //
+  // Redrawn from the event rather than kept, so the list on screen cannot
+  // disagree with the group: a stale row is a Remove button pointed at somebody
+  // who already left, or worse at the leaf that took their place.
+  function drawMembers(members) {
+    const box = $("members");
+    box.innerHTML = "";
+    if (!members || !members.length) {
+      $("members-note").textContent = "No conversation yet.";
+      return;
+    }
+
+    $("members-note").textContent =
+      members.length === 1
+        ? "Only you. Nobody has joined yet."
+        : `${members.length} here, including you.`;
+
+    for (const member of members) {
+      const row = document.createElement("div");
+      row.className = "member";
+
+      const who = document.createElement("div");
+      who.className = "who";
+      who.textContent = member.label;
+      const key = document.createElement("div");
+      key.className = "key";
+      key.textContent = member.key.slice(0, 12);
+      who.appendChild(key);
+
+      const button = document.createElement("button");
+      button.className = "grow0 danger";
+      button.textContent = "Remove";
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          await invoke("remove_member", { key: member.key });
+          log(`removed ${member.label}`, "sys");
+        } catch (e) {
+          button.disabled = false;
+          log(String(e), "sys bad");
+        }
+      };
+
+      row.appendChild(who);
+      row.appendChild(button);
+      box.appendChild(row);
+    }
+  }
+
+  // The conversations on disk.
+  //
+  // Redrawn from what the process reports rather than kept here, so a row can
+  // never name something that is no longer on disk.
+  async function drawChats() {
+    let rows = [];
+    try {
+      rows = await invoke("chats");
+    } catch (e) {
+      $("chats-note").textContent = String(e);
+      return;
+    }
+
+    const box = $("chats");
+    box.innerHTML = "";
+    $("chats-note").textContent = rows.length
+      ? `${rows.length} kept here.`
+      : "None yet. Meet a phone and one appears.";
+
+    for (const row of rows) {
+      const line = document.createElement("div");
+      line.className = "chat";
+
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = row.members > 2 ? `${row.label} (${row.members} here)` : row.label;
+      const last = document.createElement("div");
+      last.className = "last";
+      last.textContent = row.last || "no messages yet";
+      name.appendChild(last);
+
+      const open = document.createElement("button");
+      open.className = "grow0";
+      open.textContent = "Open";
+      open.onclick = async () => {
+        $("log").innerHTML = "";
+        setState("opening", "note");
+        try {
+          await invoke("open_chat", { id: row.id });
+          // Said out loud, because the gap is real and looks like a fault.
+          log("carrying on. The other side cannot read this copy until it has "
+            + "applied the commit just sent, which is one round trip.", "sys");
+        } catch (e) { log(String(e), "sys bad"); setState("idle"); }
+      };
+
+      const forget = document.createElement("button");
+      forget.className = "grow0 danger";
+      forget.textContent = "Forget";
+      forget.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          await invoke("forget_chat", { id: row.id });
+          // Forgetting is not leaving: the group still holds this device, and
+          // nothing here can tell the others otherwise.
+          log(`forgotten ${row.label}. They still hold this device as a member.`, "warn");
+          await drawChats();
+        } catch (e) { log(String(e), "sys bad"); }
+      };
+
+      line.appendChild(name);
+      line.appendChild(open);
+      line.appendChild(forget);
+      box.appendChild(line);
+    }
+  }
 
   $("connect").onclick = async () => {
     const addr = $("peer-addr").value.trim();
@@ -430,6 +728,7 @@
         // whether the path is direct is worth showing.
         $("path").hidden = false;
         $("path").textContent = m.direct ? "direct path" : "relayed";
+        invoke("who_is_here").catch(() => {});
         $("path").className = "chip " + (m.direct ? "ok" : "warn");
         $("line").textContent = "Peer " + m.peer.slice(0, 16);
         $("safety").classList.add("on");
@@ -474,8 +773,16 @@
         ];
         for (const line of named) log(line, "warn");
         log(`the group is now ${m.members} members`, "sys");
+
+        // And ask who they are. The count moved, so the list on screen is
+        // stale, and a stale list is a Remove button pointed at the wrong leaf.
+        invoke("who_is_here").catch(() => {});
         break;
       }
+
+      case "members":
+        drawMembers(m.members);
+        break;
 
       case "disconnected":
         log("peer disconnected: " + m.reason, "sys");

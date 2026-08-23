@@ -201,6 +201,18 @@ impl RotelyxEndpoint {
         Ok(Session::new(net))
     }
 
+    /// Accept a connection for datagrams alone, without waiting for a stream.
+    ///
+    /// For a call, which never uses one. See
+    /// [`rotelyx_net::NetEndpoint::accept_media`] for why waiting for a stream
+    /// is the wrong thing to do when the other side has no reason to open one.
+    pub async fn accept_media(
+        &self,
+    ) -> Result<(RotelyxId, rotelyx_net::Connection)> {
+        let (peer, conn) = self.net.accept_media().await?;
+        Ok((RotelyxId::from(peer), conn))
+    }
+
     /// Whether traffic to `peer` is on a direct path rather than through a
     /// relay. `None` if the peer is unknown.
     pub async fn is_direct(&self, peer: RotelyxId) -> Option<bool> {

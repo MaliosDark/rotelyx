@@ -38,4 +38,4 @@ pub use endpoint::{Session, RotelyxEndpoint, ALPN};
 pub use identity::{safety_number, Identity, RotelyxId};
 pub use sealed::{is_sealed, SealError};
 pub use store::{Paths, StoreError, StoredInvitation};
-pub use wire::{Frame, FrameKind, WireError, MAX_FRAME_LEN};
+pub use wire::{Frame, FrameKind, WireError, MAX_FRAME_LEN, WIRE_VERSION};

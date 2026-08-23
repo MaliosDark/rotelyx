@@ -18,15 +18,25 @@ rotelyx-core.workspace = true
 rotelyx-crypto.workspace = true
 rotelyx-net.workspace = true
 
+# The phone client's transport. See `src/meeting.rs`: a desktop and a phone had
+# no way to hand each other a first byte until the desktop learned to meet at a
+# mailbox, which is the only place a phone can be reached.
+rotelyx-wasm = { path = "../rotelyx-wasm" }
+rotelyx-mailbox-client = { path = "../rotelyx-mailbox-client" }
+
 # No Node, no bundler. The frontend is plain HTML served from `ui/`, so the
 # only toolchain needed to build this is cargo.
 tauri = { version = "2", features = [] }
 
 anyhow.workspace = true
+postcard.workspace = true
+zeroize.workspace = true
 serde = { workspace = true }
 serde_json = "1"
 data-encoding.workspace = true
+getrandom = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rpassword = "7"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }

@@ -204,12 +204,46 @@ Everything needed for this is built.
       than a message: whoever holds them reads everything the current epochs can
       read, so a sealed identity beside an unsealed conversation would make the
       seal on the identity a decoration
-- [!] **Resuming a conversation in a native client needs a decision, not code.**
-      The storage is built and nothing calls it, because saving is the easy half:
-      to carry on, the two sides have to find each other again, and whether that
-      is `listen` reopening on the same invitation, a `resume` command, or the
-      mailbox is a product question. Saving state that nothing can reopen would
-      be a file that only ever grows a risk
+- [x] **Conversations survive a restart, in all three native clients.** The
+      decision the item was waiting on is taken and it is the first of the three
+      it listed: `listen` reopening on the same invitation, and **no new
+      command**.
+
+      An invitation already is the identity of a conversation. Each is answered
+      on its own transport key and therefore at its own address; the
+      per-conversation name both sides show each other is derived from that
+      address; and the file is now named after it. A host that starts listening
+      is already answering where it answered before, and a guest holding the same
+      code already dials there. Neither of them was looking to see whether they
+      had been here before.
+
+      A `resume` command would have been a second way to do what `listen` does,
+      and the mailbox would have made a conversation depend on a server the
+      direct path exists to avoid.
+
+      **The exchange cannot deadlock.** The dialer speaks first, as it always
+      has: with state it sends `FrameKind::Resume` carrying the group it holds,
+      without it a key package and nothing changes. A listener that gets a resume
+      request and has nothing answers with an empty payload and the dialer starts
+      again. Whoever has less decides, and the fallback is the path that already
+      worked. Verified by deleting one side's file and watching both start fresh.
+
+      **Saved before a word is typed, not on exit.** A conversation only written
+      on a clean exit is one people lose to a closed terminal or a flat battery,
+      and this side has just committed an epoch the other has already processed.
+      Found by measurement: across four runs of the client the epoch went 1, 2,
+      2, because the host was being killed before it saved. It goes 1, 2, 3, 4
+      now, with the host killed every time.
+
+      `a_saved_conversation_remembers_the_epoch_it_reached` pins the property in
+      `rotelyx-crypto`, because reopening the same epoch for ever is the rollback
+      `restored_needs_rekey` exists to prevent, reached through the door marked
+      save.
+
+      The web client keeps its identity unsealed, so there is no passphrase to
+      reuse; its conversations are sealed under a key derived from that identity,
+      which is **exactly as strong as the key file beside them and no stronger**,
+      and the comment says so rather than implying a lock
 - [x] **A backup format that does not create a state rollback vector**,
       `crates/rotelyx-core/src/backup.rs`. The first thing it says is what is
       actually on the table: **a backup is a rollback vector, that is what a
@@ -571,7 +605,14 @@ Everything needed for this is built.
 
       What the interface says out loud, because it would otherwise be assumed:
       withdrawing stops the next connection and not one already open, and there
-      is no undo. To let somebody back in, issue a new invitation
+      is no undo. To let somebody back in, issue a new invitation.
+
+      **Withdrawing now takes the conversation with it.** An invitation retired
+      while the conversation it carried stays on the disk is a person told they
+      are blocked and a file that still decrypts everything they said. All three
+      clients forget it, which also gave the web client the withdraw it never
+      had: `POST /api/withdraw`, verified against the running server, two
+      invitations down to one and a 404 for a code it never issued
 - [x] **Decided: the relay stays open.** Open costs capacity and a connection
       log covering people with no relationship to the operator; it costs no
       confidentiality, because it forwards ciphertext it cannot read either way.
@@ -1450,6 +1491,39 @@ wide margin the largest single task remaining in the project.
       vary by jurisdiction and some collide with being unable to read anything
 
 ### 9. The browser client, beyond a demo
+
+- [x] **The wire says which wire it is, so a build that cannot be talked to is
+      named rather than misunderstood.** `WIRE_VERSION` crosses in a
+      `FrameKind::Hello` before anything that depends on it, and both ends refuse
+      a mismatch by name.
+
+      This exists because of what was measured earlier in this section. Two
+      builds that disagree about a format do not fail cleanly: on the credential
+      change a peer running the older build was understood **seven times in eight
+      and misunderstood the eighth**, depending on the first byte of a key, and
+      the eighth is not an error. It is a safety number that does not match, with
+      no reason given, for that pair, for ever.
+
+      A version reported only to the local caller cannot catch that, and
+      `protocol_version()` was exactly that: a string handed to whoever asked,
+      never crossing. It has to cross, and it has to cross first.
+
+      A peer too old to say anything is named as such, which is a different
+      answer from one that names a different version, and both beat a parse
+      failure three frames later. One round trip per conversation, and the
+      comment says so after an earlier draft claimed it was free.
+
+- [ ] **The Flutter app ships a wasm three builds behind and cannot talk to
+      anything current.** It reaches the engine through `rotelyx-wasm` and a JS
+      bridge rather than the native library, and its copy hashes `b04f4425`
+      against `9a71d887` from this source. That is older than the deployed site
+      was before it was rebuilt, so it predates the credential change and is in
+      the seven-in-eight case above.
+
+      Not touched: it is somebody else's directory and it is in production. What
+      it needs is `scripts/build-wasm` and the two files from `site/rotelyx/`
+      copied into its `web/rotelyx/`, after which `WIRE_VERSION` will say plainly
+      whether it worked
 
 - [ ] **Redeploy `site/`. The live one is behind, and mixing it with a current
       client fails one time in eight.** This session changed the MLS credential
