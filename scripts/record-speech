@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#
+# Record real speech through a real microphone, for measuring the codec on.
+#
+#   scripts/record-speech <name>      record one clip
+#   scripts/record-speech --list      what has been recorded
+#
+# # Why this exists next to make-speech
+#
+# `scripts/make-speech` produces six sentences of neural text-to-speech and says
+# plainly what they are not: "Nothing here has been near a microphone or a room,
+# so it says nothing about how the codec handles noise, reverberation, or a voice
+# that is not a model's idea of one."
+#
+# Every quality figure this project has published was measured on those. The
+# echo canceller, the noise suppressor and the rate control all exist for a room,
+# and none of them had ever seen one.
+#
+# This records a person, in a room, through the microphone that is actually
+# attached. It is one voice and one room, so it is not a corpus either, and a
+# codebook trained on it would learn this speaker. It is a step the synthetic
+# clips cannot take, and the step after it needs more people.
+#
+# # These recordings are personal data
+#
+# A voice identifies its owner. `crates/rotelyx-codec/tests/speech/` is already
+# ignored by git, and that is deliberate rather than incidental: these must never
+# reach a commit. Recording somebody else means asking them first, and this
+# prints that reminder every time rather than assuming it was read once.
+
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+DIR="crates/rotelyx-codec/tests/speech"
+SECONDS_TO_RECORD="${RECORD_SECONDS:-8}"
+
+if [ "${1:-}" = "--list" ]; then
+    echo
+    if ! ls "$DIR"/*.wav >/dev/null 2>&1; then
+        echo "  nothing in $DIR"
+        exit 0
+    fi
+    for f in "$DIR"/*.wav; do
+        bytes=$(stat -c%s "$f")
+        printf '  %-28s %6.1f s\n' "$(basename "$f")" "$(echo "$bytes" | awk '{print ($1-44)/96000}')"
+    done
+    exit 0
+fi
+
+NAME="${1:-}"
+if [ -z "$NAME" ]; then
+    echo "usage: scripts/record-speech <name>    e.g. scripts/record-speech andryu-room"
+    echo "       scripts/record-speech --list"
+    exit 1
+fi
+
+command -v arecord >/dev/null || { echo "arecord not found: install alsa-utils"; exit 1; }
+mkdir -p "$DIR"
+OUT="$DIR/$NAME.wav"
+
+echo
+echo "  This records your voice. A voice identifies its owner, so:"
+echo "    - $DIR is ignored by git and must stay that way"
+echo "    - recording anybody else means asking them first"
+echo
+echo "  Say something with hard consonants in it. The window this codec uses is"
+echo "  worst at sudden sounds, so 'p', 't', 'k' and 's' are what tell you"
+echo "  something, and a held vowel tells you almost nothing."
+echo
+echo "  Recording ${SECONDS_TO_RECORD}s into $OUT"
+echo "  Speak after the line below."
+echo
+echo "  ---"
+
+arecord -f S16_LE -r 48000 -c 1 -d "$SECONDS_TO_RECORD" "$OUT" 2>/dev/null
+status=$?
+
+echo "  ---"
+echo
+
+if [ $status -ne 0 ] || [ ! -s "$OUT" ]; then
+    echo "  the microphone did not record. arecord -l lists the devices it can see."
+    exit 1
+fi
+
+# Levels, because a clip that is too quiet or clipped measures the recording
+# rather than the codec, and finding that out after the measurement is worse.
+python3 - "$OUT" <<'PY'
+import struct, sys
+data = open(sys.argv[1], 'rb').read()[44:]
+n = len(data) // 2
+s = struct.unpack(f'<{n}h', data[:n * 2])
+peak = max(abs(x) for x in s) if s else 0
+rms = (sum(x * x for x in s) / max(n, 1)) ** 0.5
+clipped = sum(1 for x in s if abs(x) >= 32700)
+
+print(f"  {n / 48000:.1f}s, peak {peak}/32767, rms {rms:.0f}, {clipped} clipped samples")
+if peak < 1500:
+    print("  TOO QUIET. Move closer or raise the input gain; this would measure")
+    print("  the microphone's noise floor rather than the codec.")
+elif clipped > 20:
+    print("  CLIPPED. Lower the input gain: the codec cannot be blamed for")
+    print("  distortion that arrived already in the file.")
+else:
+    print("  Levels are usable.")
+PY
+
+echo
+echo "  Measure on it:  cargo test -p rotelyx-codec --test real_speech -- --nocapture"
+echo "  Listen to it:   scripts/listen $NAME"

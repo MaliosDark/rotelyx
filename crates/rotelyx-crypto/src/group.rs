@@ -1432,6 +1432,65 @@ mod tests {
         ));
     }
 
+    /// The credential format is a wire format, and changing it broke the wire.
+    ///
+    /// # What happened
+    ///
+    /// Credentials used to be the person's bytes and nothing else. Devices
+    /// needed a second field, so they became `person_len ‖ person ‖ device`.
+    /// Both ends of this repository were changed together and every test passed.
+    ///
+    /// A deployed client was not changed with them, and the failure that
+    /// produces is worse than a clean break. A 32 byte identity written the old
+    /// way is read by a new client as a length byte and 31 bytes of person, and
+    /// whether that parses depends on the **first byte of the key**: above 31 the
+    /// length runs off the end and the whole thing is kept as an unparseable
+    /// credential, which happens to be 32 bytes and happens to work. At or below
+    /// 31 it splits, the identity comes out the wrong length, and the safety
+    /// number cannot be computed from it.
+    ///
+    /// So it works about seven times in eight and fails the rest, per identity,
+    /// for ever. Nobody finds that in a test suite where both sides are built
+    /// from the same commit.
+    ///
+    /// This pins the format so the next change to it is a deliberate act. The
+    /// answer to the incompatibility itself is not a version byte here: it is
+    /// that nothing is released, so everything gets rebuilt and redeployed
+    /// together.
+    #[test]
+    fn the_credential_wire_format_is_pinned() {
+        let person = [0xAAu8; 32];
+        let encoded = encode_identity(&person, b"laptop").expect("encode");
+
+        assert_eq!(encoded[0], 32, "the length prefix moved");
+        assert_eq!(&encoded[1..33], &person, "the person moved");
+        assert_eq!(&encoded[33..], b"laptop", "the device moved");
+        assert_eq!(encoded.len(), 1 + 32 + 6);
+
+        // The old shape, and what a new reader makes of it. One outcome is
+        // wrong and the other is wrong invisibly.
+        let mut survives = 0;
+        let mut breaks = 0;
+        for first in 0u8..=255 {
+            let mut old = [0x55u8; 32];
+            old[0] = first;
+            match decode_identity(&old) {
+                // Split: the identity comes out short, and `peer_identity`
+                // wants exactly 32 bytes, so the safety number is unreachable.
+                Some((person, _)) if person.len() != 32 => breaks += 1,
+                Some(_) => survives += 1,
+                // Unparseable: kept whole, which is 32 bytes, which works.
+                None => survives += 1,
+            }
+        }
+        assert_eq!(
+            (survives, breaks),
+            (224, 32),
+            "the old format now fails for a different fraction of identities, so \
+             this note no longer describes what happens"
+        );
+    }
+
     /// A credential from somewhere else is reported as unparseable rather than
     /// split at a plausible place and called a person.
     #[test]

@@ -208,10 +208,10 @@ impl Limits {
         )
     }
 
-    /// Connections currently open.
-    pub fn open(&self) -> usize {
-        self.lock().total_open
-    }
+    // Deliberately no public `open()`. The server already keeps that count, with
+    // a guard that decrements it on drop, and two counters for one quantity is
+    // how they come to disagree. This one exists for the admission decision and
+    // stays inside.
 }
 
 /// Which address to hold a connection against.
@@ -270,7 +270,6 @@ mod tests {
         assert!(limits.admit(address(2)).is_err());
 
         drop(held);
-        assert_eq!(limits.open(), 0, "closing did not give the slots back");
         assert!(
             limits.admit(address(2)).is_ok(),
             "an address stayed refused after its connections closed"

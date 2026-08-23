@@ -1038,8 +1038,23 @@ wide margin the largest single task remaining in the project.
       the decoder, and out to a file you can play. At 20% loss: 53 gaps
       concealed in conversational mode against **4 in fidelity**, which is the
       whole argument for the second mode in one line
-- [ ] Device capture, which needs a microphone and therefore is not something
-      that can be finished here
+- [x] **Device capture, run against a real microphone at last.** `device.rs`
+      had been written, compiled, and never executed: everything else in this
+      repository can be tested on a machine with no sound card, and this cannot.
+      Code written against a library's documentation and never run is the kind
+      that opens a stream and delivers zeros for ever.
+
+      There is a microphone on this machine now, so it was run.
+      `the_microphone_reaches_the_codec_and_comes_back`, ignored by default
+      because it needs hardware: one channel at 48 kHz with no resampling
+      anywhere, three seconds captured at rms 0.0107, through the echo canceller
+      and the noise suppressor and the layered codec, 148 frames at 19.0 kbit/s,
+      and out the other side finite and audible rather than silent or clipped.
+
+      It checks the failures that look like working code: a stream that opens and
+      delivers zeros, a channel count read wrong so every other sample is
+      dropped, a gain applied twice. It writes the result to a wav, because the
+      one check that matters is somebody listening and no test can make it
 - [x] **Jitter buffer**, adaptive. Depth follows the observed jitter with
       RFC 3550's estimator, grows fast and shrinks slowly so the delay does not
       oscillate audibly, and is bounded at 200 ms because a caller can talk
@@ -1075,7 +1090,9 @@ wide margin the largest single task remaining in the project.
       measured rather than subtracted: a partitioned frequency-domain adaptive
       filter covering 128 ms, which is the buffering of two devices plus a small
       room. **38.3 dB removed** on a synthetic path with an unknown delay and
-      four reflections.
+      four reflections, driven by white noise. Both of those conditions turned
+      out to be doing the work: see the item below, which measured it against a
+      real speaker and a real microphone and got 1 dB.
       Two things it took to get there, both written down where they happened.
       Normalising each partition against its own power diverges: twenty four
       partitions each take a full step, so it overshot every block and came out
@@ -1129,12 +1146,33 @@ wide margin the largest single task remaining in the project.
 - [x] Media rides QUIC datagrams rather than a stream. A stream stalls behind a
       lost packet to preserve an order audio does not need, and a retransmitted
       frame is worthless by the time it lands
-- [ ] Use a proven media engine rather than writing one. None of SimpleX,
-      Session, Briar or Cwtch built their own: SimpleX uses WebRTC, and the
-      other three have no calls at all. Opus, a jitter buffer, packet loss
-      concealment and echo cancellation are decades of work each. Taking them
-      as libraries while keeping our own transport and frame encryption is the
-      only version of this that ships
+- [x] **Decided: the media engine stays ours.** The argument for taking one is
+      still true and worth leaving on the record. None of SimpleX, Session, Briar
+      or Cwtch built their own: SimpleX uses WebRTC and the other three have no
+      calls at all. Opus, a jitter buffer, packet loss concealment and echo
+      cancellation are decades of work each.
+
+      The decision goes the other way, and it is the owner's to make. It is also
+      largely already executed, which changes what is being decided: the codec,
+      the adaptive jitter buffer, the concealment, the echo canceller, the noise
+      suppressor, the pacer and the forwarding unit are written, measured and
+      tested here.
+
+      **What that costs, stated rather than glossed.** Against a mature stack we
+      do not have: a trained vector quantiser for the envelope, block switching,
+      automatic gain control, or any of the tuning by ear that a decade of
+      shipping buys. What we do have is measured rather than assumed, which is
+      the trade in the other direction: 58.3 dB of echo removed against a
+      synthetic path and about 7 dB against a real room, both measured in
+      `docs/ACOUSTIC.md`; 12.9 dB off synthetic hiss and 4.8 dB off a real room,
+      with the limitation of a
+      minimum-statistics estimator written into a test, pre-echo at -40.7 dB,
+      concealment that fades rather than repeats, and a codec that costs 2.4% of
+      one core.
+
+      Two things follow. Every one of those numbers is now ours to defend, and
+      the items below that need ears or a corpus stop being optional: nobody
+      else's tuning is going to arrive and fix them
 - [x] **A forwarding unit for group calls**, `rotelyx-media::forward`. The frame
       format already suited one: the header is authenticated but not encrypted,
       so it routes by sender without reading anything. Below a handful of people
@@ -1176,6 +1214,113 @@ wide margin the largest single task remaining in the project.
       Not a server: no sockets, no admission, no spawning. That shell belongs to
       whatever runs it, the way `rotelyx-relay` wraps its admission around
       `rotelyx-relay-proto`
+
+- [x] **The echo canceller removed 1 dB in a real room, against 38.3 on the
+      synthetic path. It removes about 7 now.** Measured on this machine with a real speaker and a real
+      microphone, written up in `docs/ACOUSTIC.md`, repeatable with
+      `scripts/measure-echo`.
+
+      Two assumptions were doing the work and both come out one at a time. The
+      far end in the published test is **white noise**, which excites every
+      frequency at every instant, which is what a convergence proof wants and
+      what a call never has: the same canceller and the same synthetic room give
+      15.0 dB on noise and 7.9 dB on a recorded sentence. Then the room takes the
+      rest, down to 1.1 dB.
+
+      Clock drift was the first suspect and is not the answer. The speaker and
+      the microphone are different devices whose crystals differ by 341 ppm, so
+      the recording slides 48 samples every 2.9 seconds; measuring again on
+      half-second windows each realigned to remove it gives the same 1.1 dB.
+
+      The ceiling in that room is 21.8 dB, because that is how far the echo sits
+      above the room's own noise. So the gap is real and not a limit of the
+      setup.
+
+      **The residual suppressor was built and it is most of the answer.** A
+      linear filter removes what a linear model of the room can remove, and a
+      room is not linear at the ends: the tail runs past the 128 ms of taps, and
+      a small speaker driven hard adds harmonics that were never in the signal.
+      A second stage estimates how much of the far end still comes through and
+      attenuates by that much.
+
+      Measured over 24.6 seconds of recorded speech, every clip joined so the
+      signal never repeats:
+
+      | echo path | how measured | linear only | with the residual stage |
+      |---|---|---:|---:|
+      | a model | continuous, white noise | 23.0 dB | **43.0 dB** |
+      | a model | continuous, speech | 19.8 dB | 19.9 dB |
+      | a real room | continuous | -0.0 dB | **1.3 dB** |
+      | a real room | realigned every 0.5 s | 1.4 dB | **6.1 dB** |
+
+      **The leak estimate has to track a minimum, not an average**, and that is
+      not a detail. It is learned from what the filter leaves over, and anything
+      the near end says is also left over, so an average is dragged up by their
+      voice and a leak that is too high suppresses them. Averaging cost 92% of
+      the near end's voice, and `a_voice_on_this_end_survives_double_talk` caught
+      it, which is the whole reason that test exists.
+
+      **And that test's own comment turned out to be wrong.** It says freezing
+      adaptation during double talk is what protects the voice. The flag asks
+      whether the residual is more than twice the far end's energy, which a near
+      voice clears only if it is louder than the loudspeaker: in that test it
+      never fires at all, so the voice had been surviving for a different reason
+      than the comment claimed
+- [ ] **Five decibels sit between a canceller run continuously and one restarted
+      every half second, and three attempts to close them failed.** Continuous
+      gives 1.3 dB in a real room; realigned and restarted every 0.5 s gives 6.1.
+      Written up in `docs/ACOUSTIC.md`.
+
+      The obvious suspect is the clocks: the speaker is an ALC889 and the
+      microphone a USB webcam, 341 ppm apart, which is the recording sliding 16
+      samples a second away from the playback.
+
+      **Following the filter's own impulse response does not work**, and the
+      reason is the useful part. While the filter converges its centroid walks
+      steadily towards the true delay as energy concentrates, and that walk is
+      monotone, so looking at it for longer does not separate it from drift. On a
+      path with no drift at all it invented **-194 ppm** and followed its own
+      invention, taking cancellation from 38 dB to 0.3. Requiring four
+      observations in a row to agree brought that to -76 ppm and 0.4 dB. A
+      tracker whose signal is the thing it is changing cannot be fixed by being
+      more careful with the signal.
+
+      **Correlating the two ends directly** is honest about there being no drift
+      when there is none, 0 ppm on the synthetic path and about 200 in the room,
+      and applying it still did not help: on, off and reversed came out at -1.8,
+      1.3 and 0.7 dB, inside the spread of that measurement.
+
+      So the five decibels are real and the cause is **not established**. An
+      earlier version of this said four of them were drift, concluded from a
+      four-second recording, and it does not survive twenty-four seconds and 46
+      windows. Restarting the canceller is part of what the windowed measurement
+      does, so some of the gap may be convergence rather than alignment, and a
+      delay estimate is the next thing to try
+- [x] **Measured the noise suppressor against a real room.** It removes
+      **12.9 dB** from synthetic hiss added to the clip and **4.8 dB** from a real
+      one, stable across runs to a tenth of a decibel. `docs/ACOUSTIC.md`,
+      repeatable with `scripts/measure-denoise`.
+
+      It fares better than the canceller, which lost almost everything, and it
+      still loses two thirds. Why exactly is not established, and guessing would
+      be the mistake that document exists to correct: real room noise is not
+      white, there is mains hum and its harmonics, and which part of that a
+      minimum-statistics estimator handles worse would need measuring rather than
+      asserting.
+
+      **A wrong guess is kept in the document because it was wrong.** The first
+      explanation offered was reverberation, that a room's gaps carry the tail of
+      the speech rather than noise, and that removing it would be removing the
+      room's answer to the voice. Plausible, and false: the gaps measure 2.6 dB
+      above the same room with nothing playing, so they are the noise floor with
+      a little tail on top. The tool records the quiet room now and prints that
+      number, because the story was good enough to have been believed
+- [ ] **The suppressor costs 2.4 dB of speech, and the test allows 5.2.** Both
+      the synthetic and the acoustic runs keep 56 to 58 percent of the speech
+      energy, which is a real cost paid whether the noise was worth removing or
+      not. `a_voice_survives` asks only that more than 30 percent survives. That
+      bound is loose enough for the suppressor to get considerably worse without
+      anything failing, which is the shape of a guard that stops guarding
 
 ### 7. Mobile clients
 
@@ -1228,10 +1373,54 @@ wide margin the largest single task remaining in the project.
       That also puts the concealment where the design always said it went: a
       frame that misses its slot is `Missing`, a slot rather than an error, and
       that is what the decoder extrapolates over
-- [ ] Build for Android on a machine with the NDK, and for iOS on a Mac. The
-      Rust targets are installed; `cargo-ndk` is not
-- [ ] UniFFI bindings for Swift and Kotlin, if the C ABI turns out not to be
-      enough
+- [x] **Built for Android**, on this machine, with NDK r27c and `cargo-ndk`
+      4.1.2. `scripts/build-mobile android` produces all three ABIs Play
+      requires:
+
+      | ABI | bytes |
+      |---|---:|
+      | arm64-v8a | 14,357,088 |
+      | armeabi-v7a | 10,366,932 |
+      | x86_64 | 15,008,248 |
+
+      x86_64 is not optional: without it nobody can run the app in an emulator on
+      a laptop. Checked for the leak this project has had before, the build
+      machine's paths in the shipped binary: zero home paths and zero occurrences
+      of the username in all three, so `--remap-path-prefix` is doing its job on
+      this target too.
+
+      One trap for whoever runs it next: `cargo-ndk` 4 reads `-p` as `--package`,
+      not as the platform level. `-p 21` fails with "unknown package: 21"
+- [!] **iOS needs a Mac**, and no amount of wanting changes that. The targets and
+      the `xcframework` step are in `scripts/build-mobile ios` and have never
+      been run
+- [x] **The C ABI is enough, demonstrated rather than argued.** The question was
+      whether a foreign runtime can reach the engine through twelve C symbols and
+      a JSON string, or whether it needs generated glue for records, enums and
+      error types.
+
+      `scripts/abi-check/run` answers it by being a foreign runtime: Python
+      through `ctypes`, no compiler, no header, no binding generator, nothing
+      this repository produced. It opens two sessions, exchanges a key package,
+      invites, joins, sends an encrypted message and reads it back, then opens
+      two calls and runs a second of audio from one to the other. 49 datagrams,
+      50 slots played, peak 8864 out of a tone that went in at 8000, and the
+      stats say `bufferMs 40, concealed 0, droppedTooLate 0`.
+
+      If `ctypes` can do that, Kotlin through JNA and Swift through its C interop
+      can, because both are better at this than `ctypes` is.
+
+      **One thing found while doing it, and it argues the other way.**
+      `rotelyx_call_deliver` takes four arguments, the fourth being the arrival
+      time the jitter buffer places the frame by. Declaring three compiles, runs,
+      returns success, and produces a second of silence, because the missing
+      argument is whatever was in the register. A generated binding cannot make
+      that mistake. The ABI is sufficient; it is not safe, and the difference is
+      worth knowing before somebody writes the app.
+
+      Also found: delivering a call's own datagrams back to itself drops every
+      one, because a call builds a receiver for every participant except itself.
+      That is correct, and it is what nobody hearing their own voice means
 - [ ] Background lifecycle. iOS will not hold a socket, and every design
       decision downstream of "the phone hosts it" collides with this
 - [x] **Silent pushes marked as decoys, on one fixed schedule.** Not jittered
@@ -1261,6 +1450,33 @@ wide margin the largest single task remaining in the project.
       vary by jurisdiction and some collide with being unable to read anything
 
 ### 9. The browser client, beyond a demo
+
+- [ ] **Redeploy `site/`. The live one is behind, and mixing it with a current
+      client fails one time in eight.** This session changed the MLS credential
+      from the person's bytes to `person_len ‖ person ‖ device`, so devices could
+      be separate leaves. Both ends of this repository were changed together and
+      every test passed, which is exactly why nothing caught it: a suite where
+      both sides are built from the same commit cannot see a wire break.
+
+      A 32 byte identity written the old way is read by a current client as a
+      length byte and 31 bytes of person, and **whether that parses depends on
+      the first byte of the key**. Above 31 the length runs off the end, the
+      credential is kept whole, it happens to be 32 bytes and it happens to work.
+      At or below 31 it splits, the identity comes out short, and
+      `peer_identity` wants exactly 32, so the safety number cannot be computed.
+      224 of 256 first bytes survive and 32 do not. Pinned by
+      `the_credential_wire_format_is_pinned`.
+
+      The fix is not a version byte. Nothing is released, so everything gets
+      rebuilt and redeployed together: `site/`, and any CLI or desktop binary
+      anybody is carrying.
+
+      The new build is verified: `scripts/build-wasm` reproduces
+      `9a71d8877f3db90df24de2018c83ad9e2fb3518ccc9b9723d5b9344d606a34c0`,
+      `docs/ARTIFACTS.md` carries it, and `scripts/browser-test/run` drove two
+      real tabs through a whole conversation against it with the safety numbers
+      matching. `scripts/verify-deployment` reports DIFFERS until it is uploaded,
+      which is the check working rather than failing
 
 - [x] Deploy `rotelyx-mailbox-server` to `mail-rotelyx.ideoa.co:3341`, verified
       end to end: `101 Switching Protocols` through Cloudflare, pfSense and nginx

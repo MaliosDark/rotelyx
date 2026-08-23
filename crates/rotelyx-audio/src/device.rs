@@ -369,3 +369,178 @@ where
         Err(_) => bail!("the {what} thread stopped before it opened anything"),
     }
 }
+
+#[cfg(test)]
+mod hardware {
+    use super::*;
+
+    /// The microphone reaches the codec and the codec reaches the speaker.
+    ///
+    /// # Why this is ignored by default
+    ///
+    /// It needs a device. Every other measurement in this repository runs on a
+    /// machine with no sound card, and this one cannot: the whole point is that
+    /// nothing between the microphone and the codec was ever executed. It was
+    /// written against the documentation of a library, compiled, and left.
+    ///
+    ///   cargo test -p rotelyx-audio -- --ignored --nocapture
+    ///
+    /// # What it checks, and what only a person can
+    ///
+    /// It checks that a device opens at the codec's rate, that samples arrive,
+    /// that they survive the whole chain, and that the level at each stage is a
+    /// number rather than silence or a clipped rail. Those are the failures that
+    /// look like working code: a stream that opens and delivers zeros, a channel
+    /// count read wrong so every other sample is dropped, a gain applied twice.
+    ///
+    /// It cannot check that it *sounds* like the person talking. Nothing can
+    /// except somebody listening, which is a separate item and needs ears.
+    #[test]
+    #[ignore = "needs a microphone"]
+    fn the_microphone_reaches_the_codec_and_comes_back() {
+        use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder};
+        use rotelyx_codec::mdct::{FRAME, WINDOW};
+
+        let capture = match Capture::open() {
+            Ok(c) => c,
+            Err(e) => {
+                println!("\n  no microphone on this machine: {e}");
+                return;
+            }
+        };
+        println!("\n  microphone open, {} channel(s)", capture.channels());
+
+        // Long enough for the device to settle and for a person to say something
+        // into it if one is there.
+        let wanted = FRAME * 150;
+        let started = std::time::Instant::now();
+        let mut samples: Vec<f32> = Vec::with_capacity(wanted);
+        while samples.len() < wanted {
+            if started.elapsed() > std::time::Duration::from_secs(15) {
+                break;
+            }
+            match capture.take(FRAME) {
+                Some(block) => samples.extend_from_slice(&block),
+                None => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        }
+
+        assert!(
+            samples.len() >= WINDOW * 2,
+            "the microphone opened and delivered {} samples in fifteen seconds, \
+             which is a stream that is not running",
+            samples.len()
+        );
+
+        let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+
+        let seconds = samples.len() as f32 / SAMPLE_RATE as f32;
+        println!(
+            "  captured {:.1}s: rms {:.4}, peak {:.4}",
+            seconds,
+            rms(&samples),
+            peak(&samples)
+        );
+
+        assert!(
+            peak(&samples) > 0.0,
+            "every sample was exactly zero, so the stream is delivering silence \
+             rather than a quiet room"
+        );
+        assert!(
+            peak(&samples) < 1.5,
+            "the peak is {:.2}, which is past the rail: something is applying a \
+             gain twice",
+            peak(&samples)
+        );
+
+        // Through the chain a call actually runs.
+        let mut echo = crate::echo::EchoCanceller::new();
+        let mut denoise = crate::denoise::Denoiser::new();
+        let bytes = 60usize;
+        let mut encoder = LayeredEncoder::new(bytes);
+        let mut decoder = LayeredDecoder::new(bytes);
+
+        let mut window: Vec<f32> = Vec::new();
+        let mut decoded: Vec<f32> = Vec::new();
+        let mut coded_bytes = 0usize;
+        let mut frames = 0usize;
+
+        for block in samples.chunks(FRAME) {
+            if block.len() < FRAME {
+                break;
+            }
+            // Nothing was played, so the canceller has silence to predict from,
+            // which is the honest state for a capture-only run.
+            echo.played(&vec![0.0f32; FRAME]);
+            let cleaned = echo.capture(block);
+            let quieter = denoise.process(&cleaned);
+            window.extend_from_slice(&quieter);
+
+            if window.len() >= WINDOW {
+                let frame = encoder
+                    .encode_within(&window[..WINDOW], bytes)
+                    .expect("encode");
+                coded_bytes += frame.len();
+                frames += 1;
+                decoded.extend(decoder.decode(&frame).expect("decode"));
+                window.drain(..FRAME);
+            }
+        }
+
+        assert!(frames > 0, "not one whole window came out of the chain");
+        println!(
+            "  {frames} frames, {:.1} kbit/s on the wire",
+            coded_bytes as f32 * 8.0 / (frames as f32 * FRAME as f32 / SAMPLE_RATE as f32) / 1000.0
+        );
+        println!(
+            "  after the chain: rms {:.4}, peak {:.4}",
+            rms(&decoded),
+            peak(&decoded)
+        );
+
+        assert!(
+            peak(&decoded) > 0.0,
+            "the chain turned a real microphone into exact silence"
+        );
+        assert!(
+            decoded.iter().all(|s| s.is_finite()),
+            "the chain produced a sample that is not a number"
+        );
+
+        // Written out so a person can listen to it, which is the only check that
+        // matters and the only one a test cannot make.
+        let path = std::env::temp_dir().join("rotelyx-device-check.wav");
+        if write_wav(&path, &decoded).is_ok() {
+            println!("  wrote {} to listen to", path.display());
+        }
+    }
+
+    /// Sixteen bit mono at the codec's rate, so anything can play it.
+    fn write_wav(path: &std::path::Path, samples: &[f32]) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let body: Vec<u8> = samples
+            .iter()
+            .flat_map(|&s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
+            .collect();
+
+        let mut out = Vec::with_capacity(44 + body.len());
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + body.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+        out.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+
+        std::fs::File::create(path)?.write_all(&out)
+    }
+}

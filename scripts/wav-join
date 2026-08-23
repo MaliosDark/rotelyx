@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Join mono 16 bit wavs into one, for measurements that need a long signal.
+
+    scripts/wav-join <out.wav> <in.wav> [in.wav ...]
+
+# Why not repeat one clip
+
+The obvious way to get twenty seconds out of four is to play the same sentence
+five times. It does not work here, and the failure is quiet: a repeating signal
+makes the correlation that finds the alignment ambiguous, because every repeat
+is an equally good match. Measured, it reported the speaker as 18 seconds away
+and the drift tracker as finding nothing at all.
+
+Different sentences do not have that problem.
+"""
+import struct
+import sys
+
+
+def body_of(path):
+    data = open(path, "rb").read()
+    at = 12
+    while at + 8 <= len(data):
+        chunk = data[at : at + 4]
+        size = int.from_bytes(data[at + 4 : at + 8], "little")
+        if chunk == b"data":
+            return data[at + 8 : at + 8 + size]
+        at += 8 + size + (size & 1)
+    raise SystemExit(f"{path} has no data chunk")
+
+
+def main():
+    if len(sys.argv) < 3:
+        raise SystemExit(__doc__)
+    body = b"".join(body_of(p) for p in sys.argv[2:])
+    head = (
+        b"RIFF"
+        + struct.pack("<I", 36 + len(body))
+        + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16)
+        + b"data"
+        + struct.pack("<I", len(body))
+    )
+    open(sys.argv[1], "wb").write(head + body)
+    print(f"  {len(body) / 96000:.1f}s from {len(sys.argv) - 2} clips")
+
+
+if __name__ == "__main__":
+    main()

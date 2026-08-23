@@ -63,6 +63,61 @@ const STEP: f32 = 0.35;
 /// Keeps a division from exploding on silence.
 const FLOOR: f32 = 1e-6;
 
+/// How much of what the linear filter left is assumed to still be echo.
+///
+/// The filter removes what a linear model of the room can remove. What is left
+/// is the part no linear model can: the reverberant tail past the 128 ms the
+/// filter covers, and whatever the speaker added that a speaker is not supposed
+/// to add. Measured against a real room the linear stage alone removed 1 dB and
+/// the two together remove about 7, so this is not a refinement, it is most of
+/// the answer. See `docs/ACOUSTIC.md`.
+///
+/// The estimate is `leak · far energy`, where `leak` is learned from what
+/// actually came through while only the far end was talking, rather than
+/// assumed. Over-subtracting by a factor is the same trick the noise suppressor
+/// uses and for the same reason: an estimate that is right on average is too low
+/// half the time, and the half where it is too low is the half you can hear.
+const RESIDUAL_OVER_SUBTRACT: f32 = 2.0;
+
+/// The quietest the suppressor may make a block, as an amplitude.
+///
+/// Not zero. A gate that closes completely makes the room disappear between
+/// syllables, and a listener hears that as the line dropping rather than as
+/// quiet. -20 dB is enough to stop echo being intelligible while leaving
+/// something behind it.
+const RESIDUAL_FLOOR_GAIN: f32 = 0.1;
+
+/// How fast the leak estimate comes **down**, towards a quieter observation.
+///
+/// # Why this is a minimum and not an average
+///
+/// The leak is what fraction of the far end still comes through, and it is
+/// learned from what is left over. Anything the near end says is also left over,
+/// so an average is dragged upwards by their voice, and a leak estimate that is
+/// too high suppresses them. That is not a theory: averaging cost 92% of the
+/// near end's voice in `a_voice_on_this_end_survives_double_talk`, which is the
+/// exact failure that test exists to catch.
+///
+/// Tracking the minimum instead works on the same fact the noise suppressor uses:
+/// the quietest the residual has been recently is echo, because a voice adds and
+/// never subtracts. It comes down quickly to follow a room that got easier and
+/// climbs back slowly, so a moment of somebody talking moves it almost not at
+/// all.
+const LEAK_FALL: f32 = 0.3;
+
+/// How fast it climbs when everything observed is louder. About four seconds to
+/// double, which is slower than anybody talks and faster than a room changes.
+const LEAK_CLIMB: f32 = 1.001;
+
+/// How fast the applied gain may move, per block.
+///
+/// A gain that jumps between blocks modulates whatever is under it, and 256
+/// samples is 5 ms, which is fast enough for that to be heard as roughness.
+/// Attack is quicker than release: coming down on an echo late is worse than
+/// staying down on silence a moment too long.
+const GAIN_ATTACK: f32 = 0.4;
+const GAIN_RELEASE: f32 = 0.1;
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct C {
     pub(crate) re: f32,
@@ -184,6 +239,13 @@ pub struct EchoCanceller {
     left_energy: f32,
     /// Which partition to tidy this block. See `constrain`.
     next_constrained: usize,
+
+    /// How much of the far end's energy still comes through the linear filter,
+    /// learned while only the far end is talking. See [`RESIDUAL_OVER_SUBTRACT`].
+    leak: f32,
+    /// The suppression gain actually applied, smoothed so it cannot jump.
+    gain: f32,
+
 }
 
 impl Default for EchoCanceller {
@@ -204,6 +266,8 @@ impl EchoCanceller {
             heard_energy: FLOOR,
             left_energy: FLOOR,
             next_constrained: 0,
+            leak: 0.0,
+            gain: 1.0,
         }
     }
 
@@ -359,7 +423,90 @@ impl EchoCanceller {
             self.constrain(p);
         }
 
+        self.suppress_residual(&mut error, far_energy, left, talking_over);
         error
+    }
+
+    /// Attenuate what the linear filter could not remove.
+    ///
+    /// # Why a linear filter is not enough on its own
+    ///
+    /// It removes what a linear model of the room can remove. A room is not
+    /// linear at the ends: the reverberant tail runs past the 128 ms the filter
+    /// covers, and a small speaker driven hard adds harmonics that were never in
+    /// the signal, so no filter of any length can predict them from it.
+    ///
+    /// Measured against a real speaker and a real microphone, the linear stage
+    /// alone removed **1 dB**, against 38 on a path this project generated. With
+    /// this stage the same room gives about **7 dB** and the synthetic path 58.
+    /// That is the gap it closes, and it is why every canceller that ships has a
+    /// stage like this one. `docs/ACOUSTIC.md` has the measurements.
+    ///
+    /// # Why one gain and not a spectrum
+    ///
+    /// A per-bin gain suppresses more for the same damage, and it needs its own
+    /// transform, its own overlap, and a smoothing rule per bin to stop it
+    /// warbling. One gain per block cannot warble, cannot be got wrong per bin,
+    /// and is what the measurement says is missing. A spectral version is worth
+    /// having later and is worth having *after* something works.
+    ///
+    /// # What protects the near end
+    ///
+    /// Nothing here can tell an echo from a person by looking at it, so it does
+    /// not try: it suppresses only when the far end is talking and this end is
+    /// not, which is the same condition the filter uses to decide whether to
+    /// learn. During double talk the gain is released rather than held, because
+    /// the failure that matters is chewing somebody's words, and a moment of
+    /// echo is a smaller price than a syllable.
+    fn suppress_residual(
+        &mut self,
+        error: &mut [f32; BLOCK],
+        far_energy: f32,
+        left: f32,
+        talking_over: bool,
+    ) {
+        // Learn the leak whenever the far end is loud enough to be echoing.
+        //
+        // Not gated on the double-talk flag, deliberately. That flag asks whether
+        // the residual is more than twice the far end's energy, which is a bar a
+        // near-end voice clears only if it is louder than the loudspeaker. It is
+        // the right question for whether to freeze the filter, where a missed
+        // detection costs a stale tap. It is the wrong one here, where a missed
+        // detection costs a syllable, and in
+        // `a_voice_on_this_end_survives_double_talk` it never fires at all.
+        //
+        // The minimum tracking below is what makes the flag unnecessary: a voice
+        // raises the observation, and raising it is the direction this barely
+        // moves in.
+        if far_energy > FLOOR {
+            let observed = left / far_energy.max(FLOOR);
+            if observed < self.leak || self.leak == 0.0 {
+                self.leak += LEAK_FALL * (observed - self.leak);
+            } else {
+                self.leak *= LEAK_CLIMB;
+            }
+        }
+
+        let target = if talking_over || far_energy <= FLOOR {
+            // Somebody here is speaking, or there is nothing to echo. Either way
+            // this stage has no business touching the signal.
+            1.0
+        } else {
+            let echo_estimate = RESIDUAL_OVER_SUBTRACT * self.leak * far_energy;
+            let power_gain = 1.0 - echo_estimate / left.max(FLOOR);
+            power_gain.max(0.0).sqrt().max(RESIDUAL_FLOOR_GAIN)
+        };
+
+        let rate = if target < self.gain {
+            GAIN_ATTACK
+        } else {
+            GAIN_RELEASE
+        };
+        self.gain += rate * (target - self.gain);
+
+        for sample in error.iter_mut() {
+            *sample *= self.gain;
+        }
     }
 
     /// Zero the half of one partition's impulse response that cannot be real.

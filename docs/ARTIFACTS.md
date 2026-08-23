@@ -15,7 +15,7 @@ the server does not control.
 
 | Artifact | SHA-256 | Bytes |
 |---|---|---|
-| `rotelyx_wasm_bg.wasm` | `b687d786441bb7cb3fce008f57939f0214c73641de64b6841e2acac90ad1ea7a` | 1514620 |
+| `rotelyx_wasm_bg.wasm` | `9a71d8877f3db90df24de2018c83ad9e2fb3518ccc9b9723d5b9344d606a34c0` | 1515508 |
 | `rotelyx_wasm.js` | `66994f4e8f30ff8590a0936e1c22ca4190c498f4408aa58e055969f63995b3af` | 75850 |
 | `rotelyx-relay` | `3210ec97ba09e00394155b877d34036a9f6ef1efb977fbec49da7f509d9ad4cb` | 8958312 |
 | `rotelyx-mailbox-server` | `92c48481a0b8821de909b9b169482704d230052901a8cb00644ee866c314b6cb` | 9939208 |

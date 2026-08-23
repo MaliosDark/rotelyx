@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# Measure the echo canceller against a real room, a real speaker and a real
+# microphone.
+#
+#   scripts/measure-echo [clip]
+#
+# # Why this is different from the test that already exists
+#
+# `crates/rotelyx-audio/src/echo.rs` reports 38.3 dB of echo removed. That
+# number is measured against an echo path this project wrote: a delay, a decay
+# and a filter, all chosen by the same person who wrote the canceller. It is a
+# fair test of the arithmetic and it cannot be a test of the assumption.
+#
+# A room is not a synthetic path. It has a delay nobody chose, an impulse
+# response longer than anybody's filter, a speaker that is not flat, a
+# microphone that is not flat, and a sound card that buffers. Every one of those
+# is a way for a canceller that works in a test to do nothing in a kitchen.
+#
+# This plays a signal through the speaker, records what the microphone hears,
+# and measures what the canceller removes from it.
+#
+# # What it changes on the machine
+#
+# The output volume, and it puts it back. A canceller measured at a volume
+# nobody uses is measured at the wrong operating point, and the interesting
+# failure is at a loud one.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+CLIP="${1:-crates/rotelyx-codec/tests/speech/plosives_ryan.wav}"
+WORK="${TMPDIR:-/tmp}/rotelyx-echo"
+mkdir -p "$WORK"
+
+command -v paplay >/dev/null && command -v parecord >/dev/null || {
+    echo "needs paplay and parecord (pulseaudio-utils)"; exit 1; }
+[ -f "$CLIP" ] || { echo "no clip at $CLIP. scripts/make-speech rebuilds them."; exit 1; }
+
+BEFORE=$(pactl get-sink-volume @DEFAULT_SINK@ | head -1 | grep -oE '[0-9]+ /' | head -1 | tr -d ' /')
+restore() { [ -n "${BEFORE:-}" ] && pactl set-sink-volume @DEFAULT_SINK@ "$BEFORE" 2>/dev/null; }
+trap restore EXIT
+
+echo
+echo "  playing $(basename "$CLIP") through the speaker and recording the room"
+pactl set-sink-volume @DEFAULT_SINK@ 50% 2>/dev/null
+
+# Every clip, joined, because the drift tracker needs seconds of history before
+# it can say anything about two clocks and one sentence is four of them.
+#
+# Joined rather than repeated: a repeating signal makes the correlation that
+# finds the alignment ambiguous, every repeat being an equally good match. Tried,
+# and it reported the speaker as eighteen seconds away.
+if [ -z "${1:-}" ]; then
+    scripts/wav-join "$WORK/long.wav" crates/rotelyx-codec/tests/speech/*.wav >/dev/null
+    CLIP="$WORK/long.wav"
+fi
+
+parecord --rate=48000 --channels=1 --format=s16le --file-format=wav "$WORK/heard.wav" &
+REC=$!
+sleep 0.4
+paplay "$CLIP"
+sleep 0.5
+kill $REC 2>/dev/null; wait $REC 2>/dev/null
+
+restore
+trap - EXIT
+
+cargo run --quiet --release -p rotelyx-audio --example acoustic-echo -- "$CLIP" "$WORK/heard.wav"

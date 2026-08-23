@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Drive the engine's C ABI from another language, with no binding layer.
+
+    scripts/abi-check/run [path to librotelyx_mobile.so]
+
+# What this settles
+
+The TODO carried "UniFFI bindings for Swift and Kotlin, **if** the C ABI turns
+out not to be enough". That is a question about whether a foreign runtime can
+reach the engine through twelve C symbols and a JSON string, or whether it needs
+generated glue for records, enums and error types.
+
+The way to answer it is to be a foreign runtime. This is Python calling the
+built library through ctypes: no compiler, no header, no binding generator,
+nothing this repository produced. If ctypes can hold a whole conversation and a
+whole call through the ABI, Kotlin through JNA and Swift through its C interop
+can too, because both are strictly better at this than ctypes is.
+
+# What it does not settle
+
+Whether the API is *pleasant* in Kotlin. A binding generator buys named types
+and idiomatic errors, and this buys neither. That is a decision about the app,
+made by whoever writes it, and it is not the same question as whether the ABI is
+sufficient.
+"""
+import ctypes
+import json
+import os
+import sys
+
+DEFAULT = "target/release/librotelyx_mobile.so"
+
+
+def fail(message):
+    print(f"\n  FAILED: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def step(text):
+    print(f"  {text}", flush=True)
+
+
+class Engine:
+    def __init__(self, path):
+        self.lib = ctypes.CDLL(path)
+
+        self.lib.rotelyx_abi_version.restype = ctypes.c_char_p
+
+        self.lib.rotelyx_call.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_char_p),
+        ]
+        self.lib.rotelyx_call.restype = ctypes.c_int
+
+        self.lib.rotelyx_string_free.argtypes = [ctypes.c_char_p]
+        self.lib.rotelyx_string_free.restype = None
+
+        self.lib.rotelyx_call_open.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_int,
+            ctypes.c_int,
+        ]
+        self.lib.rotelyx_call_open.restype = ctypes.c_int64
+
+        self.lib.rotelyx_call_capture.argtypes = [
+            ctypes.c_int64,
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_int,
+        ]
+        self.lib.rotelyx_call_capture.restype = ctypes.c_int
+
+        # Four arguments, not three. The fourth is the arrival time the jitter
+        # buffer places the frame by, and getting it wrong is silent: ctypes
+        # pushes whatever was in the register and every frame lands at an
+        # implausible instant. This is the one place a binding generator would
+        # have earned its keep, and it is written down rather than fixed by one.
+        self.lib.rotelyx_call_deliver.argtypes = [
+            ctypes.c_int64,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.c_int,
+            ctypes.c_uint64,
+        ]
+        self.lib.rotelyx_call_deliver.restype = ctypes.c_int
+
+        self.lib.rotelyx_call_playback.argtypes = [
+            ctypes.c_int64,
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.c_int,
+        ]
+        self.lib.rotelyx_call_playback.restype = ctypes.c_int
+
+        self.lib.rotelyx_call_close.argtypes = [ctypes.c_int64]
+        self.lib.rotelyx_call_close.restype = ctypes.c_int
+
+    def op(self, **request):
+        """One control call. Frees the reply the way the header says to."""
+        out = ctypes.c_char_p()
+        code = self.lib.rotelyx_call(
+            json.dumps(request).encode(), ctypes.byref(out)
+        )
+        if not out:
+            fail(f"{request['op']} returned no response at all")
+        try:
+            reply = json.loads(out.value.decode())
+        finally:
+            self.lib.rotelyx_string_free(out)
+
+        if code != 0 or not reply.get("ok"):
+            fail(f"{request['op']}: {reply.get('error')}")
+        return reply["result"]
+
+
+def main():
+    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT
+    if not os.path.exists(path):
+        fail(f"{path} does not exist. Build it with scripts/build-mobile")
+
+    engine = Engine(path)
+    print()
+
+    version = engine.lib.rotelyx_abi_version().decode()
+    step(f"ABI version {version}")
+    if engine.op(op="abi.version") != version:
+        fail("the symbol and the JSON disagree about the ABI version")
+
+    step(f"protocol version {engine.op(op='protocol.version')}, "
+         f"up to {engine.op(op='protocol.maxMembers')} members")
+
+    # --- two participants, entirely through the ABI ---
+    alice = engine.op(op="session.new", label="alice")
+    bob = engine.op(op="session.new", label="bob")
+    step(f"two sessions open, handles {alice} and {bob}")
+
+    package = engine.op(op="session.keyPackage", handle=bob)
+    # `session.found` succeeds or raises; it returns null on purpose.
+    engine.op(op="session.found", handle=alice)
+
+    welcome = engine.op(op="session.invite", handle=alice, keyPackage=package)
+    engine.op(op="session.join", handle=bob, welcome=welcome["welcome"],
+              ratchetTree=welcome["ratchetTree"])
+    step("bob joined alice's conversation")
+
+    sent = engine.op(op="session.send", handle=alice, text="through the C ABI")
+    got = engine.op(op="session.receive", handle=bob, message=sent)
+    if got.get("text") != "through the C ABI":
+        fail(f"the message came back as {got!r}")
+    step("a message crossed, encrypted, and came back the same")
+
+    # --- a call, on the raw path rather than JSON ---
+    call = engine.lib.rotelyx_call_open(alice, 60, 0)
+    if call < 0:
+        fail(f"opening a call returned {call}")
+    step(f"call open, handle {call}")
+
+    FRAME = 960
+    pcm_in = (ctypes.c_int16 * FRAME)()
+    for i in range(FRAME):
+        # A tone, so what comes back can be told from silence.
+        pcm_in[i] = int(8000 * __import__("math").sin(i * 0.05))
+
+    # Alice speaks and Bob listens. Not a loopback: a call builds a receiver for
+    # every participant *except* itself, so delivering your own datagrams back to
+    # yourself drops every one of them, which is correct and is what nobody
+    # hearing their own voice means.
+    listening = engine.lib.rotelyx_call_open(bob, 60, 0)
+    if listening < 0:
+        fail(f"opening bob's call returned {listening}")
+    step(f"bob's call open, handle {listening}")
+
+    # A second of it. The jitter buffer runs a deliberate depth, so the first
+    # slots out are its warm-up rather than anything that was sent, and asking
+    # once would measure the buffer instead of the path.
+    datagram = (ctypes.c_uint8 * 2048)()
+    pcm_out = (ctypes.c_int16 * FRAME)()
+    produced = 0
+    slots = 0
+    peak = 0
+    now_ms = 0
+
+    for _ in range(50):
+        n = engine.lib.rotelyx_call_capture(call, pcm_in, FRAME, datagram, 2048)
+        if n > 0:
+            produced += 1
+            if engine.lib.rotelyx_call_deliver(listening, datagram, n, now_ms) < 0:
+                fail("bob refused a datagram alice had just produced")
+
+        got_audio = engine.lib.rotelyx_call_playback(listening, pcm_out, FRAME)
+        if got_audio > 0:
+            slots += 1
+            peak = max(peak, max(abs(s) for s in pcm_out[:got_audio]))
+        now_ms += 20
+
+    if produced == 0:
+        fail("a second of capture produced no datagram at all")
+    step(f"{produced} datagrams from alice, {slots} slots played by bob")
+    if peak == 0:
+        fail("a second of audio decoded to exact silence")
+    step(f"peak out of bob's speaker: {peak}")
+
+    stats = ctypes.c_char_p()
+    if engine.lib.rotelyx_call_stats(call, ctypes.byref(stats)) == 0 and stats:
+        step(f"stats: {stats.value.decode()}")
+        engine.lib.rotelyx_string_free(stats)
+
+    engine.lib.rotelyx_call_close(call)
+    engine.lib.rotelyx_call_close(listening)
+    engine.op(op="session.free", handle=alice)
+    engine.op(op="session.free", handle=bob)
+
+    print("\n  another language drove the whole engine through twelve C symbols.")
+    print("  No binding generator was involved.\n")
+
+
+if __name__ == "__main__":
+    main()

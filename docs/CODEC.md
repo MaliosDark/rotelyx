@@ -398,7 +398,13 @@ What is not built: block switching, which temporal noise shaping made a smaller
 question rather than an answered one; device capture; and a trained vector
 quantiser for the envelope, which is the largest remaining saving and needs a
 speech corpus. Echo cancellation and noise suppression were on this list and are
-in `rotelyx-audio` now, at 38.3 dB of echo removed and 8 dB off a steady room.
+in `rotelyx-audio` now, and both are measured against a real speaker and a real
+microphone in `docs/ACOUSTIC.md` rather than left as one number without its
+conditions. The echo canceller removes 58.3 dB against a synthetic path driven by
+white noise and **1.3 dB against a real room run continuously**, or 6.1 when
+something keeps it aligned; it removed nothing at all in that room before a
+residual suppressor was added, which is why that document exists. The noise
+suppressor takes 12.9 dB off synthetic hiss and **4.8 dB off a real room**.
 
 **Long term prediction was built and taken out again**, and it is the most
 useful thing on this list to have written down.

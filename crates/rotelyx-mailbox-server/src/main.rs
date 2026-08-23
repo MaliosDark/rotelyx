@@ -1172,8 +1172,14 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
         let tile = |label: &str, value: u64| {
             format!("<div class=\"tile\"><b>{value}</b><span>{label}</span></div>")
         };
+        // Split by which limit refused, because "refused" as one number cannot
+        // tell an operator whether their ceiling is too low or one address is
+        // misbehaving, and those need opposite responses. The relay's limiter
+        // carried counters nobody could read for exactly as long as nothing
+        // displayed them.
+        let (rate, concurrent, total) = server.limits.refusals();
         format!(
-            "<div class=\"tiles\">{}{}{}{}{}{}{}</div>",
+            "<div class=\"tiles\">{}{}{}{}{}{}{}{}{}{}</div>",
             tile("Open", c.connections_open.load(Ordering::Relaxed)),
             tile("Accepted", c.connections_total.load(Ordering::Relaxed)),
             tile("Deposits", c.deposits.load(Ordering::Relaxed)),
@@ -1181,6 +1187,9 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
             tile("Held", stored as u64),
             tile("Expired", c.expired.load(Ordering::Relaxed)),
             tile("Refused", c.refused.load(Ordering::Relaxed)),
+            tile("Too fast", rate),
+            tile("Too many", concurrent),
+            tile("Server full", total),
         )
     } else {
         String::new()
@@ -2171,11 +2180,16 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     }
 
     async fn spawn_server() -> String {
+        spawn_server_with_state().await.0
+    }
+
+    /// The same, keeping the state so a test can read the counters back.
+    async fn spawn_server_with_state() -> (String, Arc<Server>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
         let addr = listener.local_addr().expect("addr");
-        let app = router(DEFAULT_TTL_SECONDS, KEEPALIVE);
+        let (app, server) = router_full(DEFAULT_TTL_SECONDS, KEEPALIVE, None, Meter::default(), None);
         tokio::spawn(async move {
             let _ = axum::serve(
                 listener,
@@ -2183,7 +2197,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             )
             .await;
         });
-        format!("ws://{addr}/mailbox")
+        (format!("ws://{addr}/mailbox"), server)
     }
 
     async fn connect(url: &str) -> Client {
@@ -2204,7 +2218,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     /// that pays no token, gets no meter reading, and was free until now.
     #[tokio::test]
     async fn one_address_cannot_open_every_socket_over_the_wire() {
-        let url = spawn_server().await;
+        let (url, server) = spawn_server_with_state().await;
 
         let mut held = Vec::new();
         for n in 0..limits::PER_ADDRESS_CONNECTIONS {
@@ -2220,6 +2234,16 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             tokio_tungstenite::connect_async(&url).await.is_err(),
             "one address opened more than {} sockets",
             limits::PER_ADDRESS_CONNECTIONS
+        );
+
+        // And the refusal is counted, by kind. A limiter whose counters nobody
+        // increments looks identical to one nobody reads, and this project has
+        // shipped the second of those before.
+        let (rate, concurrent, total) = server.limits.refusals();
+        assert_eq!(
+            (rate, concurrent, total),
+            (0, 1, 0),
+            "the refusal was not counted as a concurrency refusal"
         );
 
         // And the slots come back, so a client that reconnects all day is not

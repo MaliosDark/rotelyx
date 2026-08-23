@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#
+# Measure the noise suppressor against a real room.
+#
+#   scripts/measure-denoise [clip]
+#
+# The same shape as scripts/measure-echo and for the same reason: its 8 dB is
+# measured against hiss this project generated, added to speech this project
+# synthesised. A room's noise is not hiss. It has a hum at the mains frequency
+# and its harmonics, a fan with a blade rate, and a spectrum that is anything but
+# flat, and every one of those is a way for a suppressor tuned on white noise to
+# do something else.
+#
+# It puts the output volume back where it found it.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+CLIP="${1:-crates/rotelyx-codec/tests/speech/plosives_ryan.wav}"
+WORK="${TMPDIR:-/tmp}/rotelyx-denoise"
+mkdir -p "$WORK"
+
+command -v paplay >/dev/null && command -v parecord >/dev/null || {
+    echo "needs paplay and parecord (pulseaudio-utils)"; exit 1; }
+[ -f "$CLIP" ] || { echo "no clip at $CLIP. scripts/make-speech rebuilds them."; exit 1; }
+
+BEFORE=$(pactl get-sink-volume @DEFAULT_SINK@ | head -1 | grep -oE '[0-9]+ /' | head -1 | tr -d ' /')
+restore() { [ -n "${BEFORE:-}" ] && pactl set-sink-volume @DEFAULT_SINK@ "$BEFORE" 2>/dev/null; }
+trap restore EXIT
+
+echo
+echo "  playing $(basename "$CLIP") through the speaker and recording the room"
+pactl set-sink-volume @DEFAULT_SINK@ 50% 2>/dev/null
+
+# The room with nothing playing, so the measurement can tell the noise floor
+# from the reverberant tail of the speech. They are both "energy in a gap" and
+# only one of them is something a suppressor should remove.
+echo "  first, the room with nothing playing"
+parecord --rate=48000 --channels=1 --format=s16le --file-format=wav \
+    --process-time-msec=20 "$WORK/room.wav" &
+QUIET=$!
+sleep 2
+kill $QUIET 2>/dev/null; wait $QUIET 2>/dev/null
+
+parecord --rate=48000 --channels=1 --format=s16le --file-format=wav "$WORK/heard.wav" &
+REC=$!
+sleep 0.4
+paplay "$CLIP"
+sleep 0.5
+kill $REC 2>/dev/null; wait $REC 2>/dev/null
+
+restore
+trap - EXIT
+
+cargo run --quiet --release -p rotelyx-audio --example acoustic-denoise -- "$CLIP" "$WORK/heard.wav" "$WORK/room.wav"

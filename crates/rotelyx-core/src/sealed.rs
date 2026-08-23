@@ -93,20 +93,21 @@ fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>
     Ok(key)
 }
 
-/// The minimum length of a well formed sealed **identity**.
-///
-/// An identity's plaintext is exactly `SECRET_LEN`, so anything shorter than
-/// this cannot be one whatever else it is.
-const MIN_LEN: usize = MAGIC.len() + 1 + SALT_LEN + NONCE_LEN + SECRET_LEN + 16;
-
-/// The minimum length of a well formed sealed anything.
+/// The minimum length of a well formed sealed file.
 ///
 /// Header and tag, with no assumption about the plaintext, because
-/// [`seal_bytes`] takes any. Using `MIN_LEN` here was a real defect and not a
-/// conservative bound: it counts a 32 byte identity that arbitrary state does
-/// not have, so sealing anything shorter produced a file this function refused
-/// to open. Found by sealing twelve bytes and getting them back as
+/// [`seal_bytes`] takes any.
+///
+/// It used to include `SECRET_LEN` as well, on the reasoning that an identity's
+/// plaintext is exactly that long. That was a real defect rather than a
+/// conservative bound: arbitrary state does not carry a 32 byte identity, so
+/// sealing anything shorter produced a file [`open_bytes`] refused to open.
+/// Found by sealing twelve bytes and getting them back as
 /// `Truncated { len: 77, min: 97 }`.
+///
+/// An identity's own length is still checked, in [`open`], and checked *after*
+/// decryption, where the value has been authenticated rather than guessed at
+/// from the size of the file.
 const MIN_BYTES_LEN: usize = MAGIC.len() + 1 + SALT_LEN + NONCE_LEN + 16;
 
 /// Seal an identity under a passphrase.
