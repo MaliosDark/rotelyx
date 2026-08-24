@@ -216,6 +216,25 @@ impl Call {
         }
         let mut out = std::mem::take(&mut self.mix);
         without_clipping(&mut out);
+
+        // What the loudspeaker is about to play, written down when asked for.
+        //
+        // Counting frames says a call is delivering and says nothing about what
+        // it sounds like, and the two came apart: a call decoded every frame it
+        // received and a person heard noise. Nothing short of the samples
+        // themselves settles that, and a person on the other end of a terminal
+        // cannot listen. Off unless `ROTELYX_CALL_DUMP` names a file.
+        if let Some(path) = std::env::var_os("ROTELYX_CALL_DUMP") {
+            use std::io::Write as _;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let bytes: Vec<u8> = out.iter().flat_map(|s| s.to_le_bytes()).collect();
+                let _ = file.write_all(&bytes);
+            }
+        }
         // The reference for the canceller is what the loudspeaker is about to
         // play, which is the sum rather than any one voice in it.
         self.echo.played(&out);
@@ -364,7 +383,35 @@ impl Call {
                 .or_insert_with(|| LayeredDecoder::new(BYTES_PER_FRAME));
 
             let audio = match inbound.play() {
-                Playout::Frame(payload) => match LayeredFrame::from_bytes(&payload) {
+                Playout::Frame(payload) => {
+                    // The authenticated payload, exactly as it arrived, so the
+                    // same bytes can be decoded again away from the call. A
+                    // frame that authenticates and turns into noise is either
+                    // these bytes or this decoder, and nothing but replaying
+                    // them separates the two. Off unless asked for.
+                    if let Some(path) = std::env::var_os("ROTELYX_FRAME_DUMP") {
+                        use std::io::Write as _;
+
+                        // One file per speaker. Written to a single file first,
+                        // and two calls in one process then interleaved their
+                        // records and made the recording unreadable: the control
+                        // that was meant to prove the instrument works read 7
+                        // frames out of 59 kilobytes. An instrument that lies
+                        // this way is worse than none.
+                        let mut path = path;
+                        path.push(format!(".{sender}"));
+
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                        {
+                            let _ = file.write_all(&(payload.len() as u32).to_le_bytes());
+                            let _ = file.write_all(&payload);
+                        }
+                    }
+
+                    match LayeredFrame::from_bytes(&payload) {
                     Ok(parsed) => match decoder.decode(&parsed) {
                         Ok(audio) => {
                             self.frames_in += 1;
@@ -383,7 +430,8 @@ impl Call {
                         self.frames_concealed += 1;
                         decoder.conceal()
                     }
-                },
+                    }
+                }
                 // The frame did not arrive in time for its slot. This is the
                 // case the concealment exists for, and the buffer reporting it
                 // as a slot rather than as an error is what makes it usable.

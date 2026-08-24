@@ -729,6 +729,7 @@ pub unsafe extern "C" fn rotelyx_call_capture(
         return -1;
     }
     let mut reg = call_lock();
+
     let Some(c) = reg.get_mut(&call) else { return -1 };
 
     let input = std::slice::from_raw_parts(pcm, samples as usize);

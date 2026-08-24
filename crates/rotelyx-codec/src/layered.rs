@@ -1097,6 +1097,164 @@ impl ShapeDecoder {
 
 #[cfg(test)]
 mod tests {
+    /// Decode a file of captured frames, to see what they really carry.
+    ///
+    /// Ignored: it needs a recording. `ROTELYX_FRAME_DUMP` on a desktop call
+    /// writes one, each frame prefixed with its length, exactly as it arrived
+    /// and after it authenticated. Replaying it here separates two things that
+    /// look identical from inside a call: bytes that carry the wrong sound, and
+    /// a decoder that turns the right bytes into the wrong sound.
+    ///
+    ///   ROTELYX_FRAMES=frames.bin cargo test -p rotelyx-codec \
+    ///     decode_a_recording -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn decode_a_recording() {
+        use super::*;
+
+        let path = std::env::var("ROTELYX_FRAMES").expect("set ROTELYX_FRAMES");
+        let raw = std::fs::read(path).expect("the recording");
+
+        // How many frames to look at. A diagnostic that only holds for the first
+        // seconds of a call is measured over those seconds and no further.
+        let limit: usize = std::env::var("ROTELYX_FRAMES_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(usize::MAX);
+
+        let mut decoder = LayeredDecoder::new(60);
+        let mut audio: Vec<f32> = Vec::new();
+        let mut frames = 0usize;
+        let mut refused = 0usize;
+
+        let mut at = 0usize;
+        while at + 4 <= raw.len() {
+            let len = u32::from_le_bytes(raw[at..at + 4].try_into().expect("four bytes")) as usize;
+            at += 4;
+            if at + len > raw.len() {
+                break;
+            }
+            let payload = &raw[at..at + len];
+            at += len;
+
+            match LayeredFrame::from_bytes(payload).and_then(|f| decoder.decode(&f)) {
+                Ok(samples) => {
+                    frames += 1;
+                    audio.extend_from_slice(&samples);
+                }
+                Err(_) => refused += 1,
+            }
+
+            if frames >= limit {
+                break;
+            }
+        }
+
+        let paired: f32 = audio.windows(2).map(|w| w[0] * w[1]).sum();
+        let total: f32 = audio.iter().map(|s| s * s).sum();
+        let correlation = if total > 0.0 { paired / total } else { 0.0 };
+        let rms = (total / audio.len().max(1) as f32).sqrt();
+
+        // The dominant frequency, by counting how often the signal crosses zero.
+        // A sine at f crosses 2f times a second, which is enough to tell 220 from
+        // 440 from 880 without a transform.
+        let crossings = audio
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count();
+        let seconds = audio.len() as f32 / 48000.0;
+        let hz = if seconds > 0.0 {
+            crossings as f32 / seconds / 2.0
+        } else {
+            0.0
+        };
+
+        println!("  {frames} frames decoded, {refused} refused");
+        println!("  dominant frequency about {hz:.0} Hz");
+        println!("  rms {rms:.4}, correlation between neighbours {correlation:.3}");
+        println!(
+            "  {}",
+            if correlation > 0.8 {
+                "that is a voice: the bytes carry sound and the decoder reads it"
+            } else {
+                "that is broadband noise: these bytes do not carry what was heard"
+            }
+        );
+    }
+
+    /// One lost frame must not poison every frame after it.
+    ///
+    /// # Why this is the question
+    ///
+    /// A real call decoded every frame it received, concealed seven, and played
+    /// broadband noise: correlation 0.195 between neighbouring samples, where a
+    /// voice is above 0.9. Frames were arriving and turning into the wrong
+    /// sound, which is what a decoder that carries state across frames does
+    /// after it loses one.
+    ///
+    /// So: encode a tone, drop a frame in the middle, and measure what comes out
+    /// afterwards. If the decoder recovers, loss is not the explanation and the
+    /// fault is elsewhere.
+    #[test]
+    fn a_lost_frame_does_not_poison_the_ones_after_it() {
+        use super::*;
+
+        const FRAME: usize = crate::mdct::FRAME;
+        const WINDOW: usize = crate::mdct::WINDOW;
+
+        let pcm: Vec<f32> = (0..FRAME * 20)
+            .map(|n| {
+                let t = n as f32 / crate::mdct::SAMPLE_RATE as f32;
+                (t * 440.0 * std::f32::consts::TAU).sin() * 0.5
+            })
+            .collect();
+
+        let mut encoder = LayeredEncoder::new(60);
+        let mut decoder = LayeredDecoder::new(60);
+        let mut history = vec![0.0f32; FRAME];
+
+        // Which frame goes missing. Far enough in that everything before it is
+        // settled, far enough from the end to hear what follows.
+        const DROP: usize = 8;
+
+        let mut after = Vec::new();
+        for (n, input) in pcm.chunks_exact(FRAME).enumerate() {
+            let mut window = Vec::with_capacity(WINDOW);
+            window.extend_from_slice(&history);
+            window.extend_from_slice(input);
+            history.copy_from_slice(&window[FRAME..]);
+
+            let frame = encoder.encode(&window).expect("encode");
+            let bytes = frame.to_bytes();
+
+            if n == DROP {
+                // Lost on the way. The decoder is told nothing, which is exactly
+                // what happens: a concealed slot never reaches it.
+                continue;
+            }
+
+            let parsed = LayeredFrame::from_bytes(&bytes).expect("parse");
+            let audio = decoder.decode(&parsed).expect("decode");
+
+            if n > DROP + 1 {
+                after.extend_from_slice(&audio);
+            }
+        }
+
+        let paired: f32 = after.windows(2).map(|w| w[0] * w[1]).sum();
+        let total: f32 = after.iter().map(|s| s * s).sum();
+        let correlation = if total > 0.0 { paired / total } else { 0.0 };
+        println!("  correlation after the loss: {correlation:.3}");
+
+        // A tone at 440 Hz sampled at 48 kHz barely moves between neighbouring
+        // samples. Anything near zero here is broadband noise, which is what a
+        // person hears when a decoder never recovers.
+        assert!(
+            correlation > 0.8,
+            "one lost frame left the decoder producing noise: correlation {correlation:.3}"
+        );
+    }
+
     /// The phone's capture path, decoded the way the desktop decodes it.
     ///
     /// # What this is checking
@@ -1144,8 +1302,23 @@ mod tests {
             let parsed = LayeredFrame::from_bytes(&on_the_wire).expect("parse");
             let audio = decoder.decode(&parsed).expect("decode");
 
-            println!("  decoded {} samples (a frame is {FRAME}, a window is {WINDOW})", audio.len());
             let energy: f32 = audio.iter().map(|s| s * s).sum::<f32>() / audio.len() as f32;
+
+            // Energy is not enough, and that is the whole lesson here. Noise has
+            // energy. A tone at 440 Hz sampled at 48 kHz moves slowly from one
+            // sample to the next, so it is strongly correlated with itself one
+            // sample back; broadband noise is not. A call decoded every frame it
+            // received and played noise, and a test that only asked "is there
+            // sound" said it was fine.
+            let paired: f32 = audio.windows(2).map(|w| w[0] * w[1]).sum();
+            let total: f32 = audio.iter().map(|s| s * s).sum();
+            let correlation = if total > 0.0 { paired / total } else { 0.0 };
+            println!(
+                "  {} samples, energy {:.5}, correlation {:.3}",
+                audio.len(),
+                energy,
+                correlation
+            );
             if energy > 1e-3 {
                 heard += 1;
             } else {
