@@ -201,6 +201,14 @@ impl RotelyxEndpoint {
         Ok(Session::new(net))
     }
 
+    /// Wait until a relay has registered this endpoint, so its address is true.
+    ///
+    /// See [`rotelyx_net::NetEndpoint::online`]. An address naming a relay is a
+    /// promise until the relay knows who is behind that id.
+    pub async fn online(&self, within: std::time::Duration) -> bool {
+        self.net.online(within).await
+    }
+
     /// Accept a connection for datagrams alone, without waiting for a stream.
     ///
     /// For a call, which never uses one. See

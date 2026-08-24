@@ -1097,6 +1097,126 @@ impl ShapeDecoder {
 
 #[cfg(test)]
 mod tests {
+    /// The phone's capture path, decoded the way the desktop decodes it.
+    ///
+    /// # What this is checking
+    ///
+    /// Not the codec. The two clients build the encoder's input differently:
+    /// the phone is handed sixteen bit PCM by Android and makes a forty
+    /// millisecond window out of the previous frame and this one, and the
+    /// desktop takes floats straight from its capture device. If those two
+    /// disagree about anything at all, one direction of a call sounds like
+    /// noise while the other sounds fine, which is exactly what a real call did.
+    ///
+    /// So this reproduces the phone's arithmetic exactly, sends the bytes it
+    /// would send, and decodes them the way the far side does.
+    #[test]
+    fn the_phones_capture_path_decodes_to_the_same_sound() {
+        use super::*;
+
+        const FRAME: usize = crate::mdct::FRAME;
+        const WINDOW: usize = crate::mdct::WINDOW;
+
+        // A tone, as Android hands it over: sixteen bit, mono, 48 kHz.
+        let pcm: Vec<i16> = (0..FRAME * 6)
+            .map(|n| {
+                let t = n as f32 / crate::mdct::SAMPLE_RATE as f32;
+                ((t * 440.0 * std::f32::consts::TAU).sin() * 0.5 * 32767.0) as i16
+            })
+            .collect();
+
+        let mut encoder = LayeredEncoder::new(60);
+        let mut decoder = LayeredDecoder::new(60);
+        let mut history = vec![0.0f32; FRAME];
+
+        let mut heard = 0usize;
+        let mut silent = 0usize;
+        for input in pcm.chunks_exact(FRAME) {
+            // The phone's window, to the letter.
+            let mut window = Vec::with_capacity(WINDOW);
+            window.extend_from_slice(&history);
+            window.extend(input.iter().map(|s| *s as f32 / 32768.0));
+            history.copy_from_slice(&window[FRAME..]);
+
+            let frame = encoder.encode(&window).expect("encode");
+            let on_the_wire = frame.to_bytes();
+
+            let parsed = LayeredFrame::from_bytes(&on_the_wire).expect("parse");
+            let audio = decoder.decode(&parsed).expect("decode");
+
+            println!("  decoded {} samples (a frame is {FRAME}, a window is {WINDOW})", audio.len());
+            let energy: f32 = audio.iter().map(|s| s * s).sum::<f32>() / audio.len() as f32;
+            if energy > 1e-3 {
+                heard += 1;
+            } else {
+                silent += 1;
+            }
+        }
+
+        assert!(
+            heard >= 3,
+            "the phone's capture path produced {silent} silent frames and {heard} with sound in \
+             them: what it sends does not decode to what it heard"
+        );
+    }
+
+    /// What one client puts on the wire is what the other parses.
+    ///
+    /// # Why this is worth a test of its own
+    ///
+    /// The phone client encoded with `TelyxEncoder` and the desktop parsed with
+    /// `LayeredFrame::from_bytes`. Every frame of a real call crossed the
+    /// network, authenticated, and failed to decode. Nothing reported a fault:
+    /// an undecodable frame is concealed rather than counted, which is right for
+    /// packet loss and hides a format mismatch completely. Both ends showed an
+    /// open call and both people heard silence, then chirps, for as long as they
+    /// were willing to hold it.
+    ///
+    /// So the check is not "does the codec work". It is: does the byte string
+    /// one side sends parse as the frame the other side expects, and does the
+    /// audio survive the trip.
+    #[test]
+    fn what_goes_on_the_wire_comes_back_as_audio() {
+        use super::*;
+
+        // A tone rather than noise, so what comes back can be compared to
+        // something. Two windows, because the first primes the encoder.
+        let tone: Vec<f32> = (0..crate::mdct::WINDOW * 2)
+            .map(|n| {
+                let t = n as f32 / crate::mdct::SAMPLE_RATE as f32;
+                (t * 440.0 * std::f32::consts::TAU).sin() * 0.25
+            })
+            .collect();
+
+        let mut encoder = LayeredEncoder::new(60);
+        let mut decoder = LayeredDecoder::new(60);
+
+        let mut heard = 0usize;
+        for window in tone.chunks_exact(crate::mdct::WINDOW) {
+            let frame = encoder.encode(window).expect("encode");
+
+            // The wire is bytes. This is the step the phone was missing: it sent
+            // a codec frame of a different shape entirely.
+            let on_the_wire = frame.to_bytes();
+            let parsed = LayeredFrame::from_bytes(&on_the_wire)
+                .expect("what one side sends must parse on the other");
+
+            let audio = decoder.decode(&parsed).expect("decode");
+
+            // Energy, not sample equality: this is a lossy codec and the point
+            // is that a voice arrives, not that the bits do.
+            let energy: f32 = audio.iter().map(|s| s * s).sum();
+            if energy > 1e-4 {
+                heard += 1;
+            }
+        }
+
+        assert!(
+            heard > 0,
+            "the audio did not survive the round trip through the wire format"
+        );
+    }
+
 
     /// A gap must sound like the voice continuing, not like a hole.
     ///

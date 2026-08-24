@@ -754,8 +754,12 @@
         onCall = false;
         $("call").textContent = "Call";
         $("call").className = "";
+        // Concealed beside received, because the two together say whether a
+        // quiet call was quiet or wrong: a frame that arrives and cannot be
+        // turned into sound is concealed rather than counted, and that is how a
+        // format mismatch stayed invisible through a whole call.
         log("call ended: " + m.sent + " sent, " + m.received + " received, "
-            + m.dropped_ms + " ms dropped", "sys");
+            + m.concealed + " concealed, " + m.dropped_ms + " ms dropped", "sys");
         break;
 
       case "message":

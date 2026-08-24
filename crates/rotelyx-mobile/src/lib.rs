@@ -548,7 +548,17 @@ pub extern "C" fn rotelyx_abi_version() -> *const c_char {
 // voice-configured audio session. See `docs/MOBILE.md`.
 
 use rotelyx_codec::mdct::{FRAME, WINDOW};
-use rotelyx_codec::{TelyxDecoder, TelyxEncoder};
+// The layered codec, which is what the desktop and the terminal client use.
+//
+// This was the base codec, and the two ends of a real call could not read each
+// other: the phone encoded Telyx frames and the desktop decoded layered ones,
+// so every frame crossed the network, authenticated, and failed to decode.
+// Neither side reported a fault, because an undecodable frame is concealed
+// rather than counted, and both people heard silence on an open call.
+//
+// A layered frame carries the base layer plus whatever refinement fits, so this
+// is the wider of the two formats and the one to converge on.
+use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder, LayeredFrame};
 use rotelyx_media::transport::{MediaIn, MediaOut};
 use rotelyx_media::{Mode, Playout, SenderKeys};
 pub mod net;
@@ -579,8 +589,8 @@ struct Call {
     /// A map rather than a single peer because a group call has several, and
     /// the frame format already carries five bits of sender identity for this.
     inbound: HashMap<u8, MediaIn>,
-    encoder: TelyxEncoder,
-    decoder: TelyxDecoder,
+    encoder: LayeredEncoder,
+    decoder: LayeredDecoder,
 
     /// The encoder needs a 40 ms window and the app gives us 20 ms at a time,
     /// so one frame of history is held here. The first frame of a call produces
@@ -686,8 +696,8 @@ pub extern "C" fn rotelyx_call_open(session: u64, bytes_per_frame: i32, fidelity
         Call {
             out,
             inbound,
-            encoder: TelyxEncoder::new(bytes),
-            decoder: TelyxDecoder::new(bytes),
+            encoder: LayeredEncoder::new(bytes),
+            decoder: LayeredDecoder::new(bytes),
             history: vec![0.0; FRAME],
             primed: false,
             pending: std::collections::VecDeque::new(),
@@ -735,7 +745,10 @@ pub unsafe extern "C" fn rotelyx_call_capture(
         return 0;
     }
 
-    let Ok(packet) = c.encoder.encode(&window) else { return -2 };
+    let Ok(frame) = c.encoder.encode(&window) else { return -2 };
+    // As bytes, because what the transport carries is a datagram and what the
+    // far side parses is `LayeredFrame::from_bytes`.
+    let packet = frame.to_bytes();
     let Ok(datagram) = c.out.frame(&packet) else { return -3 };
 
     if datagram.len() > out_capacity as usize {
@@ -813,7 +826,9 @@ pub unsafe extern "C" fn rotelyx_call_playback(call: i64, pcm: *mut i16, capacit
 
     while c.pending.len() < FRAME {
         match rx.play() {
-            Playout::Frame(packet) => match c.decoder.decode(&packet) {
+            Playout::Frame(packet) => match LayeredFrame::from_bytes(&packet)
+                .and_then(|frame| c.decoder.decode(&frame))
+            {
                 Ok(audio) => c.pending.extend(audio),
                 Err(_) => {
                     c.pending.extend(std::iter::repeat_n(0.0, FRAME));

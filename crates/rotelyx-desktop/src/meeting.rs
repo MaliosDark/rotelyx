@@ -650,6 +650,20 @@ impl Meeting {
         self.label = peer.clone();
         self.write_down();
 
+        // Bound now rather than when a call is placed.
+        //
+        // Registering with a relay takes a moment, and the moment a call needs
+        // it is the moment it is least able to wait: a ring arrives, an answer
+        // goes out with an address in it, and the far side dials at once. Doing
+        // it here spends that time while nobody is waiting.
+        if self.relay.is_some() {
+            if let Err(e) = self.endpoint().await {
+                (self.events)(Event::Status {
+                    text: format!("calls are not available: {e:#}"),
+                });
+            }
+        }
+
         // Which epoch this side is at, and where it expects to be written to.
         //
         // Both are derived from the group, so two sides that disagree about
@@ -1006,7 +1020,27 @@ impl Meeting {
             // the relay for its whole life or is refused at the start, rather
             // than depending on whether hole punching happened to succeed.
             let config = NetConfig::new(RelayPolicy::SelfHosted(vec![url]), PathPolicy::RelayOnly);
-            self.endpoint = Some(RotelyxEndpoint::bind(&self.identity, config).await?);
+            let endpoint = RotelyxEndpoint::bind(&self.identity, config).await?;
+
+            // Bound is not reachable.
+            //
+            // An address naming a relay is a promise until that relay has
+            // completed its handshake and knows which connection belongs to this
+            // endpoint id. Publishing before then hands the other side an
+            // address the relay cannot route, and they dial it immediately,
+            // because an answer is what they were waiting for. The dial fails
+            // while both ends believe they agreed on a call.
+            //
+            // Ten seconds, and not fatal if it passes: the endpoint may still be
+            // reachable and there is nothing better to publish either way. What
+            // matters is that the common case waits.
+            if !endpoint.online(Duration::from_secs(10)).await {
+                (self.events)(Event::Status {
+                    text: "the relay has not answered yet, so a call may not connect".into(),
+                });
+            }
+
+            self.endpoint = Some(endpoint);
         }
         Ok(self.endpoint.as_ref().expect("just bound"))
     }
@@ -1297,6 +1331,7 @@ async fn carry_call(
     events(Event::CallEnded {
         sent: call.frames_sent(),
         received: call.frames_received(),
+        concealed: call.frames_concealed(),
         queued_ms: call.queued_ms(),
         dropped_ms: call.dropped_ms(),
     });
@@ -1720,12 +1755,17 @@ mod tests {
                 .iter()
                 .rev()
                 .find_map(|e| match e {
-                    Event::CallEnded { sent, received, .. } => Some((*sent, *received)),
+                    Event::CallEnded {
+                    sent,
+                    received,
+                    concealed,
+                    ..
+                } => Some((*sent, *received, *concealed)),
                     _ => None,
                 });
             match ended {
-                Some((sent, received)) => {
-                    println!("  {who}: sent {sent}, received {received}");
+                Some((sent, received, concealed)) => {
+                    println!("  {who}: sent {sent}, received {received}, concealed {concealed}");
 
                     // Sending proves nothing. A call that sends and receives
                     // nothing is what this test was written to catch: both ends

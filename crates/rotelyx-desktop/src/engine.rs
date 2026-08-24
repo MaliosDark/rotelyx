@@ -75,7 +75,20 @@ pub enum Event {
     /// what they are about to hear: a figure that keeps climbing is the call
     /// falling behind, and after the call it is too late to know.
     CallLevel { queued_ms: usize },
-    CallEnded { sent: u64, received: u64, queued_ms: usize, dropped_ms: usize },
+    /// `concealed` is frames that arrived and could not be turned into sound.
+    ///
+    /// Reported beside `received` because the two together are the difference
+    /// between a call that is quiet and a call that is wrong. A frame the
+    /// decoder cannot use is concealed rather than counted, which is right for
+    /// packet loss and hides a format mismatch completely: a real call ran with
+    /// eleven received frames out of three thousand and said nothing at all.
+    CallEnded {
+        sent: u64,
+        received: u64,
+        concealed: u64,
+        queued_ms: usize,
+        dropped_ms: usize,
+    },
     /// The membership changed, with who rather than only how many.
     ///
     /// A commit can remove one member and add another at once, which leaves the
@@ -533,6 +546,7 @@ impl Engine {
                             Some(c) => self.emit(Event::CallEnded {
                                 sent: c.frames_sent(),
                                 received: c.frames_received(),
+                                concealed: c.frames_concealed(),
                                 queued_ms: c.queued_ms(),
                                 dropped_ms: c.dropped_ms(),
                             }),
@@ -548,6 +562,7 @@ impl Engine {
                             self.emit(Event::CallEnded {
                                 sent: c.frames_sent(),
                                 received: c.frames_received(),
+                                concealed: c.frames_concealed(),
                                 queued_ms: c.queued_ms(),
                                 dropped_ms: c.dropped_ms(),
                             });

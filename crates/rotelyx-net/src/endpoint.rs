@@ -161,6 +161,28 @@ impl NetEndpoint {
         })
     }
 
+    /// Wait until a relay has registered this endpoint.
+    ///
+    /// # Why publishing an address is not enough
+    ///
+    /// An address naming a relay says where this endpoint *will* be reachable.
+    /// It becomes true when the relay has completed its handshake and knows
+    /// which connection belongs to this endpoint id, and not before. Between
+    /// binding and that moment, an address is a promise: anybody dialling it
+    /// through the relay is asking for somebody the relay has never heard of.
+    ///
+    /// That gap is small and it is exactly where a call lands. The address goes
+    /// out in an answer, the far side dials immediately, and the dial fails
+    /// while both ends believe they agreed on a call. So the address is not
+    /// published until this has returned.
+    ///
+    /// Returns whether it came online inside `within`. False is not fatal on its
+    /// own: the endpoint may still be reachable directly, and a caller that has
+    /// nothing better to offer may publish anyway and say so.
+    pub async fn online(&self, within: std::time::Duration) -> bool {
+        tokio::time::timeout(within, self.inner.online()).await.is_ok()
+    }
+
     /// Accept a connection without waiting for a stream on it.
     ///
     /// # Why this exists beside `accept`

@@ -21,5 +21,10 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+# For the one timeout in `online`. Waiting for a relay to register this
+# endpoint has to be bounded: a machine with no route to the relay would
+# otherwise wait for as long as it is running.
+tokio = { workspace = true, features = ["time"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "io-util", "time"] }
