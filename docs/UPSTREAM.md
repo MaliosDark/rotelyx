@@ -120,6 +120,16 @@ with a length not divisible by the rate. `hpke-rs` calls `libcrux_sha3::shake256
 with a const length, which is the one-shot API: it calls `portable::shake256`
 once and never touches `Shake256Xof::squeeze`.
 
+There is a second reason, and it is the stronger one. In `hpke-rs`, both calls to
+`shake256` sit in `derive_key_pair`, in the arms for `XWingDraft06` and
+`MlKem768 | MlKem1024`. `CIPHERSUITE` in `crates/rotelyx-crypto/src/group.rs` is
+`MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519`, whose KEM is
+`DhKem25519`, and that arm goes to `dh_kem::derive_key_pair` and never reaches
+SHAKE at all. Rotelyx's post-quantum material is X-Wing composed separately and
+injected at the pre-shared-key input, not an MLS ciphersuite, so nothing moves
+this to the ML-KEM arm. An external audit raised these two in August 2026 and
+explicitly left reachability open; this is the answer.
+
 0208 is in `libcrux_sha3::avx2::x4::shake256`, used by ML-KEM and ML-DSA. Neither
 is in this graph and nothing calls that path.
 

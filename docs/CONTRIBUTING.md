@@ -1,5 +1,11 @@
 # Working on Rotelyx
 
+> **A security problem does not go in an issue.** Email
+> <contact@ideoa.co.uk>. A public issue is a working exploit handed to
+> everybody reading the repository, including whoever is running a relay or a
+> mailbox at the time. [`SECURITY.md`](../SECURITY.md) says what to include and
+> what happens next.
+
 ## Repository layout
 
 ```
@@ -66,32 +72,53 @@ sudo mkswap /swapfile2 && sudo swapon /swapfile2
 cargo test --workspace
 ```
 
-**450 tests**, and 11 more in the issuer crate that is not published here. The
+**592 tests**, and 11 more in the issuer crate that is not published here. The
 distribution matters more than the count:
 
 | Suite | Tests | What it proves |
 |---|---:|---|
-| `rotelyx-codec` | 71 + 12 | The transform, the quantiser, real speech, and every corrupted frame |
-| `rotelyx-core` | 59 + 10 | Identity, sealed storage, framing, admission control **over real sockets** |
-| `rotelyx-mailbox-server` | 45 | Deposits, fan-out, tiers, quota, the vault, waking a phone |
-| `rotelyx-media` | 44 + 6 | Per sender keys, the jitter buffer, layers crossing a real wire |
-| `rotelyx-wasm` | 31 | The message layer as the browser sees it |
-| `rotelyx-mailbox` | 29 + 6 | Envelopes, buckets, tag rotation, TTL expiry |
-| `rotelyx-capability` | 24 | Token format and verification, against tokens frozen from the real issuer |
-| `rotelyx-crypto` | 23 + 12 | MLS conversations, X-Wing, the PQ secret reaching the key schedule |
+| `rotelyx-codec` | 84 + 17 | The transform, the quantiser, real speech, and every corrupted frame |
+| `rotelyx-core` | 74 + 16 | Identity, sealed storage, framing, admission control **over real sockets** |
+| `rotelyx-mailbox-server` | 62 | Deposits, fan-out, tiers, quota, the vault, waking a phone |
+| `rotelyx-media` | 51 + 9 | Per sender keys, the jitter buffer, layers crossing a real wire |
+| `rotelyx-crypto` | 37 + 17 | MLS conversations, X-Wing, the PQ secret reaching the key schedule |
+| `rotelyx-wasm` | 40 | The message layer as the browser and the phone both see it |
+| `rotelyx-mailbox` | 29 + 7 | Envelopes, buckets, tag rotation, TTL expiry |
+| `rotelyx-capability` | 25 | Token format and verification, against tokens frozen from the real issuer |
 | `rotelyx-net` | 15 + 10 | Path policy, the zero foreign infrastructure guard, **live QUIC connections** |
+| `rotelyx-audio` | 20 | The echo canceller, the noise suppressor and the dereverberator, against recorded speech |
+| `rotelyx-desktop` | 19 | The window's handshake and key file, and **two clients meeting through a code** at a real mailbox |
+| `rotelyx-cli` | 10 + 6 | Key file sealing and migration, plus a message surviving the whole offline path |
 | `rotelyx-relay` | 12 + 3 | Admission limits, the allowlist refusing to fall open, the status page |
 | `rotelyx-mobile` | 9 | The C ABI boundary, and audio across it |
-| `rotelyx-status` | 7 | The availability record both landing pages read |
-| `rotelyx-cli` | 6 + 6 | Key file sealing and migration, plus a message surviving the whole offline path |
-| `rotelyx-desktop` | 6 | The native window's handshake and key file |
-| `rotelyx-web` | 4 | The local browser harness |
+| `rotelyx-mailbox-client` | 3 + 3 | The queue that used to discard what it read past, against the real server |
+| `rotelyx-web` | 5 | The local browser harness |
+| `rotelyx-status` | 4 | The availability record both landing pages read |
+| `rotelyx-path` | 2 | The selector that prefers any direct path to any relayed one |
 
-Hostile input tests run in five crates and account for 33 of the total: every
+The phone client is a separate tree and runs its own suite, which this count does
+not include.
+
+Hostile input tests run in six crates and account for 36 of the total: every
 truncation, every byte value at every position, extension, and arbitrary input,
 against every parser reachable before anything has been authenticated.
 
-### Three defects found by testing, not by review
+### Two defects found by an audit, not by testing
+
+Both passed every test in this repository, and both are the same shape: a
+property that holds whenever the thing is done **once**.
+
+1. **Media keys repeated their nonces between calls.** Derived from the group's
+   exported secret and the speaker's roster index, both fixed for an MLS epoch,
+   with the frame counter restarting at zero. One call never repeats a nonce, so
+   every test passed. The second call in an epoch reused the first one's keystream
+   from its first frame, which under ChaCha20-Poly1305 loses confidentiality and
+   integrity together. Keys are now bound to a per-call value.
+2. **The safety number was a hash of the group id**, which never changes, so it
+   never moved when a member or a device was added. One roster never changes, so
+   every test passed. It is now the sorted set of member signature keys.
+
+### Four defects found by testing, not by review
 
 Every unit test passed while these were live. Only cross layer tests and tests
 over real sockets found them:
@@ -106,6 +133,11 @@ over real sockets found them:
    finishing resets and silently discards data the sender believes was
    delivered. Write then drop is the obvious pattern, and it lost the last
    message with no error anywhere.
+4. **A failure that looked like a normal condition.** A media frame that cannot
+   be decoded is concealed rather than counted, which is correct for packet loss
+   and hides a format mismatch completely. A call ran with eleven usable frames
+   out of three thousand and every layer reported it healthy. Concealment is
+   counted and reported now.
 
 ---
 
@@ -119,8 +151,13 @@ reaching the MLS key schedule, blind mailbox, admission control enforced on the
 accept path, metadata resistant path selection, relay server, CLI and browser
 harnesses.
 
+**Also done since that list was written.** Calls between two desktop clients and
+between a phone and a desktop, over the relay and this project's own codec; the
+meeting code path, so a phone and a desktop can start a conversation without
+either holding an address for the other; an Android client with its own suite.
+
 **Next.** Field test across two real NATs, published test vectors for the PQ
-composition, audio calls, mobile clients.
+composition, echo cancellation that works in a room, iOS.
 
 **Blocking any public security claim.** An independent cryptographic audit.
 

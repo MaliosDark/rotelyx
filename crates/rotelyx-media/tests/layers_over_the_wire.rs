@@ -16,6 +16,12 @@ use rotelyx_media::SenderKeys;
 use rotelyx_path::PathPolicy;
 use std::f32::consts::PI;
 
+/// A fixed binding, for the cases that are not about the binding itself.
+fn test_call() -> rotelyx_media::CallBinding {
+    rotelyx_media::CallBinding::new(b"a-test-call-0001").expect("long enough")
+}
+
+
 const BYTES_PER_FRAME: usize = 60;
 
 fn voice_like(samples: usize) -> Vec<f32> {
@@ -44,8 +50,8 @@ fn voice_like(samples: usize) -> Vec<f32> {
 fn pair() -> (MediaOut, MediaIn) {
     let base = [7u8; 32];
     (
-        MediaOut::new(PathPolicy::RelayOnly, SenderKeys::derive(&base, 0)).expect("sender"),
-        MediaIn::new(PathPolicy::RelayOnly, SenderKeys::derive(&base, 0)).expect("receiver"),
+        MediaOut::new(PathPolicy::RelayOnly, SenderKeys::derive(&base, 0, &test_call())).expect("sender"),
+        MediaIn::new(PathPolicy::RelayOnly, SenderKeys::derive(&base, 0, &test_call())).expect("receiver"),
     )
 }
 

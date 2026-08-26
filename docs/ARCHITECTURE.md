@@ -272,6 +272,53 @@ is said to see.
 crashes mid collection loses those messages. The alternative is a mailbox that
 keeps copies, which is exactly what this is trying not to be.
 
+### Meeting somebody without an address
+
+The tag key comes from a conversation, so the mailbox delivers only to people
+who already share one. First contact needs something else, and on a phone the
+usual answer does not exist: an invitation carries a public key and has to be
+delivered to an address, and a phone has no listening socket, moves between
+networks and is asleep most of the time.
+
+A **meeting code** is the second admission path and it carries no key. 120
+random bits, written as 29 base32 characters after an `RTLX1` prefix. Both sides
+run the canonical form through a domain separated BLAKE3 derivation, arrive at
+the same tag, and do an ordinary MLS handshake there:
+
+| Step | Who | What is deposited at the meeting tag |
+|---|---|---|
+| 1 | The side that read the code | A key package |
+| 2 | The side that showed it | A welcome, and the hybrid ciphertext |
+| 3 | Both | Nothing more. Addressing moves to the group's own tag |
+
+Everything at a meeting tag is visible to the operator and that is by
+construction: a key package is public, a welcome is encrypted to the joiner's own
+key, and the hybrid ciphertext is encapsulated to their public key. Nothing at a
+meeting place is a message.
+
+The code cannot be the invitation itself. An X-Wing public key is 1216 bytes,
+which puts an invitation at roughly three thousand characters against a QR
+ceiling of 1273 at the correction level that leaves room for a mark in the
+middle. Naming a place costs 29 characters and the keys are exchanged where
+their size is free.
+
+**What a code buys an attacker is one attempt at being first.** Whoever reaches
+the tag before the intended person completes the handshake in their place, and
+nothing in the implementation prevents it, because a code is not proof of who is
+holding it. The safety number is the only thing that detects it, which is why it
+is on screen from the moment the conversation exists.
+
+Tags rotate hourly and each side also polls the preceding windows, so an
+envelope deposited a minute before a boundary is still collected after it. The
+same derivation is implemented in Rust for the desktop and in Dart for the
+phone, and each mints a code the other reads.
+
+One consequence is worth stating because it surprised the implementation: **a
+conversation with yourself cannot be a group of one.** The tag key comes from the
+group's exporter secret and a group of one has no secret to export, so a solo
+group has no address at all. The client joins the same device twice instead, and
+to the mailbox that is two members with nothing special cased.
+
 ### What the mailbox does not solve
 
 An operator can retain envelopes past their TTL and correlate deposits with

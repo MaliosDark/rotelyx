@@ -15,13 +15,19 @@
 
 use rotelyx_media::{Receiver, Sender, SenderKeys};
 
+/// A fixed binding, for the cases that are not about the binding itself.
+fn test_call() -> rotelyx_media::CallBinding {
+    rotelyx_media::CallBinding::new(b"a-test-call-0001").expect("long enough")
+}
+
+
 fn receiver() -> Receiver {
-    Receiver::new(SenderKeys::derive(&[3u8; 32], 0)).expect("receiver")
+    Receiver::new(SenderKeys::derive(&[3u8; 32], 0, &test_call())).expect("receiver")
 }
 
 /// A genuine protected frame to mutate.
 fn specimen() -> Vec<u8> {
-    let mut sender = Sender::new(SenderKeys::derive(&[3u8; 32], 0)).expect("sender");
+    let mut sender = Sender::new(SenderKeys::derive(&[3u8; 32], 0, &test_call())).expect("sender");
     sender.protect(b"twenty milliseconds of speech, more or less").expect("protect")
 }
 
@@ -31,7 +37,7 @@ fn specimen() -> Vec<u8> {
 /// exercises a different parse path from a short one, and a call that runs for
 /// hours is the one nobody tests by hand.
 fn long_counter_specimen() -> Vec<u8> {
-    let mut sender = Sender::new(SenderKeys::derive(&[3u8; 32], 0)).expect("sender");
+    let mut sender = Sender::new(SenderKeys::derive(&[3u8; 32], 0, &test_call())).expect("sender");
     let mut frame = Vec::new();
     for _ in 0..300 {
         frame = sender.protect(b"later in a long call").expect("protect");

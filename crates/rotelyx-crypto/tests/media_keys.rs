@@ -8,6 +8,12 @@
 use rotelyx_crypto::{Conversation, Member};
 use rotelyx_media::{MediaError, Receiver, Sender, SenderKeys};
 
+/// A fixed binding, for the cases that are not about the binding itself.
+fn test_call() -> rotelyx_media::CallBinding {
+    rotelyx_media::CallBinding::new(b"a-test-call-0001").expect("long enough")
+}
+
+
 /// A group of `n`, everyone up to date.
 fn group(n: usize) -> (Vec<Member>, Vec<Conversation>) {
     let members: Vec<Member> = (0..n)
@@ -74,8 +80,8 @@ fn two_members_hold_an_encrypted_call() {
     let (members, conversations) = group(2);
     let base = conversations[0].media_base_key(&members[0]).expect("export");
 
-    let mut alice = Sender::new(SenderKeys::derive(&base, 0)).expect("sender");
-    let mut bob_hears_alice = Receiver::new(SenderKeys::derive(&base, 0)).expect("receiver");
+    let mut alice = Sender::new(SenderKeys::derive(&base, 0, &test_call())).expect("sender");
+    let mut bob_hears_alice = Receiver::new(SenderKeys::derive(&base, 0, &test_call())).expect("receiver");
 
     for n in 0..50u32 {
         let frame = format!("20ms of audio, frame {n}").into_bytes();
@@ -125,8 +131,8 @@ fn a_membership_change_rekeys_the_call() {
     }
 
     // And the old key no longer opens anything current.
-    let mut speaking = Sender::new(SenderKeys::derive(&after, 0)).expect("sender");
-    let mut listening_with_old = Receiver::new(SenderKeys::derive(&before, 0)).expect("receiver");
+    let mut speaking = Sender::new(SenderKeys::derive(&after, 0, &test_call())).expect("sender");
+    let mut listening_with_old = Receiver::new(SenderKeys::derive(&before, 0, &test_call())).expect("receiver");
 
     let frame = speaking.protect(b"said after carol joined").expect("protect");
     assert_eq!(
@@ -143,8 +149,8 @@ fn a_member_cannot_speak_as_another() {
     let (members, conversations) = group(3);
     let base = conversations[0].media_base_key(&members[0]).expect("export");
 
-    let mut alice = Sender::new(SenderKeys::derive(&base, 0)).expect("sender");
-    let mut listening_for_bob = Receiver::new(SenderKeys::derive(&base, 1)).expect("receiver");
+    let mut alice = Sender::new(SenderKeys::derive(&base, 0, &test_call())).expect("sender");
+    let mut listening_for_bob = Receiver::new(SenderKeys::derive(&base, 1, &test_call())).expect("receiver");
 
     let from_alice = alice.protect(b"this is bob speaking").expect("protect");
 
@@ -176,8 +182,8 @@ fn two_groups_do_not_share_media_keys() {
     let b_base = b[0].media_base_key(&b_members[0]).expect("export");
     assert_ne!(a_base, b_base);
 
-    let mut speaking = Sender::new(SenderKeys::derive(&a_base, 0)).expect("sender");
-    let mut eavesdropping = Receiver::new(SenderKeys::derive(&b_base, 0)).expect("receiver");
+    let mut speaking = Sender::new(SenderKeys::derive(&a_base, 0, &test_call())).expect("sender");
+    let mut eavesdropping = Receiver::new(SenderKeys::derive(&b_base, 0, &test_call())).expect("receiver");
 
     let frame = speaking.protect(b"a private call").expect("protect");
     assert_eq!(eavesdropping.unprotect(&frame), Err(MediaError::BadTag));

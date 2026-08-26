@@ -199,13 +199,18 @@ impl Forwarder {
 
 #[cfg(test)]
 mod tests {
+
+    /// A fixed binding, for the cases that are not about the binding itself.
+    fn test_call() -> crate::CallBinding {
+        crate::CallBinding::new(b"a-test-call-0001").expect("long enough")
+    }
     use super::*;
     use crate::{Receiver, Sender};
 
     fn keys(id: u8) -> (Sender, Receiver) {
         let base = [7u8; 32];
-        let sender = Sender::new(SenderKeys::derive(&base, id)).expect("sender");
-        let receiver = Receiver::new(SenderKeys::derive(&base, id)).expect("receiver");
+        let sender = Sender::new(SenderKeys::derive(&base, id, &test_call())).expect("sender");
+        let receiver = Receiver::new(SenderKeys::derive(&base, id, &test_call())).expect("receiver");
         (sender, receiver)
     }
 

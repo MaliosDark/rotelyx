@@ -234,7 +234,8 @@ where allocation is the one thing you must not do. They fill caller-owned
 buffers and return counts: nothing to free, nothing to allocate.
 
 ```c
-int64_t rotelyx_call_open(uint64_t session, int32_t bytes_per_frame, int32_t fidelity);
+int64_t rotelyx_call_open(uint64_t session, int32_t bytes_per_frame, int32_t fidelity,
+                          const uint8_t *call, int32_t call_len);
 int32_t rotelyx_call_capture(int64_t call, const int16_t *pcm, int32_t samples,
                              uint8_t *out, int32_t out_capacity);
 int32_t rotelyx_call_deliver(int64_t call, const uint8_t *datagram, int32_t len,
@@ -253,9 +254,17 @@ a frame that is not 960 samples is refused rather than quietly mixed.
 recovers loss by asking for it again at the cost of seconds of buffer, which is
 right for a voice message and wrong for a live call; zero conceals instead.
 
+`call` is the identifier both ends agreed on for **this** call, at least eight
+bytes, and it is not optional. The media keys are derived from the group's
+exported secret and the speaker's position in the roster, and both are fixed for
+an entire MLS epoch while the frame counter restarts at zero, so without a value
+that changes per call a second call repeats the first one's key and nonce from
+the first frame. Pass whatever your call signalling already carries: the side
+that rings mints it, the side that answers echoes it.
+
 `rotelyx_call_open` returns a handle, or a negative reason: **-1** no such
 session, **-2** no conversation yet, **-3** not in its own roster, **-4** too
-many participants or a bad policy. Negative rather than a message because the
+many participants or a bad policy, **-5** no usable call binding. Negative rather than a message because the
 audio path does not allocate.
 
 ### The three that run on the audio thread

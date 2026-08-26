@@ -628,13 +628,38 @@ fn call_lock() -> std::sync::MutexGuard<'static, HashMap<i64, Call>> {
 /// available from `rotelyx_call` with `{"op":"abi.version"}`... no: failures
 /// here are reported by the return value alone, because this is called from a
 /// path that must not allocate. -1 no such session, -2 no conversation yet,
-/// -3 the session is not in its own roster, -4 too many speakers.
+/// -3 the session is not in its own roster, -4 too many speakers, -5 no usable
+/// call binding.
 ///
 /// # Safety
 ///
-/// Nothing is dereferenced. Safe to call from anywhere.
+/// `call` must point at `call_len` readable bytes, or be null. They are copied
+/// before this returns and are not retained.
 #[no_mangle]
-pub extern "C" fn rotelyx_call_open(session: u64, bytes_per_frame: i32, fidelity: i32) -> i64 {
+pub extern "C" fn rotelyx_call_open(
+    session: u64,
+    bytes_per_frame: i32,
+    fidelity: i32,
+    call: *const u8,
+    call_len: i32,
+) -> i64 {
+    // The value both ends agreed on for this call, which is what stops a second
+    // call inside one MLS epoch from repeating the first call's nonces. The
+    // caller passes the identifier its own signalling already carries. **-5** if
+    // it is missing or too short: refusing is the only safe answer, because the
+    // alternative is a call that encrypts under a key it has already used.
+    let binding = if call.is_null() || call_len <= 0 {
+        return -5;
+    } else {
+        // Safety: the caller promises `call_len` readable bytes at `call`, for
+        // the duration of this call. Copied immediately.
+        let bytes = unsafe { std::slice::from_raw_parts(call, call_len as usize) };
+        match rotelyx_media::CallBinding::new(bytes) {
+            Ok(b) => b,
+            Err(_) => return -5,
+        }
+    };
+
     let (base, index, members) = {
         let reg = lock();
         let Some(s) = reg.sessions.get(&session) else {
@@ -665,7 +690,7 @@ pub extern "C" fn rotelyx_call_open(session: u64, bytes_per_frame: i32, fidelity
     // choice a caller can get wrong.
     let Ok(out) = MediaOut::with_mode(
         PathPolicy::RelayOnly,
-        SenderKeys::derive(&base, index as u8),
+        SenderKeys::derive(&base, index as u8, &binding),
         mode,
     ) else {
         return -4;
@@ -681,7 +706,7 @@ pub extern "C" fn rotelyx_call_open(session: u64, bytes_per_frame: i32, fidelity
         }
         let Ok(rx) = MediaIn::with_mode(
             PathPolicy::RelayOnly,
-            SenderKeys::derive(&base, other as u8),
+            SenderKeys::derive(&base, other as u8, &binding),
             mode,
         ) else {
             return -4;

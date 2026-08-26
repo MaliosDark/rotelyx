@@ -1148,14 +1148,13 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
         history,
     );
 
-    // Counters only when the operator asked for them. Off by default, because
-    // a total is still a measurement of a community: polling "envelopes
+    // Counters only when the operator asked for them, and never on this page.
+    //
+    // A total is still a measurement of a community: polling "envelopes
     // delivered" every minute says when a group is awake and roughly how large
-    // it is, without reading a byte.
-    // Counters only when the operator asked for them. Off by default, because
-    // a total is still a measurement of a community: polling "envelopes
-    // delivered" every minute says when a group is awake and roughly how large
-    // it is, without reading a byte.
+    // it is, without reading a byte. So they are written to the log for an
+    // operator watching their own machine, and the page that anybody can reach
+    // says nothing at all.
     //
     // Rendered as a row of stat tiles rather than a bar chart, because these
     // are five headline numbers in four different units. A chart comparing
@@ -1166,39 +1165,35 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
     // And with no explanatory note. The first version carried one saying the
     // stats were on because a debug flag had been passed, which announces to a
     // visitor that the operator left something switched on.
-    let counters = if server.counters.show {
+    // To the log, for an operator watching their own machine, and never to the
+    // page. Rendered there it was one poll away from being a public feed.
+    if server.counters.show {
         let c = &server.counters;
         let stored = server.mailbox.lock().await.len();
-        let tile = |label: &str, value: u64| {
-            format!("<div class=\"tile\"><b>{value}</b><span>{label}</span></div>")
-        };
         // Split by which limit refused, because "refused" as one number cannot
         // tell an operator whether their ceiling is too low or one address is
         // misbehaving, and those need opposite responses. The relay's limiter
         // carried counters nobody could read for exactly as long as nothing
         // displayed them.
         let (rate, concurrent, total) = server.limits.refusals();
-        format!(
-            "<div class=\"tiles\">{}{}{}{}{}{}{}{}{}{}</div>",
-            tile("Open", c.connections_open.load(Ordering::Relaxed)),
-            tile("Accepted", c.connections_total.load(Ordering::Relaxed)),
-            tile("Deposits", c.deposits.load(Ordering::Relaxed)),
-            tile("Delivered", c.delivered.load(Ordering::Relaxed)),
-            tile("Held", stored as u64),
-            tile("Expired", c.expired.load(Ordering::Relaxed)),
-            tile("Refused", c.refused.load(Ordering::Relaxed)),
-            tile("Too fast", rate),
-            tile("Too many", concurrent),
-            tile("Server full", total),
-        )
-    } else {
-        String::new()
-    };
+        tracing::info!(
+            open = c.connections_open.load(Ordering::Relaxed),
+            accepted = c.connections_total.load(Ordering::Relaxed),
+            deposits = c.deposits.load(Ordering::Relaxed),
+            delivered = c.delivered.load(Ordering::Relaxed),
+            held = stored,
+            expired = c.expired.load(Ordering::Relaxed),
+            refused = c.refused.load(Ordering::Relaxed),
+            too_fast = rate,
+            too_many = concurrent,
+            server_full = total,
+            "counters"
+        );
+    }
 
     let page = include_str!("landing.html")
         .replace("/*STATUS-STYLE*/", rotelyx_status::STYLE)
-        .replace("<!--STATUS-->", &block)
-        .replace("<!--COUNTERS-->", &counters);
+        .replace("<!--STATUS-->", &block);
 
     (
         StatusCode::OK,
@@ -2089,11 +2084,13 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         String::from_utf8_lossy(&out).into_owned()
     }
 
-    /// The counters must count, and must stay off unless asked for.
+    /// The counters must count, and must never reach the page.
     ///
     /// Both halves matter. A counter that never moves is decoration, and a
-    /// counter that appears without `--stats` is exactly the leak the flag
-    /// exists to prevent.
+    /// counter a stranger can fetch is a feed: polled every minute, "envelopes
+    /// delivered" says when a group is awake and roughly how large it is
+    /// without reading a byte. `--stats` writes them to the log instead, where
+    /// only somebody already on the machine sees them.
     #[tokio::test]
     async fn counters_count_and_stay_off_by_default() {
         let (url, server) = spawn_counting_server().await;
@@ -2137,8 +2134,22 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             "the connection must be counted"
         );
 
+        // Counted, and still not published. `--stats` sends them to the log for
+        // an operator watching their own machine; the page anybody can reach
+        // says nothing about traffic at all, because a total polled every minute
+        // says when a group is awake and roughly how large it is without reading
+        // a byte.
         let page = fetch(&page_url).await;
-        assert!(page.contains("class=\"tiles\""), "with --stats the tiles show");
+        assert!(
+            !page.contains("class=\"tiles\""),
+            "counters reached a page a stranger can fetch"
+        );
+        for number in ["Deposits", "Delivered", "Held", "Accepted"] {
+            assert!(
+                !page.contains(number),
+                "the page names a traffic counter: {number}"
+            );
+        }
 
         // The first version of this page carried a note saying the counters
         // were on because a debug flag had been passed, which tells a visitor
@@ -2168,6 +2179,26 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             !page.contains(&tag_hex(&tag)),
             "no tag may ever appear on the page"
         );
+
+        // And no table of what an operator can observe. One shipped here for a
+        // while, listing which tags are busy and which addresses connect as
+        // things this host can see. That analysis is ours and it is published
+        // in the threat model, where somebody reading it has the rest of the
+        // argument around it. On the front door of a running mailbox it is a
+        // list of what to look at, addressed to whoever is looking.
+        for internal in [
+            "Observable",
+            "Visible here",
+            "Who sent it",
+            "Who it is for",
+            "Connecting addresses",
+            "Message contents",
+        ] {
+            assert!(
+                !page.contains(internal),
+                "the page publishes our own observability analysis: {internal}"
+            );
+        }
 
         // And the default server, which is what production runs.
         let plain = spawn_server().await;

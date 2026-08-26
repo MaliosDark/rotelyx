@@ -9,7 +9,7 @@ page a person actually opens, against the mailbox actually deployed, and it
 found nothing wrong the first time it ran, which is worth as much as a failure
 would have been: before this, nobody had ever opened it.
 
-    scripts/browser-test/run https://rotelyx.ideoa.co/chat.html
+    scripts/browser-test/run https://rotelyx.com/chat.html
 
 Needs `google-chrome` and Python 3. No packages: `cdp.py` speaks enough of the
 DevTools protocol to evaluate JavaScript in a page, which is all this needs.

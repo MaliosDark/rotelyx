@@ -183,6 +183,71 @@ pub enum MediaError {
     CounterExhausted,
     #[error("sender {id} cannot be carried in a frame header, which holds 0 to 31")]
     SenderOutOfRange { id: u8 },
+    #[error("a call binding must be at least {min} bytes, and this one is {got}")]
+    CallBindingTooShort { min: usize, got: usize },
+}
+
+/// The value that makes one call's keys different from the next one's.
+///
+/// # Why this type exists rather than another argument
+///
+/// Because the argument was missing and nobody noticed for months. Media keys
+/// were derived from the group's exported secret and the speaker's position in
+/// the roster, both of which are fixed for an entire MLS epoch, and the frame
+/// counter starts at zero. Ordinary messages do not advance an epoch; only a
+/// commit does. So hanging up and calling again reused the key **and** the
+/// nonce, frame for frame, from the first frame onwards.
+///
+/// Under ChaCha20-Poly1305 that is not a weakness, it is the end of the
+/// guarantee. Two ciphertexts under one nonce give the exclusive-or of the two
+/// plaintexts, and speech is structured enough to separate. Worse, two
+/// authenticated messages under one nonce recover the Poly1305 one-time key,
+/// after which anything can be forged with a valid tag: the per speaker key
+/// exists precisely so that nobody can put words in somebody else's mouth, and
+/// a repeated nonce hands that back.
+///
+/// A plain `&[u8]` argument would have been enough to fix it and not enough to
+/// keep it fixed. A named type with no default and no way to build an empty one
+/// means the next person to write a call has to answer the question.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CallBinding(Vec<u8>);
+
+impl CallBinding {
+    /// Shorter than this is not worth having.
+    ///
+    /// Sixty four bits of a value chosen fresh per call puts a repeat far past
+    /// the number of calls two people will place inside one epoch, and the only
+    /// collision that costs anything is between two calls of the same pair at
+    /// the same epoch.
+    pub const MIN_BYTES: usize = 8;
+
+    /// Both ends must pass the same bytes, and neither may reuse them.
+    ///
+    /// In practice this is the identifier the call signalling already carries:
+    /// the side that rings mints it, the side that answers echoes it, and both
+    /// derive from it.
+    pub fn new(bytes: &[u8]) -> Result<Self, MediaError> {
+        if bytes.len() < Self::MIN_BYTES {
+            return Err(MediaError::CallBindingTooShort {
+                min: Self::MIN_BYTES,
+                got: bytes.len(),
+            });
+        }
+        Ok(Self(bytes.to_vec()))
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Deliberately says nothing. A call identifier is not secret, but it is a
+/// linkage between two ends of one conversation and a log is a poor place for
+/// it.
+impl std::fmt::Debug for CallBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CallBinding(..)")
+    }
 }
 
 /// The key material for one sender in one epoch.
@@ -220,15 +285,25 @@ impl SenderKeys {
     /// for every member, tied to one epoch. `sender` distinguishes the streams
     /// within it and must be the same value both ends use to address that
     /// participant.
-    pub fn derive(base: &[u8; 32], sender: u8) -> Self {
+    /// `call` is what stops one call from reusing the previous call's nonces.
+    /// See [`CallBinding`]. It is mixed into both expansions rather than only
+    /// into the key, so that two calls differ in their salts as well: if a
+    /// derivation ever went wrong and produced the same key twice, different
+    /// salts would still keep the nonces apart.
+    pub fn derive(base: &[u8; 32], sender: u8, call: &CallBinding) -> Self {
         let hkdf = Hkdf::<Sha256>::new(Some(&[sender]), base);
 
         let mut key = Zeroizing::new([0u8; 32]);
         let mut salt = Zeroizing::new([0u8; NONCE_LEN]);
 
+        let mut key_info = KEY_INFO.to_vec();
+        key_info.extend_from_slice(call.as_bytes());
+        let mut salt_info = SALT_INFO.to_vec();
+        salt_info.extend_from_slice(call.as_bytes());
+
         // Infallible for these lengths: HKDF only fails past 255 hash blocks.
-        hkdf.expand(KEY_INFO, &mut key[..]).expect("32 bytes");
-        hkdf.expand(SALT_INFO, &mut salt[..]).expect("12 bytes");
+        hkdf.expand(&key_info, &mut key[..]).expect("32 bytes");
+        hkdf.expand(&salt_info, &mut salt[..]).expect("12 bytes");
 
         Self {
             id: sender,
@@ -637,11 +712,20 @@ impl Receiver {
 mod tests {
     use super::*;
 
+
+    /// A fixed binding for tests that are not about the binding.
+    ///
+    /// Named rather than inlined so that a test which needs two different calls
+    /// has to say so, which is the whole point of the type.
+    fn test_call() -> CallBinding {
+        CallBinding::new(b"a-test-call-0001").expect("long enough")
+    }
+
     fn pair(sender_id: u8) -> (Sender, Receiver) {
         let base = [7u8; 32];
         (
-            Sender::new(SenderKeys::derive(&base, sender_id)).expect("sender"),
-            Receiver::new(SenderKeys::derive(&base, sender_id)).expect("receiver"),
+            Sender::new(SenderKeys::derive(&base, sender_id, &test_call())).expect("sender"),
+            Receiver::new(SenderKeys::derive(&base, sender_id, &test_call())).expect("receiver"),
         )
     }
 
@@ -681,7 +765,7 @@ mod tests {
             let mut tampered = protected.clone();
             tampered[byte] ^= 0xff;
 
-            let mut fresh = Receiver::new(SenderKeys::derive(&[7u8; 32], 3)).expect("receiver");
+            let mut fresh = Receiver::new(SenderKeys::derive(&[7u8; 32], 3, &test_call())).expect("receiver");
             assert!(
                 fresh.unprotect(&tampered).is_err(),
                 "flipping byte {byte} was accepted"
@@ -744,14 +828,77 @@ mod tests {
         );
     }
 
+    /// Two calls inside one MLS epoch must not share a keystream.
+    ///
+    /// This is the regression test for the worst defect this crate has had. The
+    /// exported group secret and the sender index are both fixed for an epoch,
+    /// ordinary messages do not advance an epoch, and the frame counter starts
+    /// at zero every time a sender is constructed. So before the call binding
+    /// existed, hanging up and dialling again encrypted the second call's first
+    /// frame under the first call's first key and nonce.
+    ///
+    /// The assertion is on the exclusive-or of two ciphertexts, because that is
+    /// exactly what an eavesdropper computes: under a repeated nonce it equals
+    /// the exclusive-or of the two plaintexts and the ciphertexts stop hiding
+    /// anything.
+    #[test]
+    fn two_calls_in_one_epoch_do_not_repeat_a_nonce() {
+        let base = [7u8; 32];
+        let plaintext = b"the same words spoken twice";
+
+        let first = CallBinding::new(b"call-one-0001").expect("long enough");
+        let second = CallBinding::new(b"call-two-0002").expect("long enough");
+
+        let mut one = Sender::new(SenderKeys::derive(&base, 1, &first)).expect("sender");
+        let mut two = Sender::new(SenderKeys::derive(&base, 1, &second)).expect("sender");
+
+        let a = one.protect(plaintext).expect("protect");
+        let b = two.protect(plaintext).expect("protect");
+
+        // Same header: same sender, same counter zero. That part is expected and
+        // is not the problem.
+        assert_eq!(a[..MIN_HEADER_LEN], b[..MIN_HEADER_LEN]);
+
+        // The bodies must not be equal, and more than that, their exclusive-or
+        // must not be the exclusive-or of the plaintexts, which for identical
+        // plaintexts is all zeroes.
+        let body_a = &a[MIN_HEADER_LEN..MIN_HEADER_LEN + plaintext.len()];
+        let body_b = &b[MIN_HEADER_LEN..MIN_HEADER_LEN + plaintext.len()];
+        assert_ne!(body_a, body_b, "two calls produced the same ciphertext");
+        assert!(
+            body_a.iter().zip(body_b).any(|(x, y)| x ^ y != 0),
+            "the two keystreams cancelled, which is nonce reuse"
+        );
+
+        // And the second call's receiver must not accept the first call's audio,
+        // because accepting it is what makes a captured stream replayable into a
+        // later conversation.
+        let mut listening = Receiver::new(SenderKeys::derive(&base, 1, &second)).expect("receiver");
+        assert_eq!(listening.unprotect(&a), Err(MediaError::BadTag));
+    }
+
+    /// A binding too short to be worth having is refused rather than accepted
+    /// and quietly weakened.
+    #[test]
+    fn a_short_call_binding_is_refused() {
+        assert_eq!(
+            CallBinding::new(b"short"),
+            Err(MediaError::CallBindingTooShort { min: 8, got: 5 })
+        );
+        assert_eq!(
+            CallBinding::new(b""),
+            Err(MediaError::CallBindingTooShort { min: 8, got: 0 })
+        );
+    }
+
     /// Every sender has its own key, so one member cannot produce another
     /// member's stream. In a call that is the difference between overhearing
     /// somebody and impersonating them.
     #[test]
     fn one_sender_cannot_forge_another() {
         let base = [7u8; 32];
-        let mut alice = Sender::new(SenderKeys::derive(&base, 1)).expect("sender");
-        let mut listening_for_bob = Receiver::new(SenderKeys::derive(&base, 2)).expect("receiver");
+        let mut alice = Sender::new(SenderKeys::derive(&base, 1, &test_call())).expect("sender");
+        let mut listening_for_bob = Receiver::new(SenderKeys::derive(&base, 2, &test_call())).expect("receiver");
 
         let from_alice = alice.protect(b"pretending to be bob").expect("protect");
 
@@ -779,12 +926,12 @@ mod tests {
     fn a_sender_beyond_the_header_is_refused() {
         let base = [7u8; 32];
 
-        assert!(Sender::new(SenderKeys::derive(&base, MAX_SENDERS as u8 - 1)).is_ok());
+        assert!(Sender::new(SenderKeys::derive(&base, MAX_SENDERS as u8 - 1, &test_call())).is_ok());
         assert!(matches!(
-            Sender::new(SenderKeys::derive(&base, MAX_SENDERS as u8)),
+            Sender::new(SenderKeys::derive(&base, MAX_SENDERS as u8, &test_call())),
             Err(MediaError::SenderOutOfRange { id }) if id == MAX_SENDERS as u8
         ));
-        assert!(Receiver::new(SenderKeys::derive(&base, 200)).is_err());
+        assert!(Receiver::new(SenderKeys::derive(&base, 200, &test_call())).is_err());
     }
 
     /// The counter is encoded short but is a full 64 bit value everywhere it
@@ -804,7 +951,7 @@ mod tests {
             assert_eq!(id, 1);
             assert_eq!(read_back, counter, "the counter did not survive encoding");
 
-            let mut fresh = Receiver::new(SenderKeys::derive(&[7u8; 32], 1)).expect("receiver");
+            let mut fresh = Receiver::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("receiver");
             assert_eq!(fresh.unprotect(&protected).expect("unprotect"), b"hello");
         }
         let _ = &mut receiver;
@@ -814,8 +961,8 @@ mod tests {
     #[test]
     fn senders_derive_independent_keys() {
         let base = [7u8; 32];
-        let a = SenderKeys::derive(&base, 1);
-        let b = SenderKeys::derive(&base, 2);
+        let a = SenderKeys::derive(&base, 1, &test_call());
+        let b = SenderKeys::derive(&base, 2, &test_call());
 
         assert_ne!(a.key[..], b.key[..], "two senders share a key");
         assert_ne!(a.salt[..], b.salt[..], "two senders share a nonce stream");
@@ -826,8 +973,8 @@ mod tests {
     /// what makes a media key die with the epoch it came from.
     #[test]
     fn a_key_from_another_epoch_does_not_work() {
-        let mut sender = Sender::new(SenderKeys::derive(&[7u8; 32], 1)).expect("sender");
-        let mut next_epoch = Receiver::new(SenderKeys::derive(&[8u8; 32], 1)).expect("receiver");
+        let mut sender = Sender::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("sender");
+        let mut next_epoch = Receiver::new(SenderKeys::derive(&[8u8; 32], 1, &test_call())).expect("receiver");
 
         let frame = sender.protect(b"this epoch only").expect("protect");
         assert_eq!(next_epoch.unprotect(&frame), Err(MediaError::BadTag));
@@ -837,7 +984,7 @@ mod tests {
     /// failure loses confidentiality outright rather than degrading it.
     #[test]
     fn no_nonce_repeats_under_one_key() {
-        let keys = SenderKeys::derive(&[7u8; 32], 1);
+        let keys = SenderKeys::derive(&[7u8; 32], 1, &test_call());
 
         let mut seen = std::collections::HashSet::new();
         for counter in 0..10_000u64 {
@@ -856,7 +1003,7 @@ mod tests {
     /// Running out of counters must stop the sender rather than wrap it.
     #[test]
     fn an_exhausted_counter_refuses_to_wrap() {
-        let mut sender = Sender::new(SenderKeys::derive(&[7u8; 32], 1)).expect("sender");
+        let mut sender = Sender::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("sender");
         sender.counter = u64::MAX;
 
         assert!(sender.protect(b"last").is_ok(), "the final counter is usable");

@@ -27,6 +27,12 @@ use rotelyx_media::SenderKeys;
 use rotelyx_path::PathPolicy;
 use std::collections::VecDeque;
 
+/// A fixed binding, for the cases that are not about the binding itself.
+fn test_call() -> rotelyx_media::CallBinding {
+    rotelyx_media::CallBinding::new(b"a-test-call-0001").expect("long enough")
+}
+
+
 const BYTES_PER_FRAME: usize = 60; // 24 kbit/s
 const FRAME_MS: u64 = 20;
 
@@ -166,13 +172,13 @@ fn main() {
     let base = [0x42u8; 32];
     let mut out = MediaOut::with_mode(
         PathPolicy::RelayOnly,
-        SenderKeys::derive(&base, 0),
+        SenderKeys::derive(&base, 0, &test_call()),
         mode,
     )
     .expect("sender");
     let mut inbound = MediaIn::with_mode(
         PathPolicy::RelayOnly,
-        SenderKeys::derive(&base, 0),
+        SenderKeys::derive(&base, 0, &test_call()),
         mode,
     )
     .expect("receiver");

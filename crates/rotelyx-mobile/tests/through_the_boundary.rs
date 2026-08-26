@@ -256,19 +256,39 @@ fn a_call_carries_audio_between_two_sessions() {
         "welcome": invite["welcome"], "ratchetTree": invite["ratchetTree"]
     }));
 
+    // The identifier both ends agreed on for this call. Without it the media
+    // keys would be a function of the MLS epoch alone and a second call would
+    // repeat the first one's nonces, which is why the argument is not optional.
+    let call = b"a-call-identifier";
+    let open = |session: u64| unsafe {
+        rotelyx_call_open(session, 60, 0, call.as_ptr(), call.len() as i32)
+    };
+
     // Opening a call before there is a conversation must fail rather than
     // produce a call with a key derived from nothing.
     let orphan = handle(json!({"op": "session.new", "label": "nobody"}));
     assert!(
-        rotelyx_call_open(orphan, 60, 0) < 0,
+        open(orphan) < 0,
         "a session with no conversation must not open a call"
     );
 
-    let speaking = rotelyx_call_open(ana, 60, 0);
+    // And a call with no binding, or one too short to be worth having, must be
+    // refused rather than quietly keyed from the epoch.
+    assert!(
+        unsafe { rotelyx_call_open(ana, 60, 0, std::ptr::null(), 0) } < 0,
+        "a call with no binding must be refused"
+    );
+    let short = b"tiny";
+    assert!(
+        unsafe { rotelyx_call_open(ana, 60, 0, short.as_ptr(), short.len() as i32) } < 0,
+        "a call with a binding too short must be refused"
+    );
+
+    let speaking = open(ana);
     assert!(speaking > 0, "opening a call failed with {speaking}");
-    let listening = rotelyx_call_open(beto, 60, 0);
+    let listening = open(beto);
     assert!(listening > 0, "opening a call failed with {listening}");
-    assert!(rotelyx_call_open(999_999, 60, 0) < 0, "a bad session handle");
+    assert!(open(999_999) < 0, "a bad session handle");
 
     // 20 ms of a tone, which is what the app would hand over.
     let frame: Vec<i16> = (0..ROTELYX_FRAME_SAMPLES)

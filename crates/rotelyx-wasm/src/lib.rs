@@ -985,12 +985,31 @@ impl Session {
         })
     }
 
-    /// A short fingerprint of the conversation, for confirming out of band that
-    /// two devices are in the same group and not in two groups an attacker sat
-    /// between.
+    /// A short fingerprint of **who is in this conversation**, for confirming
+    /// out of band that two devices are talking to each other and not to
+    /// somebody who sat in between.
     ///
     /// Read it aloud. Comparing it over the same channel an attacker controls
     /// proves nothing.
+    ///
+    /// # Why it is the members and not the group
+    ///
+    /// It used to be `BLAKE3(group_id)`, and a group id is fixed when the group
+    /// is created. So the number never moved: not when a member was added, not
+    /// when a device was added, not when anybody's key changed. It attested to
+    /// "we share an opaque identifier" and nothing else, which is the one thing
+    /// two people comparing digits do not need to be told.
+    ///
+    /// That is the wrong construction and it defeats the purpose. A safety
+    /// number exists so that a silent addition or a swapped key shows up as
+    /// different digits the next time two people compare, and the whole
+    /// argument for meeting through a code rests on it: a code is not proof of
+    /// who holds it, and the number is what catches whoever arrived first.
+    ///
+    /// It is now the sorted set of member signature keys, which is the standard
+    /// construction. Sorted so that both ends reach the same answer whatever
+    /// order their rosters are in, and length-prefixed so that two keys cannot
+    /// be run together to imitate a third.
     #[wasm_bindgen(js_name = safetyNumber)]
     pub fn safety_number(&self) -> Result<String, Error> {
         let group = self
@@ -998,8 +1017,21 @@ impl Session {
             .as_ref()
             .ok_or_else(|| Error::new("no conversation yet"))?;
 
-        let mut hasher = blake3::Hasher::new_derive_key("rotelyx conversation fingerprint v1");
-        hasher.update(&group.group_id());
+        let mut keys: Vec<Vec<u8>> = group
+            .roster()
+            .into_iter()
+            .map(|p| p.signature_key)
+            .collect();
+        keys.sort();
+        keys.dedup();
+
+        let mut hasher = blake3::Hasher::new_derive_key("rotelyx conversation fingerprint v2");
+        for key in &keys {
+            // Length first, so that two keys cannot be concatenated into a
+            // sequence a third set would also produce.
+            hasher.update(&(key.len() as u32).to_be_bytes());
+            hasher.update(key);
+        }
 
         let mut out = [0u8; 30];
         hasher.finalize_xof().fill(&mut out);
@@ -1603,6 +1635,56 @@ mod tests {
     /// The whole browser handshake, executed on the host.
     ///
     /// This is the sequence the chat page performs. Running it here means a
+    /// The safety number must move when the roster does.
+    ///
+    /// This is the regression test for a fingerprint that attested to nothing.
+    /// It was `BLAKE3(group_id)`, and a group id is fixed when the group is
+    /// created, so the number was identical for the whole life of a
+    /// conversation: adding a member did not change it, and neither would a
+    /// silently added device. Two people re-comparing digits would have seen a
+    /// match in exactly the case the comparison exists to catch.
+    #[test]
+    fn the_safety_number_changes_when_the_roster_does() {
+        let mut alice = Session::new("alice").expect("identity");
+        let mut bob = Session::new("bob").expect("identity");
+        let mut carol = Session::new("carol").expect("identity");
+
+        alice.found().expect("found");
+        let alone = alice.safety_number().expect("number");
+
+        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
+        let with_bob = alice.safety_number().expect("number");
+
+        assert_ne!(
+            alone, with_bob,
+            "the number did not move when a member joined, which is the whole \
+             thing it is for"
+        );
+
+        // And both ends must reach the same answer, from rosters they may hold
+        // in different orders. Without the sort this is where it would show.
+        assert_eq!(
+            with_bob,
+            bob.safety_number().expect("number"),
+            "the two sides disagree about who is in the conversation"
+        );
+
+        let inv = alice.invite(&carol.key_package().expect("kp")).expect("invite");
+        carol.join(&inv.welcome, &inv.ratchet_tree).expect("join");
+        let with_carol = alice.safety_number().expect("number");
+
+        assert_ne!(
+            with_bob, with_carol,
+            "a third member joined and the number stayed the same"
+        );
+
+        // The shape is what a person reads aloud: six groups of five digits.
+        let groups: Vec<&str> = with_carol.split(' ').collect();
+        assert_eq!(groups.len(), 6);
+        assert!(groups.iter().all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
+    }
+
     /// break is caught by `cargo test` instead of by a blank page.
     #[test]
     fn two_browser_sessions_reach_the_same_conversation() {

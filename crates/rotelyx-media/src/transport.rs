@@ -322,6 +322,11 @@ impl MediaIn {
 #[cfg(test)]
 mod tests {
 
+    /// A fixed binding, for the cases that are not about the binding itself.
+    fn test_call() -> crate::CallBinding {
+        crate::CallBinding::new(b"a-test-call-0001").expect("long enough")
+    }
+
     /// A receiver must be able to say how many frames it never got.
     ///
     /// # What this is for
@@ -360,7 +365,7 @@ mod tests {
     use super::*;
 
     fn keys(id: u8) -> SenderKeys {
-        SenderKeys::derive(&[7u8; 32], id)
+        SenderKeys::derive(&[7u8; 32], id, &test_call())
     }
 
     /// The rule this module exists to enforce.

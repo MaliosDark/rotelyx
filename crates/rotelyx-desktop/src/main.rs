@@ -811,7 +811,7 @@ fn start(
 ///
 /// The same one the phone client ships with, so the two arrive at the same
 /// place without either being configured.
-const MAILBOX: &str = "wss://mail-rotelyx.ideoa.co/mailbox";
+const MAILBOX: &str = "wss://m1.telyx.me/mailbox";
 
 fn identity_path() -> PathBuf {
     if let Ok(p) = std::env::var("ROTELYX_IDENTITY") {

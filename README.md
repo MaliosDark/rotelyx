@@ -10,7 +10,7 @@
 
 No accounts, no phone numbers, and no servers belonging to anybody else.
 
-[![tests](https://img.shields.io/badge/tests-450%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
+[![tests](https://img.shields.io/badge/tests-592%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-6a31ee?style=flat-square)](#try-it)
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-8b8b8b?style=flat-square)](#licence)
 [![status](https://img.shields.io/badge/status-unaudited-E0808C?style=flat-square)](#security-status)
@@ -50,6 +50,79 @@ belonging to anyone else, and there is a test that fails if that ever changes.
 
 Two encryption layers, independent of each other, and post quantum key exchange
 from the first version rather than as a later migration.
+
+A phone, a desktop window and a terminal all speak it, and there is a browser
+build besides. A code shown on one screen and read on another is one
+conversation between them, and a call between a phone and a desktop carries
+audio in both directions over this project's own relay and its own codec. No
+WebRTC anywhere.
+
+## The clients
+
+| | | |
+|---|---|---|
+| **Phone** | Android. Flutter over these same crates through a C ABI | `crates/rotelyx-mobile` |
+| **Desktop** | A native window. Its IPC is in process, so plaintext never crosses a socket | `crates/rotelyx-desktop` |
+| **Terminal** | Everything the protocol does, with nothing drawn. The quick start below | `crates/rotelyx-cli` |
+| **Browser** | A WebAssembly build, labelled a harness in its own interface because it speaks to a local process over loopback | `crates/rotelyx-wasm` |
+
+They are not interchangeable and the difference is written down rather than
+smoothed over: see [`docs/BROWSER.md`](docs/BROWSER.md) for what the harness
+gives up.
+
+The desktop window is one script, and it points at the same relay and mailbox
+the phone ships with:
+
+```sh
+scripts/rotelyx-desktop            # production
+scripts/rotelyx-desktop --local    # a relay on this machine, for trying things
+scripts/rotelyx-desktop my.key     # an identity you keep
+```
+
+### What works today
+
+Pairing by a QR code, by a phrase two people say out loud, or by an invitation
+sent through whatever messenger they already have. One to one and group
+conversations, replies, reactions and attachments. Messages that burn on both
+devices from the moment the other person reads them. A read tick that is never
+inferred from anything. Encrypted history on the device, or a mode that writes
+nothing down at all and asks again next time. A conversation list that survives
+a restart, on the phone and in the desktop window. Removing somebody from a
+group. Calls, between two desktops and between a phone and a desktop.
+
+What is not here is in [`TODO.md`](TODO.md), which is the ledger rather than the
+plan: an item moves to done when a test proves it, not when the code exists.
+
+### Meeting somebody who is not on your network
+
+An invitation carries keys, and something has to deliver it to an address. A
+phone has no listening socket, moves between networks and is asleep most of the
+time, so there is a second way in that needs no address at all.
+
+A **meeting code** is 120 random bits written as 29 characters:
+
+```
+RTLX1 DZR7 6K4H FIBG 7GI4 XJET 6FHC
+```
+
+It carries no key. It names a place at a mailbox, in the same sense as a table
+number in a cafe. Both sides run it through the same derivation, arrive at the
+same opaque tag, and hand each other the real keys there, where their size costs
+nothing. Putting the invitation in the QR instead cannot be done: an X-Wing
+public key is 1216 bytes because that is what resisting a quantum computer
+costs, and with the key package and base64 around it an invitation runs to about
+three thousand characters, past what a QR holds at a correction level that
+leaves room for a logo.
+
+One side shows it as a QR and the other points a camera at it, or one side reads
+it aloud. What a code buys an attacker is exactly one attempt at being first:
+whoever arrives before the intended person completes the handshake in their
+place, and nothing here prevents that, because a code is not proof of who is
+holding it. Comparing the safety number is what detects it, which is why it is
+on screen from the moment the conversation exists.
+
+The tags rotate every hour and each side listens on the previous windows too, so
+an envelope deposited at 10:59 is still collected at 11:00.
 
 ## Try it
 
@@ -93,25 +166,68 @@ default and it is not a setting you have to find.
 
 ### Talking
 
-Type `/call` in the chat. `/hang` stops it.
+Type `/call` in the chat, or press the call button in the desktop window or the
+app. `/hang` stops it.
 
 Both sides need `--relay <url>` for a call, and it will tell you so if you
 forget. That is not a network preference: over a direct path the other side
 sees your address, so a call refuses to start on one.
 
+**A phone and a desktop have called each other**, and audio crosses in both
+directions. Four faults stood between an open call and a voice and not one of
+them was visible from either end: a QUIC stream opened and never written to, so
+the far side sat in `accept_bi` while this side sent audio into a connection
+nobody was reading; an address published before the relay had finished
+registering the endpoint behind it; two clients speaking different frame
+formats, which authenticated perfectly and decoded into chirps; and a sixteen
+bit buffer read from offset zero of the platform channel's whole reply rather
+than from the start of the window onto it, so what got encoded was the reply's
+header.
+
+Why that took so long to see is the part worth keeping. **A frame that arrives
+and cannot be turned into sound is concealed, not counted.** That is the right
+behaviour for packet loss and it hides a corrupted payload completely: a real
+call ran with eleven usable frames out of three thousand and every layer
+reported a healthy call. `CallEnded` carries the concealed count now, and the
+tools that found it stay in the tree: `ROTELYX_CALL_DUMP` records what the
+speaker played, `ROTELYX_FRAME_DUMP` records each payload as it arrived, and
+`decode_a_recording` replays them away from the call. The measure is the
+correlation between neighbouring samples, which is above 0.9 for a voice and
+near zero for broadband noise. Before the last fix, 0.156. After it, 0.992.
+
 Measured between two processes through a relay: 991 frames sent and 944
-received in twenty seconds, 79 ms of audio queued, nothing dropped. Two people
-have also listened to it, and what that found is written down in
-[`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) and
+received in twenty seconds, 79 ms of audio queued, nothing dropped. Two desktop
+windows calling each other over the production relay is a test rather than a
+story, `two_desktops_calling`, and it asserts on what arrives rather than on
+what was sent, because sending proves nothing.
+
+Two people have also listened to the codec, and what that found is written down
+in [`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) and
 [`docs/listening-2026-08-21.txt`](docs/listening-2026-08-21.txt). What it found
 was a broken test: the rating scale was never shown to either listener, so there
 is no perceptual measurement of this codec yet, only the objective one.
 
-**Echo cancellation is new and has never met a real room.** It measures the path
-from your speaker to your microphone and subtracts what it predicts, which took
-38 dB off a synthetic room in tests. Whether it does that in your kitchen is a
-different question, and nobody has asked it yet: headphones are still the
-answer if the other person hears themselves.
+**Echo cancellation has now met a real room and the room won.** The canceller
+measures the path from your speaker to your microphone and subtracts what it
+predicts, which took 38.3 dB off a room this project generated. Played through
+this machine's own speaker into its own microphone it removed **-0.0 dB**. A
+residual suppressor written after seeing that brings it to 1.3 dB run
+continuously, or 6.1 dB when something keeps the filter aligned.
+
+The echo arrives 21.8 dB above that room's own noise, so the ceiling on any
+canceller there is about 21.8 dB and what is missing is not tuning. The two
+devices are 341 ppm apart on their clocks, which was the first suspect and is
+not the answer: measured again on half second windows, each realigned so the
+slide is nothing, the mean is still 1.1 dB. What is left is an impulse response
+far longer than the 128 ms the filter models, and a small speaker driven at half
+volume, which is not linear. A linear filter cannot cancel what a speaker added
+non-linearly, however long it runs. Every figure and how it was measured is in
+[`docs/ACOUSTIC.md`](docs/ACOUSTIC.md).
+
+On Android none of that runs. The platform's own canceller does, through
+`VOICE_COMMUNICATION` and `AcousticEchoCanceler`, which is the right answer on a
+device where one process owns both the speaker and the microphone. On a desktop,
+headphones are still the answer if the other person hears themselves.
 
 ## What the people running a server can see
 
@@ -170,6 +286,12 @@ to access. Those claims are false for every system that has ever made them.
 
 What it claims is bounded, written down and testable. See
 [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md).
+
+**Found something? Email <contact@ideoa.co.uk>, and please do not open a public
+issue.** A public issue is a working exploit handed to everybody reading this
+repository, including the people running the relays and mailboxes this project
+asks you to trust. What to include, what we do with it and how long we take is
+in [`SECURITY.md`](SECURITY.md).
 
 ---
 

@@ -466,11 +466,20 @@ impl Engine {
             .position(|k| *k == mine)
             .context("this member is not in the roster it belongs to")?;
 
-        Call::start(
-            base,
-            u8::try_from(index).context("more members than a sender index can hold")?,
-            self.net.paths(),
-        )
+        // Refused, rather than started on keys that repeat.
+        //
+        // A call needs a value both ends agree on and neither reuses, and this
+        // path has nowhere to put one: two people press the button and audio
+        // starts, with no ringing and no exchange. Deriving from the group alone
+        // is what produced the defect this argument exists to close, so the
+        // honest state until `FrameKind::CallControl` carries a binding is a
+        // refusal that says why.
+        let _ = (base, index);
+        bail!(
+            "calling over a direct invitation is disabled: it has no way to agree \
+             a per-call key, and without one a second call reuses the first call's \
+             nonces. Meet through a code, which does agree one."
+        );
     }
 
     /// Returns the conversation as it ended, so the caller can save it.

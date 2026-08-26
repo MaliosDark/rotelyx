@@ -26,8 +26,8 @@ cd "$(dirname "$0")/.."
 #   scripts/rotelyx-desktop                 production
 #   scripts/rotelyx-desktop --local         a relay here, for trying things
 #   scripts/rotelyx-desktop my.key          production, with an identity of yours
-PROD_RELAY="https://relay-rotelyx.ideoa.co"
-PROD_MAILBOX="wss://mail-rotelyx.ideoa.co/mailbox"
+PROD_RELAY="https://amber.telyx.me"
+PROD_MAILBOX="wss://m1.telyx.me/mailbox"
 
 LOCAL=0
 if [ "${1:-}" = "--local" ]; then

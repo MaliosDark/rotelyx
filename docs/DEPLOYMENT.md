@@ -34,9 +34,9 @@ place anything hard to classify ended up:
 
 | Name | Purpose | Status |
 |---|---|---|
-| `relay-rotelyx.ideoa.co` | Relay for peers that cannot hole punch | DNS and nginx configured, **backend not yet running** |
-| `mail-rotelyx.ideoa.co` | Blind mailbox | **Live and verified**, `101` through the full chain |
-| `rotelyx.ideoa.co` | Static site and browser client | Content in `site/`, ready to upload |
+| `amber.telyx.me` | Relay for peers that cannot hole punch | DNS and nginx configured, **backend not yet running** |
+| `m1.telyx.me` | Blind mailbox | **Live and verified**, `101` through the full chain |
+| `rotelyx.com` | Static site and browser client | Content in `site/`, ready to upload |
 
 ### Network layout
 
@@ -75,7 +75,7 @@ before then, and no urgency when it happens.
 ## 3. nginx
 
 CWP generates the server blocks. Only one addition is needed, in **both** the
-`:80` and the `:443` block for `relay-rotelyx.ideoa.co`, placed before
+`:80` and the `:443` block for `amber.telyx.me`, placed before
 `location /`:
 
 ```nginx
@@ -252,7 +252,7 @@ colliding. Nothing else is opened.
 ### nginx
 
 Same shape as the relay, different port and path. Add to **both** the `:80` and
-`:443` blocks for `mail-rotelyx.ideoa.co`, before `location /`:
+`:443` blocks for `m1.telyx.me`, before `location /`:
 
 ```nginx
 	location /mailbox {
@@ -413,10 +413,10 @@ curl -i -N --http1.1 \
   -H "Sec-WebSocket-Version: 13" \
   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
   -H "Sec-WebSocket-Protocol: rotelyx-relay-v2" \
-  https://relay-rotelyx.ideoa.co/relay
+  https://amber.telyx.me/relay
 
 # Health. Must answer 200.
-curl -s -o /dev/null -w "%{http_code}\n" https://relay-rotelyx.ideoa.co/ping
+curl -s -o /dev/null -w "%{http_code}\n" https://amber.telyx.me/ping
 ```
 
 | Response | Meaning |
@@ -430,10 +430,10 @@ curl -s -o /dev/null -w "%{http_code}\n" https://relay-rotelyx.ideoa.co/ping
 
 | Endpoint | Result |
 |---|---|
-| `https://relay-rotelyx.ideoa.co/relay` | `101 Switching Protocols` |
-| `https://mail-rotelyx.ideoa.co/ping` | `200`, body `ok` |
-| `https://mail-rotelyx.ideoa.co/mailbox` | `101 Switching Protocols` |
-| `https://rotelyx.ideoa.co/mailbox` | `101 Switching Protocols` |
+| `https://amber.telyx.me/relay` | `101 Switching Protocols` |
+| `https://m1.telyx.me/ping` | `200`, body `ok` |
+| `https://m1.telyx.me/mailbox` | `101 Switching Protocols` |
+| `https://rotelyx.com/mailbox` | `101 Switching Protocols` |
 
 Both run through Cloudflare, then pfSense doing HAProxy with TLS, then nginx on
 `NGINX_HOST`, then the service on `RELAY_HOST`.
@@ -450,7 +450,7 @@ Relay selection is explicit in code. There is no default and no discovery:
 
 ```rust
 let config = NetConfig::new(
-    RelayPolicy::SelfHosted(vec!["https://relay-rotelyx.ideoa.co".parse()?]),
+    RelayPolicy::SelfHosted(vec!["https://amber.telyx.me".parse()?]),
     PathPolicy::PreferDirect,
 );
 ```

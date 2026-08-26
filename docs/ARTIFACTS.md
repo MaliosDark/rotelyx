@@ -23,7 +23,7 @@ the server does not control.
 To check a running deployment, in one command:
 
 ```sh
-scripts/verify-deployment https://rotelyx.ideoa.co
+scripts/verify-deployment https://rotelyx.com
 ```
 
 It fetches what the server is serving and compares. It exits non-zero when they
@@ -34,7 +34,7 @@ server sent it, so the check has to come from outside.
 By hand:
 
 ```sh
-curl -s https://rotelyx.ideoa.co/rotelyx/rotelyx_wasm_bg.wasm | sha256sum
+curl -s https://rotelyx.com/rotelyx/rotelyx_wasm_bg.wasm | sha256sum
 ```
 
 To check that this file is honest, build it yourself:

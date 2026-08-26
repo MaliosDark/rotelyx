@@ -1,18 +1,63 @@
 # Rotelyx TODO
 
-Status as of 20 August 2026. 459 tests passing.
+Status as of 26 August 2026. 592 tests passing.
 
-**Calls work.** Two processes, real devices, real datagrams, through a relay:
-991 frames sent and 944 received in twenty seconds, 79 ms queued, nothing
-dropped. `/call` in the terminal client, a Call button in the desktop window.
+**Calls work, between two implementations.** A phone and a desktop have called
+each other over the production relay with this project's own codec, and audio
+crosses in both directions. Between two processes through a relay: 991 frames
+sent and 944 received in twenty seconds, 79 ms queued, nothing dropped. `/call`
+in the terminal client, a Call button in the desktop window and in the app.
+
+Four faults stood in the way and none of them was visible from either end, and
+the reason is worth keeping: a frame that cannot be decoded is concealed rather
+than counted, so a call ran with eleven usable frames out of three thousand and
+every layer said it was healthy. `CallEnded` reports concealment now.
+
+**A conversation crosses the mailbox too.** A code shown on a phone and read by
+the desktop window is one conversation, both directions, with read receipts.
+
+**What a call still lacks:** echo cancellation that works in a room, congestion
+control, more than two participants, and any measurement under deliberate loss
+or on a mobile network.
+
+**Echo cancellation was measured against a real room and removed -0.0 dB**, or
+1.3 with the residual suppressor written after seeing that. `docs/ACOUSTIC.md`
+has the ladder. Android uses the platform's canceller instead.
+
 Two people have listened to the codec, and what that found was a broken test:
 the rating scale was never shown to either of them. There is no perceptual
 measurement of this codec yet, only the objective one.
 `docs/listening-2026-08-21.txt` records how it was found.
 
-**What a call still lacks:** echo cancellation, congestion control, more than
-two participants, and any measurement across a real network rather than a
-loopback relay.
+**Open, found by running the phone's suite against this engine.** A conversation
+read back from storage refuses to send: `Session::rekey_after_restore` has to run
+first, and `session.rekeyAfterRestore` is not one of the operations
+`rotelyx-mobile` exposes over the C ABI, so the phone cannot call it. The browser
+build can, because it binds the method directly. Two tests in the phone client
+fail on it. Ghost mode is unaffected, since nothing is read back.
+
+**An external audit found two defects that every test here passed through.**
+Both are fixed, both have regression tests, and both are worth stating plainly
+because neither was a mistake in an algorithm.
+
+**Media keys repeated their nonces between calls.** They were derived from the
+group's exported secret and the speaker's position in the roster, which are
+fixed for an MLS epoch, and the frame counter restarts at zero every call.
+Ordinary messages do not advance an epoch. So hanging up and calling again
+encrypted the second call's first frame under the first call's key and nonce.
+Under ChaCha20-Poly1305 that loses confidentiality *and* integrity: two
+ciphertexts under one nonce give the exclusive-or of the plaintexts, and two
+authenticated messages under one nonce recover the Poly1305 key, after which
+frames can be forged. The keys are now bound to a per-call value both ends
+already agreed on in the call signalling. `rotelyx_call_open` takes it and
+refuses without it; a call over a direct invitation, which has no signalling to
+carry one, is refused rather than started on repeating keys.
+
+**The safety number attested to nothing.** It was `BLAKE3(group_id)`, and a
+group id is fixed at creation, so the number never moved when a member joined,
+when a device was added, or when a key changed. The one primitive a person can
+check by hand could not detect the thing it exists to detect. It is now the
+sorted, length-prefixed set of member signature keys.
 
 This file is the honest ledger. Items move to **Done** only when a test proves
 them, not when the code exists. Three separate defects in this project were
@@ -135,7 +180,7 @@ which needs no hole punching. Real traversal cannot be asserted from one host.
 Requires a relay on a public address and two devices behind different NATs.
 Everything needed for this is built.
 
-- [x] DNS, nginx and TLS configured for `relay-rotelyx.ideoa.co`
+- [x] DNS, nginx and TLS configured for `amber.telyx.me`
 - [x] Relay running and verified end to end: `101 Switching Protocols` through
       Cloudflare and nginx
 - [x] **The browser client could not have worked as served.** The site's
@@ -1552,13 +1597,13 @@ wide margin the largest single task remaining in the project.
       matching. `scripts/verify-deployment` reports DIFFERS until it is uploaded,
       which is the check working rather than failing
 
-- [x] Deploy `rotelyx-mailbox-server` to `mail-rotelyx.ideoa.co:3341`, verified
+- [x] Deploy `rotelyx-mailbox-server` to `m1.telyx.me:3341`, verified
       end to end: `101 Switching Protocols` through Cloudflare, pfSense and nginx
-- [x] Upload `site/` to `rotelyx.ideoa.co`, and add the same `location /mailbox`
+- [x] Upload `site/` to `rotelyx.com`, and add the same `location /mailbox`
       block there so the page finds the mailbox at its own origin. Verified from
       outside on 2026-08-22: `scripts/verify-deployment` reports both served wasm
       artifacts matching the source, and `scripts/browser-test/run` against
-      `https://rotelyx.ideoa.co/chat.html` drives two real browsers through a
+      `https://rotelyx.com/chat.html` drives two real browsers through a
       whole conversation, safety numbers agreeing and messages delivered both
       ways. Delivery is what proves the proxy block: the page derives its mailbox
       from its own origin, so a message arriving at all means `wss://.../mailbox`

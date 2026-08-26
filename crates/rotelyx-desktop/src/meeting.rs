@@ -1080,7 +1080,7 @@ impl Meeting {
             crate::encode_addr(&filtered(endpoint.addr(), self.relay.as_deref()))?
         };
 
-        let id = call_id();
+        let id = call_id()?;
         self.call_id = id.clone();
         self.signal_call(mailbox, "ringing", &id, &address).await?;
 
@@ -1193,7 +1193,14 @@ impl Meeting {
         index: u8,
         conn: rotelyx_net::Connection,
     ) -> Result<()> {
-        let call = rotelyx_audio::Call::start(base, index, PathPolicy::RelayOnly)
+        // The identifier this call was rung with, which the other side echoed
+        // back and both ends therefore hold. Without it the media keys would be
+        // a function of the MLS epoch alone, and a second call inside one epoch
+        // would repeat every nonce of the first.
+        let binding = rotelyx_audio::Binding::new(self.call_id.as_bytes())
+            .context("this call has no identifier to key it with")?;
+
+        let call = rotelyx_audio::Call::start(base, index, binding, PathPolicy::RelayOnly)
             .context("opening the microphone")?;
 
         (self.events)(Event::CallStarted {
@@ -1346,14 +1353,15 @@ async fn carry_call(
 ///
 /// Two people pressing call at the same moment produce two calls, and without a
 /// name the answer to one ends the other.
-fn call_id() -> String {
-    let mut bytes = [0u8; 8];
-    if getrandom::fill(&mut bytes).is_err() {
-        // A call that cannot be named is still a call. The only thing a name is
-        // for is telling two simultaneous ones apart.
-        return "unnamed".into();
-    }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+fn call_id() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    // No fallback. This used to return "unnamed" when the system had no
+    // randomness, which was harmless while the identifier only told two
+    // simultaneous calls apart. It is not harmless now: the identifier is what
+    // keys the media, and a constant one puts every call back on the same key
+    // and the same nonces. A call that cannot be named cannot be placed.
+    getrandom::fill(&mut bytes).context("no randomness to name this call with")?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// An address with the IP addresses taken out and the relay left in.

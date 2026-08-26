@@ -9,6 +9,14 @@
 use serde_json::{json, Value};
 use std::ffi::{CStr, CString};
 
+/// Open a call with a binding, which is not optional: the media keys are fixed
+/// for an MLS epoch and only this value keeps two calls off the same nonces.
+fn open_call(session: u64) -> i64 {
+    let call = b"a-test-call-0001";
+    unsafe { rotelyx_mobile::rotelyx_call_open(session, 60, 0, call.as_ptr(), call.len() as i32) }
+}
+
+
 fn control(request: Value) -> Value {
     let text = CString::new(request.to_string()).expect("no NUL");
     let mut response = std::ptr::null_mut();
@@ -65,9 +73,9 @@ fn frame(t0: usize) -> Vec<i16> {
 fn one_person_speaks_and_the_other_hears() {
     let (ana, beto) = paired();
 
-    let speaking = rotelyx_mobile::rotelyx_call_open(ana, 60, 0);
+    let speaking = open_call(ana);
     assert!(speaking > 0, "opening a call failed with {speaking}");
-    let listening = rotelyx_mobile::rotelyx_call_open(beto, 60, 0);
+    let listening = open_call(beto);
     assert!(listening > 0, "opening a call failed with {listening}");
 
     let samples = rotelyx_mobile::ROTELYX_FRAME_SAMPLES;
@@ -160,12 +168,12 @@ fn one_person_speaks_and_the_other_hears() {
 fn a_call_needs_a_conversation() {
     let alone = control(json!({"op": "session.new", "label": "alone"})).as_u64().unwrap();
     assert_eq!(
-        rotelyx_mobile::rotelyx_call_open(alone, 60, 0),
+        open_call(alone),
         -2,
         "a session with no conversation has no media key"
     );
     assert_eq!(
-        rotelyx_mobile::rotelyx_call_open(999_999, 60, 0),
+        open_call(999_999),
         -1,
         "an unknown session handle"
     );
@@ -178,7 +186,7 @@ fn a_call_needs_a_conversation() {
 #[test]
 fn the_audio_path_refuses_rubbish_rather_than_crashing() {
     let (ana, _beto) = paired();
-    let call = rotelyx_mobile::rotelyx_call_open(ana, 60, 0);
+    let call = open_call(ana);
     assert!(call > 0);
 
     let samples = rotelyx_mobile::ROTELYX_FRAME_SAMPLES;

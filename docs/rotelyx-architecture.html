@@ -1,3 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="assets/favicon.png">
 <title>Rotelyx Protocol</title>
 <style>
   :root {
@@ -367,27 +373,29 @@
     * { animation: none !important; transition: none !important; }
   }
 </style>
+</head>
+<body>
 
 <div class="wrap">
 
   <header>
-    <p class="eyebrow">Architecture assessment &middot; internal</p>
+    <p class="eyebrow">Architecture</p>
     <h1>Rotelyx<br><em>Protocol</em></h1>
-    <p class="deck">Peer-to-peer messaging and calling on iroh, with message crypto that survives a compromised server, a compromised relay, and a future quantum adversary.</p>
+    <p class="deck">Peer to peer messaging and calling with its own codec and its own media transport, message encryption that survives a compromised server and a compromised relay, and a store and forward layer whose operator is told a tag and a padded blob and nothing else.</p>
     <div class="meta">
-      <span>Author <b>Andryu Schittone</b> (Malios Dark)</span>
-      <span>Date <b>15 Aug 2026</b></span>
-      <span>Status <b>L0 to L3 running, clients shipped</b></span>
-      <span>Transport <b>vendored, no upstream package</b></span>
+      <span>Date <b>25 Aug 2026</b></span>
+      <span>Status <b>L0 to L3 running, calls between a phone and a desktop</b></span>
+      <span>Tests <b>589 passing</b></span>
+      <span>Licence <b>AGPL-3.0</b></span>
     </div>
   </header>
 
-  <!-- ================= BUILT SO FAR ================= -->
+  <!-- ================= WHAT RUNS ================= -->
   <section>
     <div class="sec-head col">
       <p class="eyebrow">Built &middot; verified by test, not by assertion</p>
       <h2>What runs today</h2>
-      <p>Every claim below is backed by a test that fails if the claim stops holding. The interesting part is not the count. It is that the unit tests all passed while three real privacy defects sat underneath them, and only cross-layer tests and tests over real sockets found those.</p>
+      <p>Every claim below is backed by a test that fails if the claim stops holding. The interesting part is not the count. It is that the unit tests all passed while four real defects sat underneath them, and only tests crossing a layer boundary, using real sockets, or running between two independent implementations found those.</p>
     </div>
     <div class="tablewrap">
       <table>
@@ -395,429 +403,395 @@
           <tr><th>Layer</th><th>What works</th><th>Tests</th></tr>
         </thead>
         <tbody>
-          <tr><td>L3 blind mailbox</td><td>Sealed envelopes, five padding buckets, rotating unlinkable tags, TTL expiry enforced on collection</td><td>23</td></tr>
-          <tr><td>L2 message crypto</td><td>MLS conversations, one to one as a group of two, X-Wing hybrid post-quantum reaching the key schedule as an external PSK</td><td>23</td></tr>
-          <tr><td>L1 identity &amp; access</td><td>Ed25519 identity sealed at rest, safety numbers, length-capped framing, admission control enforced over live sockets</td><td>64</td></tr>
-          <tr><td>L0/L1 transport</td><td>Two endpoints connecting over real QUIC, mutual public-key authentication, metadata-resistant path selection, zero-foreign-infrastructure guard</td><td>21</td></tr>
-          <tr><td>Cross layer</td><td>A message surviving the whole offline path; the operator&rsquo;s view containing no plaintext, sender or recipient</td><td>6</td></tr>
-          <tr><td>Relay</td><td>Allowlist behaviour, including refusing to fall open on an empty file</td><td>4</td></tr>
+          <tr><td>L3 blind mailbox</td><td>Sealed envelopes, a padding ladder that doubles from 1 KiB, rotating unlinkable tags, TTL expiry enforced on collection rather than only on sweep, fan out for groups</td><td>97</td></tr>
+          <tr><td>L2 message crypto</td><td>MLS conversations, one to one as a group of two, X-Wing hybrid post quantum reaching the key schedule as an external pre shared key, with published test vectors</td><td>48</td></tr>
+          <tr><td>L1 identity &amp; access</td><td>Ed25519 identity sealed at rest, safety numbers, length capped framing, admission control enforced over live sockets, an address per invitation</td><td>83</td></tr>
+          <tr><td>L0/L1 transport</td><td>Two endpoints connecting over real QUIC, mutual public key authentication, metadata resistant path selection, a guard that fails the build on any third party hostname</td><td>23</td></tr>
+          <tr><td>Media</td><td>Our own codec, per speaker frame keys taken from the MLS group, an adaptive jitter buffer, layers crossing a real wire, calls refused on any path that is not relay only</td><td>149</td></tr>
+          <tr><td>Clients</td><td>The same engine in a phone, a desktop window, a terminal and a browser build, and two of them meeting through a code at a running mailbox</td><td>73</td></tr>
+          <tr><td>Hostile input</td><td>Every parser reachable before anything is authenticated, under systematic mutation, in six crates</td><td>36</td></tr>
         </tbody>
       </table>
     </div>
     <div class="col">
-      <p><strong>Three clients run the same stack.</strong> A command line chat, a native desktop window, and a local browser harness. They do not offer identical guarantees: the desktop client keeps plaintext inside one process, while the harness carries it across loopback. That difference is stated in the harness itself rather than smoothed over.</p>
+      <p style="font-size:.9rem;color:var(--ink-2)">Access control, room acoustics, the terminal client and the relay account for the remaining 80 of the 589.</p>
+      <p><strong>Four clients run the same stack</strong> and they do not offer identical guarantees. The phone links the engine into its own process through a C ABI. The desktop window keeps plaintext inside one process. The browser build carries it across loopback, which admits anything on the machine that can reach that port, and says so in its own interface. The terminal client holds everything in one process. A project that ships several clients and describes them all with one security claim is making a false statement about at least one of them.</p>
     </div>
     <div class="cards">
       <div class="card">
         <span class="chip no">Found by testing</span>
         <h3>MLS was not padding at all</h3>
-        <p>Overhead is a constant 145 bytes and the rest is one to one, so plaintext length leaked exactly. Worst on the direct peer-to-peer path, where there is no envelope to hide behind and this was the only length defence.</p>
-      </div>
-      <div class="card">
-        <span class="chip no">Found by testing</span>
-        <h3>Padding buckets were too small</h3>
-        <p>A 256-byte bucket held barely a hundred characters after MLS overhead, so ordinary messages straddled the boundary and told the operator &ldquo;short&rdquo; or &ldquo;long&rdquo; every time.</p>
+        <p>Overhead is a constant 145 bytes and the rest is one to one, so plaintext length leaked exactly. Worst on the direct path, where there is no envelope to hide behind and this was the only length defence.</p>
       </div>
       <div class="card">
         <span class="chip no">Found by testing</span>
         <h3>Dropped streams discarded data</h3>
-        <p>A QUIC send stream dropped without finishing resets and silently discards data the sender believes was delivered. Write then drop is the obvious pattern; it lost the last message with no error anywhere.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= VERDICT ================= -->
-  <section>
-    <div class="sec-head col">
-      <p class="eyebrow">The short answer</p>
-      <h2>iroh is the right foundation. The homemade ratchet is not.</h2>
-    </div>
-    <div class="cards">
-      <div class="card verdict">
-        <span class="chip yes">Own it</span>
-        <h3>Derive the transport, own the policy</h3>
-        <p>QUIC + TLS 1.3 with stateless relays replaces the whole ICE / STUN / TURN / DTLS / SCTP stack, and identity becomes an Ed25519 key rather than a phone number. Rotelyx ships that as <code>rotelyx-net</code>: our relay policy, our path selection, our discovery: on machinery derived from iroh, which is itself derived from Tailscale and quinn. Nobody in this lineage wrote NAT traversal from zero.</p>
-      </div>
-      <div class="card verdict">
-        <span class="chip no">Reject</span>
-        <h3>A custom Double Ratchet</h3>
-        <p>A ratchet you write will be weaker than one you adopt, not because your algorithm is worse, but because the bugs live in state handling, not in the math. Use <code>OpenMLS</code>. Spend the saved months on the layer nobody has finished yet.</p>
-      </div>
-      <div class="card verdict">
-        <span class="chip care">Reframe</span>
-        <h3>"Impossible to access"</h3>
-        <p>No system is. Claiming it costs you every serious reviewer in the first five minutes. Ship a written threat model that says what Rotelyx defends against and what it does not: that is what earns trust.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= WHAT IROH IS ================= -->
-  <section>
-    <div class="sec-head col">
-      <p class="eyebrow">Foundation</p>
-      <h2>What iroh hands you, and what it leaves entirely to you</h2>
-      <p>iroh reached 1.0 on 15 June 2026 and is at 1.0.3. It is a Rust library with bindings for Swift, Kotlin, C, C++, Python and JavaScript, which matters, because your clients are phones. Multipath landed in February 2026; NAT-traversal hardening ran through March and April.</p>
-    </div>
-    <div class="cards">
-      <div class="card">
-        <span class="chip yes">Solved for you</span>
-        <ul>
-          <li><strong>NAT traversal on any network.</strong> Direct hole-punched paths first, relay fallback when the path is impossible.</li>
-          <li><strong>Stateless relays.</strong> Unlike TURN, an iroh relay forwards ciphertext without holding session state. Cheap to run, and it cannot read the stream.</li>
-          <li><strong>Dial by public key.</strong> Identity is location-independent: the same node ID across Wi-Fi, cellular and home.</li>
-          <li><strong>Authenticated transport encryption.</strong> QUIC + TLS 1.3, terminated at the two endpoints.</li>
-          <li><strong>Datagrams and multiplexed streams</strong> in one connection: the media path and the chat path share a socket.</li>
-        </ul>
+        <p>A QUIC send stream dropped without finishing resets and silently discards data the sender believes was delivered. Write then drop is the obvious pattern; it lost the last message of every session with no error anywhere.</p>
       </div>
       <div class="card">
-        <span class="chip no">Still your problem</span>
-        <ul>
-          <li><strong>Asynchronous delivery.</strong> QUIC needs both peers live. Phones are not live. Nothing in iroh stores a message for an offline recipient.</li>
-          <li><strong>Message-level crypto.</strong> No ratcheting, no post-compromise security, no group keys, no multi-device.</li>
-          <li><strong>Metadata.</strong> A relay sees which node ID talks to which node ID. That is the social graph, in the clear, at the one place you were trying to make blind.</li>
-          <li><strong>Prekeys and rendezvous.</strong> Something must publish "here is how to reach and encrypt to this identity" before the first connection exists.</li>
-          <li><strong>The media stack.</strong> Transport ≠ jitter buffer, echo cancellation, congestion control. See below: this is the real cost.</li>
-        </ul>
+        <span class="chip no">Found by testing</span>
+        <h3>A failure shaped like a normal condition</h3>
+        <p>A media frame that cannot be decoded is concealed rather than counted, which is right for packet loss and hides a corrupted payload completely. One call ran with eleven usable frames out of three thousand and every layer reported it healthy.</p>
       </div>
     </div>
-    <p class="pull">iroh gives you a private pipe. It does not give you a private system.</p>
   </section>
 
   <!-- ================= THE STACK ================= -->
   <section>
     <div class="sec-head col">
-      <p class="eyebrow">Architecture</p>
-      <h2>Five layers, two of which you actually build</h2>
-      <p>Defence in depth means the transport encryption and the message encryption are independent. If TLS 1.3 in QUIC were broken tomorrow, L2 would still hold. If a device leaked an MLS epoch key, L1 and L0 would still deny an eavesdropper the raw stream. Never let one layer's key material derive from another's.</p>
+      <p class="eyebrow">How a message travels</p>
+      <h2>Five layers, and two of them encrypt</h2>
+      <p>The two encryption layers are independent by construction: no key material is derived from one into the other, so a break in either leaves the other intact. That is a design rule enforced by keeping the derivation inputs disjoint, not a coincidence of the implementation.</p>
     </div>
-
     <div class="stack">
       <div class="layer ours">
-        <div class="lid"><b>L4</b><span>app</span></div>
+        <div class="lid"><b>L4</b><span>client</span></div>
         <div>
-          <div class="lname">Client &amp; identity surface</div>
-          <div class="ldesc">Safety-number verification, device management, contact discovery without a phone number, key-change warnings. The place most "secure" messengers actually fail.</div>
+          <div class="lname">What a person actually touches</div>
+          <div class="ldesc">Safety numbers on screen from the moment a conversation exists, meeting by a code rather than by a directory, key change warnings, conversations kept behind a passphrase or not kept at all. The place most secure messengers actually fail.</div>
         </div>
-        <div class="lowner"><span>you</span><br>Rust core + UniFFI</div>
+        <div class="lowner"><span>ours</span><br>phone, desktop, terminal</div>
       </div>
       <div class="layer ours">
         <div class="lid"><b>L3</b><span>envelope</span></div>
         <div>
-          <div class="lname">Sealed envelopes &amp; blind delivery</div>
-          <div class="ldesc">Sealed sender, fixed-size padding buckets, rotating recipient tags, short-TTL store-and-forward for offline peers. This layer is where you beat Signal, not L2.</div>
+          <div class="lname">Sealed envelopes and blind delivery</div>
+          <div class="ldesc">No sender field, fixed size padding buckets, rotating recipient tags, destructive collection, store and forward for a peer who is offline. This layer is the one that goes past ordinary end to end encryption.</div>
         </div>
-        <div class="lowner"><span>you</span><br>the novel part</div>
+        <div class="lowner"><span>ours</span><br>self hostable binary</div>
       </div>
       <div class="layer ours">
         <div class="lid"><b>L2</b><span>message</span></div>
         <div>
-          <div class="lname">Group &amp; message crypto: MLS</div>
-          <div class="ldesc">RFC 9420 via OpenMLS. Forward secrecy, post-compromise security, O(log n) group rekeying, multi-device as a first-class concept. Wrapped in a hybrid PQ combiner.</div>
+          <div class="lname">Group and message crypto</div>
+          <div class="ldesc">RFC 9420 through OpenMLS. Forward secrecy, post compromise security, logarithmic group rekeying, and a hybrid post quantum secret injected at the pre shared key input the standard already defines.</div>
         </div>
-        <div class="lowner"><span>adopt</span><br>openmls + ML-KEM</div>
+        <div class="lowner"><span>adopted</span><br>composition is ours</div>
       </div>
       <div class="layer ours">
-        <div class="lid"><b>L1</b><span>transport</span></div>
+        <div class="lid"><b>L1</b><span>session</span></div>
         <div>
-          <div class="lname">QUIC + TLS 1.3</div>
-          <div class="ldesc">Authenticated, encrypted, multiplexed. Streams for chat and control; datagrams for media. The protocol machinery is derived; the configuration surface is ours, and it has no default that reaches infrastructure we do not operate.</div>
+          <div class="lname">Identity, admission, framing</div>
+          <div class="ldesc">An identity is an Ed25519 key rather than an account. Nobody can reach you without an invitation you issued, checked on the accept path rather than after it, and every invitation is a different address answered on one socket.</div>
         </div>
-        <div class="lowner"><span>rotelyx-net</span><br>derived + owned</div>
+        <div class="lowner"><span>ours</span></div>
       </div>
-      <div class="layer ours">
-        <div class="lid"><b>L0</b><span>path</span></div>
+      <div class="layer">
+        <div class="lid"><b>L0</b><span>transport</span></div>
         <div>
-          <div class="lname">Hole punching, relays, path policy</div>
-          <div class="ldesc">Direct-path upgrade and relay fallback are derived from upstream. Path <em>selection</em> is not: upstream optimises for latency, Rotelyx optimises for metadata resistance. Discovery is deleted outright: rendezvous moves to the sealed L3 mailbox.</div>
+          <div class="lname">QUIC, TLS 1.3, NAT traversal, relays</div>
+          <div class="ldesc">Vendored into this repository, 123,893 lines, renamed throughout, with the identity publishing code deleted outright rather than merely left unreachable. A test fails the build if any third party hostname reappears. Provenance and licences are recorded in the tree.</div>
         </div>
-        <div class="lowner"><span>rotelyx-net</span><br>own relays only</div>
+        <div class="lowner"><span>derived</span><br>policy replaced</div>
       </div>
     </div>
-
-    <div class="stack-key">
-      <span><span class="chip care">amber rail</span> layers you own</span>
-      <span>media branches at L1 into RTP over QUIC, keyed from L2</span>
-    </div>
+    <p class="stack-key" style="margin-top:1rem">
+      <span>ours &mdash; written here</span>
+      <span>adopted &mdash; standard implementation, unmodified</span>
+      <span>derived &mdash; vendored and substantially changed</span>
+    </p>
     <div class="col">
-      <p><strong>What "own" honestly means at L0 and L1.</strong> The derived machinery under <code>rotelyx-net</code> measures 122,786 lines, and half of that is a QUIC state machine (a fork of quinn) that upstream did not write either, while the hole-punching core is BSD-3 code derived from Tailscale. Rotelyx owns the parts where privacy is actually decided: relay policy, path selection, and discovery. Discovery is deleted rather than configured off, because upstream's default publishes your public key to a third-party DNS zone on every startup. The defensible claim is "our own transport, derived and substantially rewritten for metadata resistance" , not "written from scratch", which would be false and checkable.</p>
+      <p class="pull">If TLS were broken the message layer would still hold. If a device leaked an epoch key the raw stream would still be denied to a network observer.</p>
     </div>
   </section>
 
-  <!-- ================= CRYPTO ================= -->
+  <!-- ================= POST QUANTUM ================= -->
   <section>
     <div class="sec-head col">
-      <p class="eyebrow">L2 · the decision that matters most</p>
-      <h2>Why MLS, and where you can genuinely go beyond the state of the art</h2>
-      <p>The Double Ratchet is a <em>two-party</em> protocol. Every messenger that stretched it to groups did so with sender keys, which rekey in O(n²) and degrade post-compromise security exactly when a group is large enough to matter. MLS was built for this and 2026 is the year it stopped being theoretical: Discord ships it for end-to-end encrypted voice and video, and Google and Apple began rolling MLS over RCS in May.</p>
+      <p class="eyebrow">Post quantum</p>
+      <h2>At a point the standard already defines</h2>
+      <p>RFC 9420 defines seven ciphersuites and all of them are classical, so a conversation recorded today is decryptable by a future adversary with a quantum computer. Rotelyx does not fork MLS to fix that. It injects a hybrid secret at the pre shared key input, carried as a proposal inside a commit.</p>
     </div>
-
     <div class="cards">
       <div class="card">
-        <h3>What you adopt unchanged</h3>
-        <p><code>openmls</code> for the group state machine, the tree, the epochs and the ratcheting. It is the most-reviewed Rust MLS implementation and it is doing the part that is hardest to get right: state.</p>
+        <span class="chip yes">Why here</span>
+        <h3>The analysis survives</h3>
+        <p>MLS has machine checked symbolic security analysis. Any modification to the protocol forfeits the benefit of it. Injecting at a defined extension point does not, and two properties come free: the material refreshes every epoch, and no member can inject a chosen key silently, because the proposal is part of a commit every member validates.</p>
       </div>
       <div class="card">
-        <h3>What you actually invent</h3>
-        <p>A hybrid post-quantum combiner over MLS. RFC 9420's ciphersuites are all classical, and PQ suites are still in draft. Building X25519 + ML-KEM-768 hybrid key agreement in from day one is a real contribution, and the correct place to spend an audit budget.</p>
+        <span class="chip yes">Reviewable</span>
+        <h3>Forty lines, and vectors to check them</h3>
+        <p>The composition is the single novel cryptographic construction in the system and is small enough to read in an afternoon. Test vectors are published beside a written specification and checked against the implementation on every test run, so reproducing our output from the document is possible without reading our source.</p>
       </div>
       <div class="card">
-        <h3>What you deliberately skip</h3>
-        <p>Writing a ratchet. Signal's own team needed PQXDH and then SPQR over several years, with formal analysis, to get post-quantum ratcheting right. That is the benchmark a homemade ratchet is competing against.</p>
+        <span class="chip care">How we know it is real</span>
+        <h3>A negative test</h3>
+        <p>The injection function was once written, compiled and covered by passing tests while being dead code: it emitted commits no receiver could apply. What proves the layer is load bearing is a test asserting that a commit carrying the proposal <em>fails</em> for a member that has not staged the secret.</p>
       </div>
-    </div>
-
-    <p class="pull">Custom crypto is not how you beat Signal. Metadata is.</p>
-
-    <div class="col">
-      <p>The failures in a hand-rolled ratchet are almost never algebraic. They are nonce reuse under concurrency, state rollback after a crash or a restored backup, unbounded skipped-message key storage turned into a memory-exhaustion attack, replay across device re-registration, and non-constant-time comparisons. Every one of those is an implementation bug that a specification cannot save you from, and every one of them has shipped in a real product.</p>
     </div>
   </section>
 
-  <!-- ================= TOPOLOGY ================= -->
+  <!-- ================= PATH ================= -->
   <section>
     <div class="sec-head col">
-      <p class="eyebrow">Topology · unresolved</p>
-      <h2>"One private server" and "the phone hosts everything" cannot both be true</h2>
-      <p>You described two different systems. They pull in opposite directions and the choice changes the threat model, the mobile engineering, and whether the product is usable at all. Here is the honest trade.</p>
+      <p class="eyebrow">Path selection</p>
+      <h2>The objective function is inverted on purpose</h2>
+      <p>Peer to peer transports try a direct hole punched path and fall back to a relay when traversal fails, then choose among available paths by round trip time. Roughly one NAT pair in five cannot be punched, so the fallback is not rare and the choice is not academic.</p>
     </div>
-
     <div class="tablewrap">
       <table>
-        <thead>
-          <tr>
-            <th>Topology</th>
-            <th>Offline messages</th>
-            <th>Metadata exposure</th>
-            <th>Mobile viability</th>
-            <th>Verdict</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Given</th><th>Latency first picks</th><th>Rotelyx picks</th><th>What that costs</th></tr></thead>
         <tbody>
-          <tr>
-            <td>Pure P2P<br><span style="font-weight:400;color:var(--ink-2)">phone hosts, Kik-style</span></td>
-            <td class="t-risk">None: both peers must be online</td>
-            <td class="t-good">Relay sees node-ID pairs only</td>
-            <td class="t-risk">iOS kills background sockets. Dead on arrival.</td>
-            <td class="t-risk">Not shippable alone</td>
-          </tr>
-          <tr>
-            <td>Single central server</td>
-            <td class="t-good">Reliable</td>
-            <td class="t-risk">One host sees the entire social graph</td>
-            <td class="t-good">Straightforward</td>
-            <td class="t-risk">Recreates what you are escaping</td>
-          </tr>
-          <tr>
-            <td><strong>Blind mailbox + P2P</strong><br><span style="font-weight:400;color:var(--ink-2)">recommended</span></td>
-            <td class="t-good">Opaque envelopes, short TTL, deleted on delivery</td>
-            <td class="t-mid">Rotating tags, sealed sender, padded sizes</td>
-            <td class="t-good">Silent push wakes the P2P session</td>
-            <td class="t-good">Ship this</td>
-          </tr>
+          <tr><td>Relay at 20 ms, direct at 200 ms</td><td class="t-risk">the relay</td><td class="t-good">the direct path</td><td>180 ms, paid to keep the communication graph off a server</td></tr>
+          <tr><td>Direct path only</td><td>direct</td><td>direct</td><td>nothing</td></tr>
+          <tr><td>Relay only</td><td>relay</td><td>relay</td><td>the relay learns which endpoint talks to which. No configuration removes this</td></tr>
+          <tr><td>A call</td><td>whichever is faster</td><td class="t-good">the relay, always</td><td>a round trip. A direct path is your address handed to whoever is on the other end</td></tr>
         </tbody>
       </table>
     </div>
-
     <div class="col">
-      <p>The recommended shape: when both peers are online, everything: messages, media, calls , flows direct over iroh and touches no server you operate. When the recipient is offline, the sender drops a fixed-size sealed envelope addressed to a rotating pseudonymous tag into a mailbox node that never learns the sender, never learns the plaintext, and deletes on delivery or TTL. The mailbox is self-hostable, so any user or community can run their own , that is the Kik-style autonomy you want, made survivable on real phones.</p>
-      <p>Push notifications are the leak nobody designs around. Apple and Google see that <em>some</em> message arrived for a device. Mitigate with content-free silent wakes, jittered delivery, and decoy pushes, and then write down in the threat model that you did not solve it, because you did not.</p>
+      <p>Three policies exist. <b>PreferDirect</b> is the default and takes any direct path over any relayed path at any latency. <b>DirectOnceAvailable</b> additionally refuses to return to a relay once a direct path has been established, accepting connection failure as the outcome if that path dies. <b>Fastest</b> reproduces the ordinary objective and exists so the other two have a measurable baseline.</p>
+      <p>The refusal for calls is in the media layer rather than in a caller that could forget it. The same audit found the address itself leaking: the string a user pastes is built from whatever the endpoint knows about reaching itself, which on an ordinary machine is its IP and port, and it travelled even on relay only sessions. A relay only address now carries the relay and nothing else.</p>
+    </div>
+  </section>
+
+  <!-- ================= MAILBOX ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">The blind mailbox</p>
+      <h2>Everything the operator holds</h2>
+      <p>Direct delivery needs both peers online, which on a phone is the exception, so a store and forward component is unavoidable. The design goal is to make its operator&rsquo;s knowledge as close to nothing as routing permits.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Field</th><th>What it is</th><th>Why it is that</th></tr></thead>
+        <tbody>
+          <tr><td>tag</td><td>32 opaque bytes</td><td>Derived by both sides from the group&rsquo;s exporter secret. The key never crosses the network, rotates every epoch, and is unrelated between recipients</td></tr>
+          <tr><td>payload</td><td>one bucket size</td><td>A ladder doubling from 1 KiB, so nothing pays more than twice its own size and every ordinary message lands in the same bucket</td></tr>
+          <tr><td>arrival time</td><td>a timestamp</td><td class="t-mid">Cannot be removed. It is the residual the statistical disclosure attack is built on</td></tr>
+          <tr><td>sender</td><td class="t-good">absent</td><td>No field carries it</td></tr>
+          <tr><td>recipient identity</td><td class="t-good">absent</td><td>Delivery is to a tag derived from a secret the operator does not hold</td></tr>
+          <tr><td>length</td><td class="t-good">absent</td><td>There is no length prefix. Padding is trailing zeroes and the inner MLS message is self delimiting</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="chip care">Design decision</span>
+        <h3>Collection is destructive</h3>
+        <p>An envelope handed over is gone, so a client that crashes mid collection loses those messages. The alternative is a mailbox that keeps copies, which is the property being designed against.</p>
+      </div>
+      <div class="card">
+        <span class="chip care">Design decision</span>
+        <h3>Groups fan out on the server</h3>
+        <p>Every member has its own tag, or one shared tag would be collected by whoever reached it first and the rest would never see the message. One copy per member is unusable on a phone if the client uploads each, so the sender uploads once and names every recipient.</p>
+      </div>
+      <div class="card">
+        <span class="chip no">Not enforced by the protocol</span>
+        <h3>Deletion is a promise</h3>
+        <p>A hostile operator can retain everything and no client can detect it. The mitigation is structural rather than cryptographic: the mailbox is a single self hostable binary, so compromising one operator compromises one community rather than a population.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= MEETING ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">First contact</p>
+      <h2>Meeting somebody without an address</h2>
+      <p>The mailbox delivers only to people who already share a conversation. First contact needs something else, and on a phone the usual answer does not exist: an invitation carries a public key and has to be delivered to an address, and a phone has no listening socket, moves between networks and is asleep most of the time.</p>
+    </div>
+    <div class="col">
+      <p>A <b>meeting code</b> is 120 random bits written as 29 characters after an <code>RTLX1</code> prefix. It carries no key. Both sides run the canonical form through the same derivation, arrive at the same tag, and hand each other the real keys there, where their size costs nothing.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Step</th><th>Who</th><th>What is deposited at the meeting tag</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>The side that read the code</td><td>A key package</td></tr>
+          <tr><td>2</td><td>The side that showed it</td><td>A welcome, and the hybrid ciphertext</td></tr>
+          <tr><td>3</td><td>Both</td><td>Nothing more. Addressing moves to the group&rsquo;s own tag and the meeting place is abandoned</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>Everything at a meeting tag is visible to the operator, and that is by construction rather than by accident: a key package is public, a welcome is encrypted to the joiner&rsquo;s own key, and the hybrid ciphertext is encapsulated to their public key. Nothing at a meeting place is a message.</p>
+      <p>The code cannot be the invitation itself. A post quantum public key is 1216 bytes, which puts an invitation at roughly three thousand characters against a QR ceiling of 1273 at the correction level that leaves room for a mark in the middle. Naming a place costs 29 characters.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="chip no">What a code costs</span>
+        <h3>One attempt at being first</h3>
+        <p>A code is not proof of who is holding it. Whoever reaches the tag before the intended person completes the handshake in their place, and nothing in the implementation prevents it. Comparing the safety number is the only thing that detects it, which is why it is on screen from the moment the conversation exists.</p>
+      </div>
+      <div class="card">
+        <span class="chip care">Consequence</span>
+        <h3>A conversation with yourself is a group of two</h3>
+        <p>The tag key comes from the group&rsquo;s exporter secret and a group of one has no secret to export, so a solo group has no address at all. The client joins the same device twice instead, and to the mailbox that is two members with nothing special cased.</p>
+      </div>
+      <div class="card">
+        <span class="chip yes">Deliverability</span>
+        <h3>Tags rotate, polling overlaps</h3>
+        <p>Tags are derived per hour and each side also polls the preceding windows, so an envelope deposited a minute before a boundary is still collected after it. The same derivation is implemented in Rust and in Dart, and each mints a code the other reads.</p>
+      </div>
     </div>
   </section>
 
   <!-- ================= CALLS ================= -->
   <section>
     <div class="sec-head col">
-      <p class="eyebrow">Media</p>
-      <h2>Dropping WebRTC is correct and more expensive than it looks</h2>
-      <p>The transport argument is settled. <code>iroh-roq</code> carries RTP over QUIC, and n0's own <code>callme</code> already does Opus audio over it with <code>cpal</code> for device access: Linux, macOS, Windows and Android working, iOS untested. It is explicitly experimental, which is the accurate description of where this path stands.</p>
-    </div>
-    <div class="cards">
-      <div class="card">
-        <span class="chip yes">What you gain</span>
-        <ul>
-          <li>No SDP, no ICE agent, no TURN bill, no DTLS handshake on top of a handshake.</li>
-          <li>Relays that cannot read media and cost a fraction of TURN.</li>
-          <li>One connection carrying chat, control and media with independent stream priorities.</li>
-          <li>Media keys derived from MLS, so a call is as end-to-end as a message.</li>
-        </ul>
-      </div>
-      <div class="card">
-        <span class="chip no">What you give up</span>
-        <ul>
-          <li><strong>Fifteen years of libwebrtc tuning.</strong> Jitter buffer, packet-loss concealment, NetEq, acoustic echo cancellation, bandwidth estimation and congestion control are not transport features. You will port or rebuild all of them.</li>
-          <li><strong>Browsers.</strong> WebRTC is still the only peer-to-peer media transport a browser will give you. A web client means a separate path.</li>
-          <li><strong>Group calls above ~6.</strong> Full mesh stops scaling and an SFU breaks E2EE unless you add SFrame-style per-frame encryption keyed from L2.</li>
-        </ul>
-      </div>
-    </div>
-    <div class="col">
-      <p>Plan accordingly: audio-only 1:1 is reachable in weeks on top of <code>callme</code>. Audio that sounds as good as WhatsApp on a bad cellular link is the single longest task in this project: longer than the cryptography.</p>
-    </div>
-  </section>
-
-  <!-- ================= COMPARISON ================= -->
-  <section>
-    <div class="sec-head col">
-      <p class="eyebrow">Benchmark</p>
-      <h2>Telegram is the wrong target. Signal is the real one.</h2>
-      <p>Beating Telegram is not an achievement worth designing toward: its default chats are readable by its servers and its group chats have no end-to-end encryption at all. Measure against Signal, where the honest reading is: you match on crypto by reusing the same primitives, and you win on the things Signal chose not to fight.</p>
+      <p class="eyebrow">Voice</p>
+      <h2>Our own codec, our own media transport</h2>
+      <p>An MLS application message is ordered, reliable and ratcheted. Audio is the opposite: frames arrive every twenty milliseconds, some never arrive, and a late frame is worthless rather than worth waiting for. Media therefore takes a key from MLS and does its own framing.</p>
     </div>
     <div class="tablewrap">
       <table>
-        <thead>
-          <tr>
-            <th>Property</th>
-            <th>Telegram</th>
-            <th>Signal</th>
-            <th>Rotelyx</th>
-          </tr>
-        </thead>
+        <thead><tr><th>Property</th><th>How it works</th></tr></thead>
         <tbody>
-          <tr>
-            <td>E2EE by default</td>
-            <td class="t-risk">No: secret chats only, 1:1, mobile only</td>
-            <td class="t-good">Yes</td>
-            <td class="t-good">Yes, no non-E2EE mode exists</td>
-          </tr>
-          <tr>
-            <td>Group E2EE</td>
-            <td class="t-risk">None</td>
-            <td class="t-mid">Sender keys over Double Ratchet</td>
-            <td class="t-good">MLS tree, O(log n) rekey</td>
-          </tr>
-          <tr>
-            <td>Identity</td>
-            <td class="t-risk">Phone number</td>
-            <td class="t-mid">Phone number, usernames layered on</td>
-            <td class="t-good">Ed25519 key, no PII</td>
-          </tr>
-          <tr>
-            <td>Transport</td>
-            <td class="t-mid">MTProto to central servers</td>
-            <td class="t-mid">TLS to central servers</td>
-            <td class="t-good">Direct P2P, blind relay fallback</td>
-          </tr>
-          <tr>
-            <td>Post-quantum</td>
-            <td class="t-risk">No</td>
-            <td class="t-good">PQXDH + PQ ratchet</td>
-            <td class="t-good">Hybrid from day one, if you build it</td>
-          </tr>
-          <tr>
-            <td>Self-hostable</td>
-            <td class="t-risk">No</td>
-            <td class="t-risk">Not practically</td>
-            <td class="t-good">Relay and mailbox both</td>
-          </tr>
-          <tr>
-            <td>Independent audit</td>
-            <td class="t-risk">Protocol criticised repeatedly</td>
-            <td class="t-good">Repeatedly audited, formally analysed</td>
-            <td class="t-risk">None yet: the honest gap</td>
-          </tr>
+          <tr><td>Keys</td><td>One per speaker, derived from the group&rsquo;s exported media key and that participant&rsquo;s identity. Counters cannot collide, and a frame claiming to be from one member can only have been produced by that member</td></tr>
+          <tr><td>Rekeying</td><td>The key changes with the epoch, so a membership change rekeys the call and a removed member stops being able to decrypt immediately rather than at the end of it</td></tr>
+          <tr><td>Frame</td><td>20 ms, 960 samples at 48 kHz, 60 bytes on the wire at 24 kbit/s. A 40 ms transform window over a 20 ms hop, Bark spaced bands, energy coded separately from shape</td></tr>
+          <tr><td>Layers</td><td>A base and three refinements in one datagram. Splitting them across datagrams puts more on the wire than the stream carries, because the authentication tag is most of a packet this small</td></tr>
+          <tr><td>Path</td><td class="t-good">Relay only, refused otherwise</td></tr>
         </tbody>
       </table>
     </div>
     <div class="col">
-      <p>That last row is the whole difference between a strong design and a trustworthy product, and no amount of architecture closes it.</p>
+      <p><b>A phone and a desktop have called each other</b>, in both directions, over the relay. Four faults stood in the way and not one was visible from either end: a QUIC stream opened and never written to, an address published before the relay had registered the endpoint behind it, two clients encoding different frame formats, and a capture buffer read from the start of a platform channel&rsquo;s whole reply rather than from the start of the window onto it. The last one sent the reply&rsquo;s header out as audio, perfectly delivered.</p>
+      <p>None of it produced an error, because a frame that cannot be decoded is concealed rather than counted. Concealment is now reported beside the received count, and the tools that found the fault stay in the tree: a recording of what the speaker played, a recording of each payload as it arrived, and an offline decoder that replays both away from the call.</p>
     </div>
   </section>
 
-  <!-- ================= HARD PARTS ================= -->
+  <!-- ================= REACHABILITY ================= -->
   <section>
     <div class="sec-head col">
-      <p class="eyebrow">Cost · ordered by difficulty, hardest first</p>
-      <h2>You asked how hard this is. This is how hard.</h2>
+      <p class="eyebrow">Reachability</p>
+      <h2>Free identities mean free spam. Scarcity is the only answer.</h2>
+      <p>Removing telephone numbers removes the natural scarcity that limits bulk unsolicited contact. Cryptography does not address this. Only two forms of scarcity are available: authorisation, and cost.</p>
+    </div>
+    <div class="col">
+      <p><b>Authorisation is the default.</b> An identity is unreachable unless the caller holds an invitation it issued out of band. The caller proves possession with a MAC over its own identity and the current hour, checked against the identity the handshake already authenticated, so an observed proof cannot be replayed by a different caller without also stealing that caller&rsquo;s private key. Revocation is surgical: revoking a leaked invitation does not affect holders of others.</p>
+      <p><b>Cost is opt in.</b> An identity that must accept strangers can require a proof of work bound to the sender, the recipient and the hour. Each binding removes a reuse strategy: solving once and spending it across an address book, solving once and reusing across throwaway identities, and stockpiling proofs in advance. The blocklist is consulted before any verification work, because a block that still consumes CPU is a block the blocked party can exploit.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Relay admission bound</th><th>Value</th><th>Why this and not something else</th></tr></thead>
+        <tbody>
+          <tr><td>Concurrent connections per identity</td><td>8</td><td>A phone, a laptop, a desktop and spare. Past this it is not one person&rsquo;s devices</td></tr>
+          <tr><td>New connections per identity</td><td>30/min</td><td>Reconnecting after a network change is a handful. Thirty a minute is a loop</td></tr>
+          <tr><td>Burst above that rate</td><td>10</td><td>A device waking from sleep retries several times in a second and is not an attack</td></tr>
+          <tr><td>Total concurrent connections</td><td>4096</td><td>What one relay is sized for. The bound exists so the failure is a refusal rather than a crash</td></tr>
+          <tr><td>Idle identity forgotten after</td><td>600 s</td><td>The table is bounded by memory as well as by policy, or the limiter becomes the leak</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>A refusal is indistinguishable from any other closed connection, and the counts go to the operator&rsquo;s log rather than to the public status page. A relay that explained itself would be an oracle for its own policy, and a live count of open connections is a load signal that on a small relay correlates with who is talking.</p>
+    </div>
+  </section>
+
+  <!-- ================= AT REST ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">At rest</p>
+      <h2>What is written to disk, and under what</h2>
+    </div>
+    <div class="col">
+      <p>Identity keys are sealed with Argon2id at 64 MiB and three passes, and XChaCha20-Poly1305 with the file header bound as associated data. Group state and transcripts are sealed under the same construction, because an identity behind a passphrase beside a conversation in the clear makes the passphrase a decoration. On a phone there is also a mode that writes nothing down at all and asks again next time.</p>
+      <p><b>A file is a copy, and a copy that resumes sending is sending at generations the other side has already spent.</b> A restored session is therefore marked as needing a rekey and refuses to send until it has committed a fresh epoch. That also covers the case a browser cannot distinguish from an ordinary reload: the same sealed blob opened on a second device.</p>
+      <p>Two limits remain. The sealing key comes from a passphrase rather than from a platform keystore, so its strength is whatever the person chose. And the rekey is not reachable from every client yet.</p>
+    </div>
+  </section>
+
+  <!-- ================= BOUNDARY ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">The honest boundary</p>
+      <h2>What this does not defend against</h2>
+      <p>A threat model that lists only solved problems is marketing. These are unsolved, and at least one is unsolvable within the current architecture.</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <span class="chip no">Not protected</span>
+        <h3>A compromised device</h3>
+        <p>A device that renders plaintext to a screen can have that plaintext taken. Nothing on any server helps with a phone that has already been taken over.</p>
+      </div>
+      <div class="card">
+        <span class="chip no">Not protected</span>
+        <h3>A global passive adversary</h3>
+        <p>An adversary observing the whole network correlates flows by timing and volume regardless of what any single message contains.</p>
+      </div>
+      <div class="card">
+        <span class="chip no">Unsolved</span>
+        <h3>Statistical disclosure</h3>
+        <p>The attack that breaks Signal&rsquo;s sealed sender applies here too. Tags rotate hourly rather than per message, which gives an operator a clustering key. Read receipts exist and are off by default and per conversation, because turning them on reinstates exactly the amplification the published attack relies on.</p>
+      </div>
+      <div class="card">
+        <span class="chip care">Inherent</span>
+        <h3>Relay observation</h3>
+        <p>A relay carrying a session necessarily learns which endpoint talks to which. Path selection minimises how often one is used and self hosting changes who holds the observation. Neither eliminates it, and relay chaining is not implemented.</p>
+      </div>
+      <div class="card">
+        <span class="chip care">Inherent</span>
+        <h3>Push notification metadata</h3>
+        <p>Mobile platforms will not permit a background socket, so a platform push service observes that a device woke and when. Content free pushes on one schedule shared by every device raise the cost of correlating a wake with a deposit. None of it solves the problem.</p>
+      </div>
+      <div class="card">
+        <span class="chip no">Not yet</span>
+        <h3>Independent audit</h3>
+        <p>There has not been one. Rotelyx is pre release and makes no security claim that should be relied upon until that review is complete.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= NOT BUILT ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">Open</p>
+      <h2>What is not built</h2>
     </div>
     <div class="ranked">
       <div class="rank">
         <div class="rn">01</div>
         <div>
-          <h3>The media stack without libwebrtc</h3>
-          <p>Jitter buffer, PLC, echo cancellation, congestion control and bandwidth estimation on lossy mobile networks. Underestimated by roughly an order of magnitude in every project that tries this.</p>
+          <h3>Echo cancellation that works in a room</h3>
+          <p>It is written and it removes 38.3 dB against a path this project generated and -0.0 dB against a real speaker and a real microphone. A residual suppressor brings that to 1.3 dB. On a desktop, calls are for headsets; on Android the platform&rsquo;s own canceller carries it, which makes the property the operating system&rsquo;s rather than ours.</p>
         </div>
-        <div class="cost">6-12 months</div>
+        <div class="cost">measured, weak</div>
       </div>
       <div class="rank">
         <div class="rn">02</div>
         <div>
-          <h3>Mobile background lifecycle</h3>
-          <p>iOS will not let you hold a socket. Every design decision downstream of "the phone hosts it" collides with this, and the workaround is push, which is the metadata leak you were avoiding.</p>
+          <h3>A perceptual measurement of the codec</h3>
+          <p>Every figure recorded is objective, and codec quality is not. Two listening sessions have run and what they established is that the measurement itself was broken: the rating scale was never shown to either listener.</p>
         </div>
-        <div class="cost">2-4 months</div>
+        <div class="cost">blocked on method</div>
       </div>
       <div class="rank">
         <div class="rn">03</div>
         <div>
-          <h3>Multi-device and encrypted backup</h3>
-          <p>Adding a second device without a server that holds keys, restoring history without a rollback vector, and losing a phone without losing an identity. MLS helps; it does not solve it.</p>
+          <h3>Congestion control, and group calls above a handful</h3>
+          <p>Group calls need a unit that forwards streams. The frame header is authenticated but not encrypted and can be routed by without being read, which suits one. What such a unit sees is who is speaking and when, and that should be declared before anyone builds on it.</p>
         </div>
-        <div class="cost">2-3 months</div>
+        <div class="cost">not started</div>
       </div>
       <div class="rank">
         <div class="rn">04</div>
         <div>
-          <h3>End-to-end encrypted group calls above six</h3>
-          <p>SFrame keyed from MLS epochs, plus an SFU that routes frames it cannot decrypt.</p>
+          <h3>Mitigations for statistical disclosure</h3>
+          <p>Per message tags with a recipient side scan, randomised collection delays, decoy deposits. Each costs bandwidth, battery or latency, and none has been implemented or evaluated.</p>
         </div>
-        <div class="cost">2-3 months</div>
+        <div class="cost">unsolved</div>
       </div>
       <div class="rank">
         <div class="rn">05</div>
         <div>
-          <h3>Abuse resistance without identity</h3>
-          <p>No phone number means no spam cost. Proof-of-work handshakes, contact-key invitations, per-user blocklists: all imperfect, all necessary.</p>
+          <h3>iOS, and a keystore backed sealing key</h3>
+          <p>The iOS platform layer is written and has never been through a compiler. The sealing key still comes from a passphrase rather than from the platform keystore.</p>
         </div>
-        <div class="cost">ongoing</div>
+        <div class="cost">written, unbuilt</div>
       </div>
-      <div class="rank">
-        <div class="rn">06</div>
-        <div>
-          <h3>Independent cryptographic audit</h3>
-          <p>Protocol design plus implementation review by a firm that does this seriously. Non-negotiable before any public security claim.</p>
-        </div>
-        <div class="cost">$50k-150k</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= OPEN SOURCE ================= -->
-  <section>
-    <div class="sec-head col">
-      <p class="eyebrow">Distribution</p>
-      <h2>Open source it, and say less while doing it</h2>
-    </div>
-    <div class="col">
-      <p>Yes: open source, permissively, from the first commit. A closed security protocol is not evaluable, and an unevaluable protocol has no security claim to make. Kerckhoffs's principle is not a philosophical preference here; it is the only mechanism by which anyone can believe you.</p>
-      <p>What to publish: the protocol specification as a document separate from the code, the Rust core, the threat model, and the test vectors. What to withhold: nothing technical. What to never write in the README: "unbreakable", "impossible to intercept", "military-grade". Those three phrases are how security researchers decide within thirty seconds that a project is not serious, and they are also simply false: every one of them will be disproved by a determined enough adversary against a device endpoint rather than against your cryptography.</p>
-      <p>Publish the threat model as a peer of the code. State plainly: Rotelyx defends against network adversaries, relay operators, mailbox operators and server seizure. It does not defend against a compromised endpoint, a malicious OS, coercion of a participant, or traffic-analysis by a global passive adversary. Naming those honestly makes the claims you <em>do</em> make credible.</p>
-    </div>
-  </section>
-
-  <!-- ================= NEXT ================= -->
-  <section>
-    <div class="sec-head col">
-      <p class="eyebrow">Sequence</p>
-      <h2>What to build, in this order</h2>
-    </div>
-    <div class="col">
-      <ol class="plain">
-        <li><strong>Threat model document.</strong> Before code. It is what every later decision is checked against.</li>
-        <li><strong>Rust core crate.</strong> iroh endpoint, identity keys, node discovery, connection lifecycle. Prove two devices on different networks connect through a NAT.</li>
-        <li><strong>MLS integration.</strong> OpenMLS group state, 1:1 as a group of two, key packages published through the mailbox. Text messages only.</li>
-        <li><strong>Blind mailbox node.</strong> Sealed sender, padding buckets, rotating tags, TTL deletion. Self-hostable single binary.</li>
-        <li><strong>Hybrid PQ combiner.</strong> X25519 + ML-KEM-768 over the MLS key schedule, with test vectors published for review.</li>
-        <li><strong>Audio calls.</strong> Fork or depend on <code>callme</code>, key the media from MLS exporters.</li>
-        <li><strong>Mobile clients.</strong> UniFFI bindings, background lifecycle, silent push. The point where the project becomes real, and the point where most of the pain arrives.</li>
-      </ol>
     </div>
   </section>
 
   <footer>
     <div class="col">
-      <p><strong>Open decisions blocking step 1.</strong> Topology confirmation: is the blind mailbox acceptable, or is pure P2P a hard requirement you are willing to pay for in usability? Platform priority , desktop first, or mobile from the start? And whether the post-quantum combiner is in scope for v1 or deferred, because it changes the audit scope and the timeline substantially.</p>
-      <p style="font-size:.83rem">Version claims verified 15 August 2026: iroh 1.0 released 15 June 2026, current 1.0.3. OpenMLS implements RFC 9420. <code>callme</code> and <code>iroh-roq</code> are experimental. Cost estimates are industry ranges, not quotes.</p>
+      <p><strong>Read further.</strong> The <a href="paper.html">technical report</a> carries the measurements, the failed attempts and the analysis. The threat model, the provenance of the vendored transport and the test vectors for the post quantum composition are maintained alongside the source.</p>
+      <p style="font-size:.83rem">Rotelyx by Ideoa Labs, AGPL-3.0, with portions derived from third party work under MIT, Apache-2.0 and BSD-3-Clause. Figures on this page were measured on 25 August 2026 against the tree that produced them. Pre release and unaudited.</p>
     </div>
   </footer>
 
 </div>
+
+</body>
+</html>

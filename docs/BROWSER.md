@@ -70,7 +70,7 @@ browser refuses the streaming compile and falls back to a slower path, with only
 a console warning to say why. Check with:
 
 ```sh
-curl -s -o /dev/null -w '%{content_type}\n' https://rotelyx.ideoa.co/rotelyx/rotelyx_wasm_bg.wasm
+curl -s -o /dev/null -w '%{content_type}\n' https://rotelyx.com/rotelyx/rotelyx_wasm_bg.wasm
 ```
 
 If it is not `application/wasm`, add to nginx:

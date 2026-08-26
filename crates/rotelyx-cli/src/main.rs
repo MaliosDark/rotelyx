@@ -247,7 +247,15 @@ fn start_call(conversation: &Conversation, me: &Member, paths: PathPolicy) -> Re
     let base = conversation
         .media_base_key(me)
         .context("deriving the call key from the group")?;
-    Call::start(base, sender_index(conversation, me)?, paths)
+    // Refused rather than started on repeating keys. See the same refusal in
+    // the desktop engine: this path has no call setup to carry a per-call value,
+    // and without one every call in an epoch shares the first call's nonces.
+    let _ = (base, paths, sender_index(conversation, me)?);
+    anyhow::bail!(
+        "calling over a direct invitation is disabled: it has no way to agree a \
+         per-call key, and without one a second call reuses the first call's \
+         nonces"
+    );
 }
 
 /// This member's sender index, agreed without exchanging anything.

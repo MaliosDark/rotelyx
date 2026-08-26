@@ -356,15 +356,15 @@
   <div class="byline">
     <span><b>Andryu Schittone</b> (Malios Dark)</span>
     <span>Ideoa Labs</span>
-    <span>20 August 2026</span>
-    <span>Revision 2</span>
+    <span>26 August 2026</span>
+    <span>Revision 4</span>
   </div>
 
   <div class="notice">
     <b>Status: unaudited.</b> This report describes a working implementation
     that has not undergone independent cryptographic review. No security claim
     made here should be relied upon until that review is complete. The
-    limitations in section 9 are not hypothetical; several are unsolved.
+    limitations in section 11 are not hypothetical; several are unsolved.
   </div>
 </header>
 
@@ -379,7 +379,7 @@
     than an afterthought.
   </p>
   <p>
-    Rotelyx makes three contributions. First, it composes a hybrid post quantum
+    Rotelyx makes four contributions. First, it composes a hybrid post quantum
     key encapsulation mechanism with the Messaging Layer Security standard
     (RFC 9420) through the pre shared key input the standard already defines,
     obtaining post quantum epoch keys without modifying MLS. Second, it inverts
@@ -387,7 +387,11 @@
     network path over any relayed path regardless of latency, on the grounds
     that a relay operator learns the communication graph. Third, it specifies a
     store and forward mailbox whose operator observes only an opaque rotating
-    tag and a payload of one of five fixed sizes.
+    tag and a payload of one of five fixed sizes. Fourth, it admits a new
+    correspondent without either party holding an address for the other, by
+    deriving a mailbox rendezvous from a 120 bit code small enough to fit in a QR
+    symbol at a correction level that leaves room for a mark, and it states
+    plainly the one guarantee that construction cannot provide.
   </p>
   <p>
     We report measured characteristics of the implementation, including a
@@ -709,8 +713,14 @@
       <p>
         The composition is approximately forty lines of code. It is the single
         novel cryptographic construction in the system, and it is deliberately
-        small enough to be reviewed in an afternoon. Test vectors for it are an
-        open item, listed in section 10.
+        small enough to be reviewed in an afternoon. <b>Test vectors are
+        published and no longer an open item</b>, in
+        <code>crates/rotelyx-crypto/tests/pq-vectors.txt</code>, checked against
+        the implementation on every test run so the file cannot drift from the
+        code, beside a written specification in
+        <code>docs/PQ-COMPOSITION.md</code>. Reading our source is not a review.
+        Reproducing our output from that specification is, and that is what the
+        vectors exist to make possible.
       </p>
     </div>
 
@@ -882,7 +892,7 @@
         <!-- residual -->
         <rect x="276" y="252" width="300" height="56" rx="4" fill="none" stroke="#A33B4D" stroke-dasharray="5 4" stroke-width="1.3"/>
         <text x="426" y="274" text-anchor="middle" font-size="11" fill="#A33B4D">residual: deposit and collection timing</text>
-        <text x="426" y="292" text-anchor="middle" font-size="11" fill="#A33B4D">can still be correlated (section 9.1)</text>
+        <text x="426" y="292" text-anchor="middle" font-size="11" fill="#A33B4D">can still be correlated (section 11.1)</text>
       </g>
     </svg>
     <figcaption>
@@ -891,7 +901,7 @@
       is to a tag derived from a secret the operator does not hold. Message
       length is absent because every payload is padded to one of five fixed
       sizes. Arrival time cannot be removed, and that residual is the basis of
-      the attack discussed in section 9.1.
+      the attack discussed in section 11.1.
     </figcaption>
   </figure>
 
@@ -908,7 +918,7 @@
       <strong>The addressing key is never transmitted.</strong> Both parties
       derive the tag key from the MLS exporter secret, so the key itself never
       crosses the network and no operator holds it. The tag derived from it does
-      cross, and must: it is what the mailbox routes on, and what §7 describes an
+      cross, and must: it is what the mailbox routes on, and what §6 describes an
       operator as seeing. It carries a value drawn from a secret only the
       conversation has, rotated every epoch and unrelated between recipients.
       The derivation must be pinned at a mutually known epoch: the
@@ -933,6 +943,80 @@
         operator compromises one community rather than a population.
       </p>
     </div>
+  </div>
+
+  <div class="col">
+    <h3>Meeting without an address</h3>
+
+    <p>
+      The mailbox solves delivery to somebody a conversation already exists with.
+      It does not solve first contact, and on a phone the usual answer is
+      unavailable: an invitation carries a public key and has to be delivered to
+      an address, and a phone has no listening socket, moves between networks,
+      and is asleep most of the time.
+    </p>
+
+    <p>
+      There is therefore a second admission path that carries no key at all. A
+      <b>meeting code</b> is 120 bits of randomness rendered as 29 base32
+      characters. Both parties derive a rendezvous tag from it through a domain
+      separated BLAKE3 derivation, deposit at that tag, and complete an ordinary
+      MLS handshake there: a key package from the side that read the code, a
+      welcome and the hybrid ciphertext from the side that showed it. Once the
+      group exists, addressing moves to the tag derived from the group&rsquo;s
+      exporter secret and the meeting place is abandoned.
+    </p>
+
+    <p>
+      The code cannot be the invitation itself. An X-Wing public key is 1216
+      bytes, and with the key package and base64 around it an invitation runs to
+      roughly three thousand characters, against a QR ceiling of 2953 at the
+      weakest correction level and 1273 at the level that leaves room for a mark
+      in the middle of the symbol. Naming a place costs 29 characters, and the
+      keys are exchanged where their size is free.
+    </p>
+
+    <p>
+      What the operator observes at a meeting tag is the entire handshake, and
+      that is acceptable by construction rather than by accident: a key package
+      is public, a welcome is encrypted to the joiner&rsquo;s own key, and the
+      hybrid ciphertext is encapsulated to their public key. Nothing at a meeting
+      place is a message.
+    </p>
+
+    <div class="callout risk">
+      <span class="label">What a meeting code costs</span>
+      <p>
+        A code is not proof of who holds it. It buys an attacker exactly one
+        attempt at being first: whoever reaches the tag before the intended
+        person completes the handshake in their place, and no care in the
+        implementation prevents it. The safety number is the only thing that
+        detects it, which is why it is on screen from the moment the conversation
+        exists. This is true of every out of band pairing scheme small enough to
+        fit in a QR code, and it is stated here rather than left to be
+        discovered.
+      </p>
+    </div>
+
+    <p>
+      Tags rotate hourly and each side also polls the preceding windows, so an
+      envelope deposited a minute before a boundary is still collected after it.
+      The format is reimplemented in Dart for the phone client, character for
+      character, because a code minted by one client and scanned by another has
+      to name the same place, and a test in each mints a code the other reads.
+    </p>
+
+    <p>
+      One consequence of deriving addressing from the group is worth stating
+      because it surprised the implementation. <b>A conversation with yourself
+      cannot be a group of one.</b> The tag key comes from the group&rsquo;s
+      exporter secret, and a group with a single member has no such secret to
+      export, so a solo group has no address at all and nothing can be deposited
+      for it. The client therefore joins the same device twice, and to the
+      mailbox that is two members with nothing special cased. The alternative,
+      a local store that bypasses the protocol, would have been a second code
+      path holding plaintext under different rules.
+    </p>
   </div>
 </section>
 
@@ -1334,9 +1418,13 @@
       Calls work, and were the largest piece of unfinished work in the project
       until August 2026. What decides whether a call is as end to end as a
       message is the keys and the frame format, and those came first; what
-      followed was the media engineering, which is the long part and is not
-      finished. Two processes now hold a measured conversation through a relay,
-      and echo cancellation is still absent.
+      followed was the media engineering, which is the long part. Two processes
+      hold a measured conversation through a relay, two desktop clients do it
+      over the production relay, and an Android phone and a desktop do it in
+      both directions, which is the first time the codec, the media layer, the
+      transport and two real devices have run together rather than each on its
+      own. Echo cancellation is written and measured, and section 10.18 reports
+      that it removes nothing in a real room.
     </p>
 
     <h3>Why media cannot reuse the message layer</h3>
@@ -1453,12 +1541,14 @@
     </p>
 
     <div class="callout">
-      <span class="label">What has not been done</span>
+      <span class="label">What the numbers above are not</span>
       <p>
-        <b>Nobody has listened to it.</b> Every number here is objective, and
-        codec quality is not: it is settled by listening panels, and a decade of
-        Opus&rsquo;s advantage is exactly that tuning. No comparison with any
-        other codec can be made until that has happened.
+        <b>Every figure here is objective, and codec quality is not.</b> It is
+        settled by listening panels, and a decade of Opus&rsquo;s advantage is
+        exactly that tuning. Two listening sessions have since been run and are
+        reported in section 10.17: what they established is that the measurement
+        itself was broken, so there is still no perceptual result to compare
+        against any other codec.
       </p>
     </div>
 
@@ -1802,6 +1892,82 @@
       test that does not run against a clock.
     </p>
 
+    <h3>A call between two implementations</h3>
+
+    <p>
+      The run above is one implementation calling itself. A phone calling a
+      desktop is two, in two languages, and it failed in four separate ways that
+      were invisible from either end. They are recorded together because the
+      pattern is the finding, not any one of them.
+    </p>
+
+    <ol>
+      <li>
+        <b>A stream that was opened and never written.</b> The dialler opened a
+        bidirectional QUIC stream and sent nothing on it. A stream does not exist
+        for the peer until its first byte, so the far side waited in
+        <code>accept_bi</code> while this side believed it was connected and sent
+        audio into a connection nobody was reading. A call is datagrams and never
+        touches a stream; the receiver now waits for the connection alone.
+      </li>
+      <li>
+        <b>An address published before it was true.</b> An address naming a relay
+        is a promise until that relay has finished registering the endpoint
+        behind that identifier, and the far side dials the instant an answer
+        arrives. The endpoint is now bound when the conversation opens and
+        nothing is published until it is registered.
+      </li>
+      <li>
+        <b>Two codecs.</b> The phone encoded one frame format and the desktop
+        parsed another. Every frame crossed the network, authenticated
+        correctly, and failed to decode. It sounded like chirping.
+      </li>
+      <li>
+        <b>A buffer read from the wrong offset.</b> A byte array arriving over a
+        platform channel is a window onto a larger buffer holding the whole
+        reply, and the audio was read as sixteen bit samples from the start of
+        that buffer rather than from the start of the window. What was encoded
+        and sent was the reply&rsquo;s header and whatever followed it in memory:
+        broadband noise, delivered perfectly.
+      </li>
+    </ol>
+
+    <div class="callout risk">
+      <span class="label">Why none of it was visible</span>
+      <p>
+        <b>A frame that arrives and cannot be turned into sound is concealed,
+        not counted.</b> That is correct for packet loss, where a client can do
+        nothing about the gap and a click is worse than silence, and it hides a
+        format mismatch or a corrupted payload completely. One real call ran with
+        eleven usable frames out of three thousand and reported nothing wrong at
+        any layer. The call summary now carries the concealed count beside the
+        received one, because the two together are the difference between a call
+        that is quiet and a call that is wrong.
+      </p>
+    </div>
+
+    <p>
+      What broke the deadlock was instrumentation rather than reading. One
+      environment variable records what the speaker played, another records each
+      payload as it arrived, one file per sender, and an offline tool replays
+      both away from the call. The measure is the correlation between
+      neighbouring samples: a voice is above 0.9 and broadband noise is near
+      zero. Before the last fix, <b>0.156</b>. After it, <b>0.992</b>. Injecting
+      a known tone at each layer in turn then said which of the three steps
+      between the microphone and the encoder was responsible, which no amount of
+      reading the three had established.
+    </p>
+
+    <p>
+      Two tests came out of it that would have caught the third fault at the
+      cost of a second each. One sends a frame through its byte form and back,
+      because the question is not whether the codec works but whether what one
+      side writes parses as what the other expects. The other reproduces the
+      phone&rsquo;s capture arithmetic exactly, sixteen bit PCM through a forty
+      millisecond window over a twenty millisecond hop, and asserts that the
+      sound survives it.
+    </p>
+
     <h3>A call refuses a direct path</h3>
 
     <p>
@@ -1894,16 +2060,73 @@
         scale independent: the untouched reference was scored 100 six times out
         of six, so neither listener was inattentive, and by the second one's
         criterion every rate stayed fully intelligible, 12 kbit/s included. That
-        says the words survive. It does not say the voice does.</p>
+        says the words survive. It does not say the voice does.
+      </figcaption>
+    </figure>
+
+    <h3>Echo cancellation, and what a real room did to it</h3>
+
+    <p>
+      An adaptive canceller was written, and against a path this project
+      generated it removed <b>38.3 dB</b>. That number was real and reproduced on
+      every run, and it was measured under two conditions a telephone call does
+      not have: a room modelled by the same code being tested, excited by white
+      noise. This machine has a speaker and a microphone, so it was measured
+      again with the speaker playing into the microphone.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Echo path</th><th>How it is measured</th><th class="num">Linear only</th><th class="num">With the residual stage</th></tr></thead>
+        <tbody>
+          <tr><td>A model in the harness</td><td>continuous, white noise</td><td class="num">23.0</td><td class="num">43.0</td></tr>
+          <tr><td>A model in the harness</td><td>continuous, speech</td><td class="num">19.8</td><td class="num">19.9</td></tr>
+          <tr><td>A real room</td><td>continuous</td><td class="num">-0.0</td><td class="num">1.3</td></tr>
+          <tr><td>A real room</td><td>realigned every 0.5 s</td><td class="num">1.4</td><td class="num">6.1</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      Decibels removed, over 24.6 seconds of recorded speech in every row. The
+      third row is the one a call is in. The right hand column is a residual
+      suppressor written after seeing the left hand one, and it is worth about
+      1.3 dB continuously, 4.7 dB when something keeps the filter aligned, and
+      nothing at all on the synthetic path with speech, where the linear filter
+      has already converged and there is little left to suppress.
+    </p>
+
+    <p>
+      Two things account for the gap and neither is tuning. <b>Speech costs about
+      seven decibels against noise</b> on the same path and the same code,
+      because an adaptive filter converges on the assumption that its input keeps
+      exciting every frequency, and speech is a handful of moving formants with
+      silences between words where the filter drifts. <b>The room costs the
+      rest.</b> The echo arrives 21.8 dB above the room&rsquo;s own noise, which
+      is the ceiling on any canceller there, and it reached 1.1. The two devices
+      are 341 ppm apart on their clocks, which was the first suspect and is not
+      the answer: measured again on half second windows, each realigned so the
+      slide is nothing, the mean is the same 1.1. What is left is an impulse
+      response far longer than the 128 ms the filter models, and a small speaker
+      driven at half volume, which is not linear. A linear filter cannot cancel
+      what a speaker added non-linearly, however long it runs.
+    </p>
+
+    <p>
+      The consequence for the product is stated rather than softened. On a
+      desktop, a call on a speakerphone still sends the other side back to
+      themselves and headphones remain the answer. On Android the platform&rsquo;s
+      own canceller is used instead, through the voice communication audio source
+      and the system effect that comes with it, which is the right answer on a
+      device where one process owns both the speaker and the microphone and where
+      the vendor has measured that pairing.
+    </p>
 
     <h3>What is not built, and what it will cost</h3>
 
     <p>
-      <b>Echo cancellation and congestion control are absent.</b> Echo
-      cancellation in particular is not written from scratch by anybody sensible,
-      and without it a call on a speakerphone sends the other side back to
-      themselves. Device capture and the jitter buffer, listed here as missing in
-      earlier versions of this paper, are built.
+      <b>Congestion control is absent.</b> Device capture and the jitter buffer,
+      listed as missing in earlier versions of this paper, are built.
     </p>
 
     <p>
@@ -2024,11 +2247,17 @@
       Signal, one favourably and one not.
     </p>
     <p>
-      <strong>Favourably:</strong> Rotelyx sends no delivery receipts. The
-      published attack is significantly strengthened by receipts that guarantee
-      an immediate response, and their absence removes that amplification.
-      Delivery confirmation, if it is ever added, must be treated as a
-      metadata decision rather than a user experience one.
+      <strong>Favourably, and conditionally:</strong> read receipts exist and
+      are <b>off by default and set per conversation</b>. The published attack is
+      significantly strengthened by receipts that guarantee an immediate
+      response, so with them off that amplification is absent. Earlier revisions
+      of this report said Rotelyx sends no receipts at all, which stopped being
+      true when they were built, and the correction matters: <b>a conversation
+      that switches them on reinstates exactly the amplification the attack
+      relies on</b>, because a receipt is an envelope deposited in the opposite
+      direction within seconds of a collection. That is the reason the setting is
+      per conversation and off until asked for, and the reason it is documented
+      here as a metadata decision rather than as a user experience one.
     </p>
     <p>
       <strong>Unfavourably:</strong> tags rotate hourly rather than per message,
@@ -2095,11 +2324,27 @@
       binary that wrote plaintext.
     </p>
     <p>
+      <b>MLS group state is sealed at rest as well</b>, which an earlier
+      revision listed as an open item. A conversation is two blobs, the session
+      and the transcript, under the same Argon2id and XChaCha20-Poly1305 as the
+      identity, because an identity behind a passphrase beside a conversation in
+      the clear makes the passphrase a decoration.
+    </p>
+    <p>
+      The state rollback vector that comes with writing group state down is
+      handled rather than avoided. <b>A file is a copy, and a copy that resumes
+      sending is sending at generations the other side has already spent.</b> A
+      restored session is therefore marked as needing a rekey and refuses to send
+      until it has committed a fresh epoch, which also covers the case the
+      browser cannot distinguish from an ordinary reload: the same sealed blob
+      opened on a second device.
+    </p>
+    <p>
       Two limitations remain. The sealing key comes from a passphrase rather
-      than from a platform keystore, so its strength is whatever the user
-      chose. And MLS group state is not yet encrypted at rest, nor is there a
-      backup format that avoids introducing a state rollback vector. Both are
-      open items.
+      than from a platform keystore, so its strength is whatever the user chose.
+      And the rekey is not reachable from every client: the C ABI the Android
+      client speaks does not expose it, so on that client a conversation read
+      back from storage cannot yet send. Both are open items.
     </p>
 
     
@@ -2137,30 +2382,42 @@
     <h3>Calls are new, and thinly measured</h3>
 
     <p>
-      A call has been carried end to end between two processes through a relay,
-      and the figures in section 10 come from that run. They are one run on one
-      machine over a loopback relay. Nothing here has been measured across a
-      real network, under real loss, on a phone, or on a battery.
+      Calls have been carried end to end between two processes through a relay,
+      between two desktop clients over the production relay, and between an
+      Android phone and a desktop. The figures in section 10 come from those
+      runs. They are a handful of runs on one machine and one handset, on a home
+      network. Nothing here has been measured under deliberate loss, on a mobile
+      network, across a long path, or on a battery over the length of a real
+      conversation.
     </p>
 
     <p>
-      <b>There is no echo cancellation.</b> A call on a speakerphone sends the
-      other side back to themselves. Until that exists, calls are for headsets.
+      <b>Echo cancellation does not work in a room.</b> The measured figures are
+      in section 10: -0.0 dB continuously against a real speaker and microphone,
+      1.3 dB with the residual stage. On a desktop, calls are for headsets. On
+      Android the platform&rsquo;s canceller carries it, which means the property
+      belongs to the operating system rather than to this project and should not
+      be claimed as a result of the design.
     </p>
 
     <p>
-      The perceptual measurement is one listener rating three clips. It supports
-      the claim that the codec is usable at 12 kbit/s and it does not support any
-      comparison between the rates, because the spread within a rate is larger
-      than the gaps between them. A second listener is worth more than more clips
-      from the first.
+      The perceptual measurement is two listeners rating three clips each, and
+      what it established is that the measurement itself was broken: the rating
+      scale was never shown to either of them, so two sessions ran against two
+      unstated scales and cannot be pooled. What survives being scale
+      independent is that the untouched reference was scored 100 six times out of
+      six, and that by the second listener&rsquo;s criterion every rate stayed
+      intelligible. That says the words survive. It does not say the voice does,
+      and it supports no comparison between the rates.
     </p>
 
     <h3>Client trust boundaries differ</h3>
     <p>
-      Three clients exist and they do not offer the same guarantee. The desktop
-      client uses in process IPC, so plaintext never crosses a socket. The
-      browser harness speaks to a local process over loopback, which admits
+      Four clients exist and they do not offer the same guarantee. The Android
+      client links the engine into its own process through a C ABI, so plaintext
+      stays inside the application and its exposure is the platform&rsquo;s. The
+      desktop client uses in process IPC, so plaintext never crosses a socket.
+      The browser harness speaks to a local process over loopback, which admits
       anything on the machine that can reach that port. The command line client
       holds everything in one process.
     </p>
@@ -2178,8 +2435,9 @@
   <h2>Implementation status</h2>
   <div class="col">
     <p>
-      The implementation is written in Rust across sixteen first party crates
-      plus a vendored transport tree, and is exercised by 459 tests. The
+      The implementation is written in Rust across eighteen first party crates
+      plus a vendored transport tree, and is exercised by 592 tests. The Android
+      client is a separate tree with a suite of its own, not counted here. The
       distribution of those tests is more informative than the count.
     </p>
   </div>
@@ -2188,18 +2446,18 @@
     <table>
       <thead><tr><th>Component</th><th class="num">Tests</th><th>Notable coverage</th></tr></thead>
       <tbody>
-        <tr><td>Voice codec</td><td class="num">80</td><td>Real speech, deliberate stressors, and the transform against a slower reference</td></tr>
-        <tr><td>Blind mailbox and its server</td><td class="num">79</td><td>Expiry enforced on collection, not only on sweep, and a wrong passphrase rejected against a warm cache</td></tr>
-        <tr><td>Identity, framing, admission</td><td class="num">64</td><td>Admission control verified over live QUIC connections, not only in unit tests</td></tr>
-        <tr><td>Browser, phone and desktop clients</td><td class="num">46</td><td>The same engine in all three, and the C ABI boundary crossed in both directions</td></tr>
-        <tr><td>Media transport</td><td class="num">40</td><td>Per sender keys, the jitter buffer, and layers crossing a real wire</td></tr>
-        <tr><td>Hostile input</td><td class="num">33</td><td>Every parser reachable before authentication, under systematic mutation</td></tr>
-        <tr><td>Message crypto</td><td class="num">32</td><td>Negative test proving a PSK commit fails without the staged secret</td></tr>
-        <tr><td>Access control</td><td class="num">24</td><td>What a client is permitted to ask for, checked against frozen test vectors</td></tr>
-        <tr><td>Transport and path policy</td><td class="num">21</td><td>Live connections, and a guard that fails the build on any third party hostname</td></tr>
-        <tr><td>Relay and its status page</td><td class="num">15</td><td>Refusal to start on an empty allowlist, and admission limits under load</td></tr>
-        <tr><td>Terminal client</td><td class="num">15</td><td>The operator's serialised view scanned byte wise for plaintext, and a relayed address carrying no IP</td></tr>
-        <tr><td>Devices, calls, availability</td><td class="num">10</td><td>The backlog bound, and the record both landing pages read</td></tr>
+        <tr><td>Blind mailbox, its server and its client</td><td class="num">97</td><td>Expiry enforced on collection rather than only on sweep, and a wrong passphrase rejected against a warm cache</td></tr>
+        <tr><td>Voice codec</td><td class="num">95</td><td>Real speech, deliberate stressors, and the transform against a slower reference</td></tr>
+        <tr><td>Identity, framing, admission</td><td class="num">83</td><td>Admission control verified over live QUIC connections, not only in unit tests</td></tr>
+        <tr><td>Browser, phone and desktop clients</td><td class="num">73</td><td>The same engine in all three, the C ABI crossed in both directions, and two clients meeting through a code at a running mailbox</td></tr>
+        <tr><td>Media transport</td><td class="num">54</td><td>Per sender keys, the jitter buffer, and layers crossing a real wire</td></tr>
+        <tr><td>Message crypto</td><td class="num">48</td><td>Negative test proving a PSK commit fails without the staged secret</td></tr>
+        <tr><td>Hostile input</td><td class="num">36</td><td>Every parser reachable before authentication, under systematic mutation, in six crates</td></tr>
+        <tr><td>Access control</td><td class="num">25</td><td>What a client is permitted to ask for, checked against frozen test vectors</td></tr>
+        <tr><td>Transport and path policy</td><td class="num">23</td><td>Live connections, and a guard that fails the build on any third party hostname</td></tr>
+        <tr><td>Room acoustics</td><td class="num">20</td><td>The echo canceller, the noise suppressor and the dereverberator, against recorded speech</td></tr>
+        <tr><td>Relay and its status page</td><td class="num">19</td><td>Refusal to start on an empty allowlist, and admission limits under load</td></tr>
+        <tr><td>Terminal client</td><td class="num">16</td><td>The operator&rsquo;s serialised view scanned byte wise for plaintext, and a relayed address carrying no IP</td></tr>
       </tbody>
     </table>
   </div>
@@ -2207,8 +2465,12 @@
   <div class="col">
     <h3>Defects found by testing rather than review</h3>
     <p>
-      Three classes of defect survived code review and were caught only by tests
-      that crossed a layer boundary or used real sockets. We record them because
+      Six classes of defect survived code review. Four were caught by tests that
+      crossed a layer boundary, used real sockets, or ran between two
+      independent implementations. <b>Two were caught by neither, and were found
+      by an external audit</b>, which is the more useful half of this list: a
+      test suite is written by the people who wrote the assumptions, and both of
+      those defects are assumptions rather than mistakes. We record them because
       the pattern is more useful than the individual bugs.
     </p>
     <ol>
@@ -2229,14 +2491,43 @@
         reachability policy, and the post quantum commit function each compiled,
         passed their unit tests, and enforced nothing.
       </li>
+      <li>
+        <strong>An invariant that held only because nothing exercised it.</strong>
+        Two defects of this shape were found by an external audit in August 2026,
+        one in the media key schedule and one in the human-verifiable
+        fingerprint. Both are fixed. Neither is described here yet, because
+        clients already in use do not have the fix and the description would be
+        a working method against them. This report asks people who find
+        something to give us ninety days before publishing, and it would be a
+        poor kind of asking to hold ourselves to less. The detail lands in the
+        revision after the updated clients are out.
+      </li>
+      <li>
+        <strong>A failure that is indistinguishable from a normal condition.</strong>
+        A media frame that cannot be decoded is concealed, which is the correct
+        response to packet loss and the reason four separate faults in the call
+        path produced no error anywhere. Three thousand frames arrived, eleven
+        were usable, and every layer reported a healthy call. Section 10.
+      </li>
     </ol>
     <div class="callout">
       <span class="label">Observation</span>
       <p>
-        The recurring failure is not incorrect logic but unreached logic. Unit
-        tests confirm that a decision function returns the right answer; they do
-        not confirm that anything asks it. Every security control in Rotelyx now
-        has a test that exercises it through the surface a real caller uses.
+        The recurring failure is not incorrect logic but unreached logic, or
+        logic whose failure has been made to look like a condition the design
+        expects. Unit tests confirm that a decision function returns the right
+        answer; they do not confirm that anything asks it, and a component that
+        recovers gracefully from one cause will recover just as gracefully from a
+        different one and say nothing. Every security control in Rotelyx now has
+        a test that exercises it through the surface a real caller uses, and
+        every concealment path now reports how often it ran.
+      </p>
+      <p>
+        The two the audit found add a third shape to the pattern, and it is the
+        one a suite cannot catch on its own: <b>a property that every test
+        satisfies because every test does the thing once</b>. The defect appears
+        on the second time, and nothing in the suite had a reason to write that
+        test, because the person writing it held the assumption being tested.
       </p>
     </div>
   </div>
@@ -2288,29 +2579,61 @@
 <!-- ================= 11 ================= -->
 <section>
   <h2>Comparison</h2>
+  <div class="col">
+    <p>
+      A comparison is only worth reading if the comparators were chosen to be
+      hard. Measuring this work against a messenger that does not encrypt by
+      default would establish nothing, so the systems here are the ones that
+      share its objective: <b>SimpleX</b>, which removes user identifiers
+      entirely, and <b>Briar</b>, which removes the server. Signal is included as
+      the baseline everybody knows, not as the target.
+    </p>
+  </div>
   <div class="tablewrap">
     <table>
-      <thead><tr><th>Property</th><th>Telegram</th><th>Signal</th><th>Rotelyx</th></tr></thead>
+      <thead><tr><th>Property</th><th>Signal</th><th>SimpleX</th><th>Briar</th><th>Rotelyx</th></tr></thead>
       <tbody>
-        <tr><td>End to end encryption by default</td><td class="t-risk">No</td><td class="t-good">Yes</td><td class="t-good">Yes, no other mode</td></tr>
-        <tr><td>Group end to end encryption</td><td class="t-risk">None</td><td class="t-mid">Sender keys</td><td class="t-good">MLS tree</td></tr>
-        <tr><td>Identity</td><td class="t-risk">Phone number</td><td class="t-mid">Phone number</td><td class="t-good">Public key</td></tr>
-        <tr><td>Transport</td><td class="t-mid">Central</td><td class="t-mid">Central</td><td class="t-good">Peer to peer</td></tr>
-        <tr><td>Post quantum</td><td class="t-risk">No</td><td class="t-good">Yes</td><td class="t-good">Yes, hybrid</td></tr>
-        <tr><td>Message length hidden</td><td class="t-risk">No</td><td class="t-mid">Partially</td><td class="t-good">Padded and bucketed</td></tr>
-        <tr><td>Self hostable</td><td class="t-risk">No</td><td class="t-risk">Not practically</td><td class="t-good">Relay and mailbox</td></tr>
-        <tr><td>Resists statistical disclosure</td><td class="t-risk">No</td><td class="t-risk">No</td><td class="t-risk">No</td></tr>
-        <tr><td>Independent audit</td><td class="t-risk">Criticised</td><td class="t-good">Repeatedly audited</td><td class="t-risk">None</td></tr>
+        <tr><td>Phone number to register</td><td class="t-risk">Required</td><td class="t-good">No</td><td class="t-good">No</td><td class="t-good">No</td></tr>
+        <tr><td>Identifier others know you by</td><td class="t-mid">A number, or a username</td><td class="t-good">None of any kind</td><td class="t-mid">A key, exchanged out of band</td><td class="t-good">A different address per invitation</td></tr>
+        <tr><td>Who must run the delivery servers</td><td class="t-risk">Signal</td><td class="t-good">Anyone, including the user</td><td class="t-good">Nobody, devices sync directly</td><td class="t-good">Anyone, including the user</td></tr>
+        <tr><td>Delivers with no internet at all</td><td class="t-risk">No</td><td class="t-risk">No</td><td class="t-good">Yes, Bluetooth or a local network</td><td class="t-risk">No</td></tr>
+        <tr><td>Post quantum key exchange</td><td class="t-good">Yes</td><td class="t-good">Yes</td><td class="t-risk">No</td><td class="t-good">Yes, hybrid</td></tr>
+        <tr><td>Group encryption</td><td class="t-mid">Sender keys</td><td class="t-mid">Pairwise</td><td class="t-mid">Pairwise</td><td class="t-good">MLS tree</td></tr>
+        <tr><td>Message length hidden</td><td class="t-mid">Partially</td><td class="t-good">Padded</td><td class="t-mid">Not stated</td><td class="t-good">Padded and bucketed</td></tr>
+        <tr><td>Voice calls without WebRTC</td><td class="t-risk">No</td><td class="t-risk">No</td><td class="t-mid">No calls</td><td class="t-good">Own codec and media transport</td></tr>
+        <tr><td>Resists statistical disclosure</td><td class="t-risk">No</td><td class="t-mid">Harder, per contact queues</td><td class="t-good">No server to observe</td><td class="t-risk">No</td></tr>
+        <tr><td>Independent audit</td><td class="t-good">Repeatedly audited</td><td class="t-good">Audited</td><td class="t-good">Audited</td><td class="t-risk">None</td></tr>
       </tbody>
     </table>
   </div>
   <div class="col">
     <p>
-      The final two rows are the ones that matter for an honest assessment.
-      Rotelyx improves on both comparators in identity, transport topology, and
-      length hiding, matches Signal on post quantum protection, and is behind
-      both on the only measure that establishes trustworthiness rather than
-      design quality.
+      The last row is the one that matters, and Rotelyx is alone in it. Every
+      other system in this table has been looked at by somebody who did not
+      build it. Until that happens here, the rest of the table describes design
+      intent rather than established trustworthiness, which is why this report
+      opens by saying so.
+    </p>
+    <p>
+      Two rows are worth reading against Rotelyx rather than for it.
+      <b>Briar needs no server at all</b>, which is a stronger position than
+      self hosting and a thing this design cannot do: two Rotelyx devices with
+      no internet have no way to reach each other. And <b>SimpleX resists
+      statistical disclosure better than this does</b>, because a queue per
+      contact gives an operator less to cluster on than a tag that holds for an
+      hour. Both are real, and the honest summary is that Rotelyx wins on the
+      voice path and on group cryptography, loses on offline delivery and on tag
+      granularity, and is behind all three on review.
+    </p>
+    <p>
+      The row on calls is where the distance is largest and it is the reason the
+      media chapter is the longest one here. Every comparator that offers voice
+      offers it over WebRTC, which means a stack this project deliberately did
+      not adopt. Rotelyx encodes with its own transform codec, keys each speaker
+      from the MLS group, and refuses any network path that would disclose the
+      caller&rsquo;s address. What that costs is stated in section 10: no
+      congestion control, no group calls beyond a handful, and an echo canceller
+      that removes nothing in a real room.
     </p>
   </div>
 </section>
@@ -2321,15 +2644,16 @@
   <div class="col">
     <p>
       Rotelyx demonstrates that a messaging protocol can treat metadata as a
-      primary design constraint without inventing new cryptography. The three
+      primary design constraint without inventing new cryptography. The four
       mechanisms that carry that claim, hybrid post quantum injection at a
-      standard extension point, an inverted path selection objective, and a
-      mailbox that observes only an opaque tag and a bucketed payload, are each
-      small, each independently testable, and each accompanied by a statement of
-      what they do not cover.
+      standard extension point, an inverted path selection objective, a mailbox
+      that observes only an opaque tag and a bucketed payload, and an admission
+      path that needs no address on either side, are each small, each
+      independently testable, and each accompanied by a statement of what they
+      do not cover.
     </p>
     <p>
-      The most important limitation is section 9.1. The mailbox reduces what an
+      The most important limitation is section 11.1. The mailbox reduces what an
       operator can read to nothing and reduces what it can identify to a
       correlation problem, but it does not solve that correlation problem, and
       the published attacks against Signal's sealed sender apply. Claiming

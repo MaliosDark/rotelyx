@@ -24,7 +24,12 @@ use rotelyx_codec::mdct::{FRAME, SAMPLE_RATE, WINDOW};
 
 use rotelyx_media::transport::{MediaIn, MediaOut};
 use rotelyx_media::jitter::Playout;
-use rotelyx_media::SenderKeys;
+use rotelyx_media::{CallBinding, SenderKeys};
+
+/// Re-exported because every caller of [`Call::start`] has to name one, and
+/// making them all depend on the media crate to do it is friction that ends in
+/// somebody finding a way around the argument.
+pub use rotelyx_media::CallBinding as Binding;
 use rotelyx_net::PathPolicy;
 
 /// Bytes of codec payload per 20 ms frame.
@@ -63,6 +68,9 @@ pub struct Call {
     /// wrong once already and a loopback test did not catch it.
     inbound: HashMap<u8, MediaIn>,
     base: [u8; 32],
+    /// What separates this call's keys from the last one's. Held because every
+    /// receiver built later in the call has to derive from the same value.
+    call: CallBinding,
     /// The encoder needs `WINDOW` samples and advances `FRAME`, so half of every
     /// window is the tail of the last one and has to be kept.
     window: Vec<f32>,
@@ -152,7 +160,16 @@ impl Call {
     /// terminal client, the desktop window and anything later all reach this
     /// through whatever they already hold. Deriving those two is the caller's
     /// job because only the caller knows what a conversation is.
-    pub fn start(base: [u8; 32], index: u8, paths: PathPolicy) -> Result<Self> {
+    /// `call` is the value both ends agreed on for **this** call and no other.
+    /// Without it the keys would be a function of the MLS epoch alone, and two
+    /// calls inside one epoch would repeat every nonce. See
+    /// [`rotelyx_media::CallBinding`].
+    pub fn start(
+        base: [u8; 32],
+        index: u8,
+        call: CallBinding,
+        paths: PathPolicy,
+    ) -> Result<Self> {
         // Refused before a device is opened, so a user on a direct session does
         // not get a microphone light and then an error.
         if paths.permits_direct() {
@@ -162,7 +179,7 @@ impl Call {
             );
         }
 
-        let out = MediaOut::new(paths, SenderKeys::derive(&base, index))
+        let out = MediaOut::new(paths, SenderKeys::derive(&base, index, &call))
             .context("preparing to send audio")?;
 
         // The devices last, so a configuration error costs nothing.
@@ -173,6 +190,7 @@ impl Call {
             capture,
             playback,
             out,
+            call,
             encoder: LayeredEncoder::new(BYTES_PER_FRAME),
             decoders: HashMap::new(),
             inbound: HashMap::new(),
@@ -356,8 +374,13 @@ impl Call {
         };
 
         let inbound = self.inbound.entry(sender).or_insert_with(|| {
-            MediaIn::new(PathPolicy::RelayOnly, SenderKeys::derive(&self.base, sender))
-                .expect("RelayOnly is the policy this call refused to start without")
+            MediaIn::new(
+                PathPolicy::RelayOnly,
+                // The same binding this call was started with. A receiver built
+                // from a different one hears nothing, which is the point.
+                SenderKeys::derive(&self.base, sender, &self.call),
+            )
+            .expect("RelayOnly is the policy this call refused to start without")
         });
 
         // Arrival time on the local clock, which is what the buffer follows the

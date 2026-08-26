@@ -1,0 +1,9 @@
+# A security report must not arrive as a public issue, so the one place people
+# look for "how do I tell them" points at an address instead of at a form.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: mailto:contact@ideoa.co.uk
+    about: >-
+      Email contact@ideoa.co.uk. Do not open a public issue: it hands a working
+      exploit to everyone reading the repository. See SECURITY.md.
