@@ -138,8 +138,8 @@ encrypted to one joiner.
 **The padding ladder used to be the real limit, not the crypto.** It jumped
 64 KiB straight to 1 MiB, so a thousand member commit paid twelve times its own
 size and a single join cost every member a megabyte. That was paying to hide a
-number already in plain view: a commit's size is a function of the member count,
-and a fan-out names every recipient.
+number the operator can approximate anyway: a commit's size is a function of the
+member count, and a group message is a run of deposits it can count.
 
 The ladder now doubles from a 1 KiB floor, so nothing pays more than double. A
 join at a thousand members costs each member 128 KiB instead of 1 MiB.

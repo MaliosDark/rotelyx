@@ -541,26 +541,11 @@ enum Request {
     /// act.
     #[serde(rename = "revokeWake")]
     RevokeWake { secret: String },
-
-    /// Leave the same payload for many recipients at once.
-    ///
-    /// # What this changes, stated plainly
-    ///
-    /// Without it a sender uploads one envelope per recipient, and a group of
-    /// two hundred costs two hundred uploads. With it the sender uploads once
-    /// and the server makes the copies.
-    ///
-    /// The cost is that the group becomes **explicit**. Before, the operator
-    /// saw a burst of deposits and had to correlate them with who subscribes to
-    /// what; now the recipient set arrives written down in a single request.
-    /// The operator could already reach the same conclusion, since it sees
-    /// which connection listens on which tag, so this makes an existing
-    /// inference cheap rather than creating a new one. It is still a real
-    /// reduction, and it is the price of groups larger than a few dozen.
-    ///
-    /// `payload` must already be padded to a bucket by the sender. The server
-    /// never sees an unpadded length.
-    Fanout { tags: Vec<String>, payload: String },
+    // There is no `Fanout`. One request that named every recipient of a group
+    // message handed the operator the whole set in a single frame, and no
+    // client ever sent one: both seal per recipient and deposit each envelope
+    // separately. Removed rather than repaired. See the note where its handler
+    // was.
 }
 
 /// Sent by the server.
@@ -955,117 +940,28 @@ async fn handle_request(
             })
         }
 
-        Request::Fanout { tags, payload } => {
-            if tags.is_empty() {
-                return Some(Reply::Error {
-                    message: "a fan-out with no recipients".into(),
-                });
-            }
-            if tags.len() > cap.limits.max_fanout {
-                return Some(Reply::Error {
-                    message: format!(
-                        "the {} tier allows at most {} recipients per fan-out, and {} were named",
-                        cap.tier.name(),
-                        cap.limits.max_fanout,
-                        tags.len()
-                    ),
-                });
-            }
-
-            let mut parsed = Vec::with_capacity(tags.len());
-            for tag in &tags {
-                match parse_tag(tag) {
-                    Some(t) => parsed.push(t),
-                    None => {
-                        return Some(Reply::Error {
-                            message: "a tag must be 64 hex characters".into(),
-                        })
-                    }
-                }
-            }
-
-            let bytes = match BASE64.decode(payload.trim().as_bytes()) {
-                Ok(b) => b,
-                Err(_) => {
-                    return Some(Reply::Error {
-                        message: "payload is not valid base64".into(),
-                    })
-                }
-            };
-
-            // Refuse anything that is not already a bucket. Accepting a short
-            // payload and padding it here would mean the true length reached
-            // the server, which is the one thing the buckets exist to prevent.
-            if rotelyx_mailbox::Bucket::from_size(bytes.len()).is_none() {
-                return Some(Reply::Error {
-                    message: "payload must already be padded to a bucket size".into(),
-                });
-            }
-            if bytes.len() > cap.limits.max_payload {
-                return Some(Reply::Error {
-                    message: format!(
-                        "the {} tier allows at most {} bytes per envelope",
-                        cap.tier.name(),
-                        cap.limits.max_payload
-                    ),
-                });
-            }
-
-            // Charge for what actually leaves the server: one copy per
-            // recipient. Refused before storing, because a quota checked
-            // afterwards is not a quota.
-            let cost = (bytes.len() as u64).saturating_mul(parsed.len() as u64);
-            if let Charge::OverQuota { limit, used } = server
-                .meter
-                .lock()
-                .await
-                .charge(cap, cost, now_seconds() / 3600)
-            {
-                server.counters.refused.fetch_add(1, Ordering::Relaxed);
-                return Some(Reply::OverQuota {
-                    limit,
-                    used,
-                    tier: cap.tier.name(),
-                });
-            }
-
-            let now = now_seconds();
-            let mut stored = 0usize;
-            {
-                let mut mailbox = server.mailbox.lock().await;
-                for tag in &parsed {
-                    let envelope = match Envelope::seal(*tag, &bytes) {
-                        Ok(e) => e,
-                        Err(e) => {
-                            return Some(Reply::Error {
-                                message: format!("{e}"),
-                            })
-                        }
-                    };
-                    // A full slot for one recipient must not lose the message
-                    // for all the others.
-                    if mailbox
-                        .deposit_with(envelope, now, cap.limits.ttl_seconds, cap.limits.max_per_tag)
-                        .is_ok()
-                    {
-                        stored += 1;
-                    }
-                }
-            }
-
-            for tag in &parsed {
-                let _ = server.wake.send(Wake {
-                    tag: *tag,
-                    from: connection,
-                });
-            }
-
-            server.counters.deposits.fetch_add(1, Ordering::Relaxed);
-            Some(Reply::FannedOut {
-                stored,
-                asked: parsed.len(),
-            })
-        }
+        // `Fanout` was here, and it is gone rather than repaired.
+        //
+        // It let one request name every recipient of a group message so the
+        // server could make the copies. An audit pointed out what that hands
+        // over: the operator receives the whole recipient set of a message
+        // written down in a single frame, needing no correlation at all, which
+        // together with anything else it can observe reconstructs membership.
+        //
+        // What settled it was that no client ever sent one. The desktop and the
+        // phone both seal per recipient and deposit each envelope on its own,
+        // which is what the threat model assumed all along. So this was a
+        // capability nobody used, costing nothing to remove and handing the
+        // operator the one thing the tag design exists to withhold.
+        //
+        // The bandwidth argument for it was real and is not free to give up:
+        // depositing separately uploads the payload once per recipient rather
+        // than once. Should that ever have to come back, it must come back with
+        // the recipient set hidden from the server rather than handed to it.
+        //
+        // `max_fanout` stays in the capability limits. Tokens are signed by an
+        // issuer outside this tree and changing what they carry invalidates
+        // every one already minted.
 
         Request::Deposit { envelope } => {
             let bytes = match BASE64.decode(envelope.trim().as_bytes()) {
@@ -2798,122 +2694,8 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         }
     }
 
-    /// One upload must reach every recipient. This is what makes a group of
-    /// hundreds possible on a phone.
-    #[tokio::test]
-    async fn a_fanout_reaches_every_recipient_from_one_upload() {
-        use rotelyx_wasm::Session;
 
-        let url = spawn_server().await;
-        let slot = 490_000u64;
 
-        // Four members of a real conversation.
-        let mut sessions: Vec<Session> = (0..4)
-            .map(|i| Session::new(&format!("m{i}")).expect("id"))
-            .collect();
-        sessions[0].found().expect("found");
-        for i in 1..4 {
-            let kp = sessions[i].key_package().expect("kp");
-            let inv = sessions[0].invite(&kp).expect("invite");
-            sessions[i].join(&inv.welcome, &inv.ratchet_tree).expect("join");
-            for j in 1..i {
-                sessions[j].receive(&inv.commit).expect("commit");
-            }
-        }
-
-        // Each listens on its own tags.
-        let mut clients = Vec::new();
-        for session in sessions.iter().skip(1) {
-            let mut ws = connect(&url).await;
-            subscribe(&mut ws, session.my_polling_tags(slot, 2).expect("tags")).await;
-            assert_eq!(recv_json(&mut ws).await["op"], "ready");
-            clients.push(ws);
-        }
-
-        // One upload for all three.
-        let mut sender = connect(&url).await;
-        let ciphertext = sessions[0].send("one for everybody").expect("send");
-        let tags = sessions[0].recipient_tags(slot).expect("tags");
-        let payload = sessions[0].padded_payload(&ciphertext).expect("pad");
-        assert_eq!(tags.len(), 3);
-
-        sender
-            .send(WsMessage::Text(
-                serde_json::json!({"op": "fanout", "tags": tags, "payload": payload})
-                    .to_string()
-                    .into(),
-            ))
-            .await
-            .expect("fanout");
-
-        let ack = recv_json(&mut sender).await;
-        assert_eq!(ack["op"], "fannedout");
-        assert_eq!(ack["stored"], 3);
-        assert_eq!(ack["asked"], 3);
-
-        // And every one of them can read it.
-        for (ws, session) in clients.iter_mut().zip(sessions.iter_mut().skip(1)) {
-            let envelope = recv_json(ws).await;
-            assert_eq!(envelope["op"], "envelope");
-            let mine = session
-                .open_mine(envelope["envelope"].as_str().unwrap(), slot, 2)
-                .expect("addressed to us");
-            assert_eq!(
-                message_text(&session.receive(&mine).expect("decrypt")).expect("plaintext"),
-                "one for everybody"
-            );
-        }
-    }
-
-    /// A payload that has not been padded must be refused. Padding it on the
-    /// server would hand the server the true length, which is the one thing
-    /// the buckets exist to withhold.
-    #[tokio::test]
-    async fn a_fanout_refuses_an_unpadded_payload() {
-        let url = spawn_server().await;
-        let mut client = connect(&url).await;
-
-        client
-            .send(WsMessage::Text(
-                serde_json::json!({
-                    "op": "fanout",
-                    "tags": ["aa".repeat(32)],
-                    "payload": BASE64.encode(b"short and unpadded"),
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .expect("send");
-
-        assert!(recv(&mut client).await.contains("padded"));
-    }
-
-    /// An unbounded fan-out would turn the mailbox into a spray tool.
-    #[tokio::test]
-    async fn an_oversized_fanout_is_refused() {
-        let url = spawn_server().await;
-        let mut client = connect(&url).await;
-
-        // One past what the free tier allows, which is what an unauthenticated
-        // connection gets.
-        let over = access::Tier::Free.limits().max_fanout + 1;
-        let tags: Vec<String> = (0..over).map(|i| format!("{i:064x}")).collect();
-        client
-            .send(WsMessage::Text(
-                serde_json::json!({
-                    "op": "fanout",
-                    "tags": tags,
-                    "payload": BASE64.encode(&vec![0u8; 1024]),
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .expect("send");
-
-        assert!(recv(&mut client).await.contains("at most"));
-    }
 
     /// The key the paid-tier tests mint with. Not an issuer: minting here is
     /// `rotelyx_capability::testing`, a test fixture. The issuer itself is a
@@ -2951,22 +2733,6 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         recv_json(client).await
     }
 
-    async fn try_fanout(client: &mut Client, recipients: usize, payload_len: usize) -> serde_json::Value {
-        let tags: Vec<String> = (0..recipients).map(|i| format!("{i:064x}")).collect();
-        client
-            .send(WsMessage::Text(
-                serde_json::json!({
-                    "op": "fanout",
-                    "tags": tags,
-                    "payload": BASE64.encode(&vec![0u8; payload_len]),
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .expect("fanout");
-        recv_json(client).await
-    }
 
     /// The whole point of a paid tier: an unpaid client must not be able to do
     /// the things that are sold, and no amount of reconnecting changes that.
@@ -2977,22 +2743,19 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
         let mut client = connect(&url).await;
 
-        // A group wider than the free tier allows.
-        let refused = try_fanout(&mut client, free.max_fanout + 1, 1024).await;
+        // An envelope larger than the free tier allows. The limit used to be
+        // demonstrated through a fan-out, which no longer exists; a deposit
+        // reaches the same check, which is the one that matters.
+        let refused = try_deposit(&mut client, free.max_payload * 16).await;
         assert_eq!(refused["op"], "error");
         assert!(
             refused["message"].as_str().unwrap().contains("free"),
             "the refusal must name the tier, got {refused}"
         );
 
-        // An envelope larger than the free tier allows.
-        let refused = try_fanout(&mut client, 1, free.max_payload * 16).await;
-        assert_eq!(refused["op"], "error");
-        assert!(refused["message"].as_str().unwrap().contains("bytes per envelope"));
-
         // Reconnecting does not help: these are checked per request.
         let mut again = connect(&url).await;
-        assert_eq!(try_fanout(&mut again, free.max_fanout + 1, 1024).await["op"], "error");
+        assert_eq!(try_deposit(&mut again, free.max_payload * 16).await["op"], "error");
 
         // With a token, the same requests succeed.
         let token = rotelyx_capability::testing::mint(
@@ -3009,8 +2772,20 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert_eq!(granted["tier"], "plus");
         assert_eq!(granted["maxFanout"], Tier::Plus.limits().max_fanout);
 
-        let allowed = try_fanout(&mut paid, free.max_fanout + 1, 1024).await;
-        assert_eq!(allowed["op"], "fannedout", "a paid client must be allowed, got {allowed}");
+        let allowed = try_deposit(&mut paid, free.max_payload * 16).await;
+        assert_eq!(allowed["op"], "stored", "a paid client must be allowed, got {allowed}");
+    }
+
+    /// Deposit one envelope of a given size and return whatever came back.
+    async fn try_deposit(client: &mut Client, payload_len: usize) -> serde_json::Value {
+        let tag = rotelyx_mailbox::Tag::from_bytes(&[9u8; 32]).expect("tag");
+        let envelope = Envelope::seal(tag, &vec![0u8; payload_len]).expect("seal");
+        deposit(
+            client,
+            data_encoding::BASE64.encode(&envelope.to_bytes()),
+        )
+        .await;
+        serde_json::from_str(&recv(client).await).expect("a reply")
     }
 
     /// A forged or expired token must leave the client on the free tier rather
@@ -3033,7 +2808,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert_eq!(reply["op"], "error");
 
         // Still free, so still refused.
-        let refused = try_fanout(&mut client, Tier::Free.limits().max_fanout + 1, 1024).await;
+        let refused = try_deposit(&mut client, Tier::Free.limits().max_payload * 16).await;
         assert_eq!(refused["op"], "error");
     }
 
@@ -3059,33 +2834,6 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert!(reply["message"].as_str().unwrap().contains("no tokens"));
     }
 
-    /// Quota is charged per copy that leaves the server, and refused before
-    /// anything is stored.
-    #[tokio::test]
-    async fn a_fanout_is_charged_per_recipient_and_refused_over_quota() {
-        let (url, key) = spawn_paid_server().await;
-
-        // Enough for exactly four 1 KiB copies.
-        let token = rotelyx_capability::testing::mint(
-            key,
-            [4u8; 16],
-            Tier::Plus,
-            now_seconds() / 3600 + 24,
-            4 * 1024,
-        );
-
-        let mut client = connect(&url).await;
-        assert_eq!(auth(&mut client, &token).await["bytesRemaining"], 4 * 1024);
-
-        // Four recipients, one KiB each: exactly the allowance.
-        assert_eq!(try_fanout(&mut client, 4, 1024).await["op"], "fannedout");
-
-        // One more copy is over.
-        let refused = try_fanout(&mut client, 1, 1024).await;
-        assert_eq!(refused["op"], "overquota", "got {refused}");
-        assert_eq!(refused["limit"], 4 * 1024);
-        assert_eq!(refused["tier"], "plus");
-    }
 
     /// A client that unsubscribes must stop consuming envelopes.
     ///

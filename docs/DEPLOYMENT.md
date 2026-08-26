@@ -298,15 +298,19 @@ JSON over WebSocket. Deliberately small.
 |---|---|
 | Client | `{"op":"subscribe","tags":["<64 hex>", ...]}` |
 | Client | `{"op":"deposit","envelope":"<base64>"}` |
-| Client | `{"op":"fanout","tags":["<64 hex>", ...],"payload":"<base64>"}` |
 | Client | `{"op":"unsubscribe","tags":["<64 hex>", ...]}` |
 | Client | `{"op":"auth","token":"<base64url>"}` |
 | Server | `{"op":"ready","waiting":N}` |
 | Server | `{"op":"envelope","envelope":"<base64>"}` |
 | Server | `{"op":"stored"}` |
-| Server | `{"op":"fannedout","stored":N,"asked":M}` |
 | Server | `{"op":"dropped","listening":N}` |
 | Server | `{"op":"tier","tier":"plus","maxFanout":256,...}` |
+
+There is no `fanout`. A request that named every recipient of a group message
+handed the operator the whole set in one frame; both clients deposit per
+recipient instead, so it was removed. `maxFanout` remains in a granted tier
+because tokens are signed outside this tree and changing what they carry
+invalidates every one already minted.
 | Server | `{"op":"overquota","limit":N,"used":M,"tier":"..."}` |
 | Server | `{"op":"error","message":"..."}` |
 

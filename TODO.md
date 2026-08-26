@@ -1,6 +1,6 @@
 # Rotelyx TODO
 
-Status as of 26 August 2026. 599 tests passing.
+Status as of 26 August 2026. 596 tests passing.
 
 **Calls work, between two implementations.** A phone and a desktop have called
 each other over the production relay with this project's own codec, and audio
@@ -81,6 +81,12 @@ composition still has not had an independent cryptographic review.
 - **The panic guard at the C boundary did nothing.** `catch_unwind` under
   `panic = "abort"` catches nothing, so a malformed input took the host
   application rather than the call. There is a `mobile` profile that unwinds.
+- **The recipient set of a group message arrived in one frame.** One request
+  named every recipient so the server could make the copies, which handed the
+  operator the whole set with no correlation needed. No client had ever sent
+  one: both seal per recipient and deposit separately. Removed rather than
+  repaired, and the deposits are shuffled now, because sealing returns them in
+  sorted roster order and that order is each recipient's sender index.
 - **Smaller ones, all closed**: decrypted secrets landed in unzeroized buffers;
   `receive` threw away the sender MLS had authenticated; the tag-key
   documentation told a third-party client to pin a key forever, which would let

@@ -573,8 +573,8 @@
       </div>
       <div class="card">
         <span class="chip care">Design decision</span>
-        <h3>Groups fan out on the server</h3>
-        <p>Every member has its own tag, or one shared tag would be collected by whoever reached it first and the rest would never see the message. One copy per member is unusable on a phone if the client uploads each, so the sender uploads once and names every recipient.</p>
+        <h3>Every member has its own tag</h3>
+        <p>One shared tag would be collected by whoever reached it first and the rest would never see the message. So a group message is one envelope per member, deposited separately and in a shuffled order. The server once accepted a single request naming every recipient, which saved the upload and handed the operator the whole set in one frame; no client ever sent one, and it is gone.</p>
       </div>
       <div class="card">
         <span class="chip no">Not enforced by the protocol</span>

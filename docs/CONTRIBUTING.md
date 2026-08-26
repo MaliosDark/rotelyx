@@ -72,14 +72,14 @@ sudo mkswap /swapfile2 && sudo swapon /swapfile2
 cargo test --workspace
 ```
 
-**599 tests**, and 11 more in the issuer crate that is not published here. The
+**596 tests**, and 11 more in the issuer crate that is not published here. The
 distribution matters more than the count:
 
 | Suite | Tests | What it proves |
 |---|---:|---|
 | `rotelyx-codec` | 84 + 17 | The transform, the quantiser, real speech, and every corrupted frame |
 | `rotelyx-core` | 74 + 16 | Identity, sealed storage, framing, admission control **over real sockets** |
-| `rotelyx-mailbox-server` | 62 | Deposits, fan-out, tiers, quota, the vault, waking a phone |
+| `rotelyx-mailbox-server` | 58 | Deposits, acknowledged collection, tiers, quota, the vault, waking a phone |
 | `rotelyx-media` | 51 + 9 | Per sender keys, the jitter buffer, layers crossing a real wire |
 | `rotelyx-crypto` | 37 + 17 | MLS conversations, X-Wing, the PQ secret reaching the key schedule |
 | `rotelyx-wasm` | 40 | The message layer as the browser and the phone both see it |

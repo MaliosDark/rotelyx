@@ -86,6 +86,27 @@ Empty DATA frames queued without limit, so a peer that never drains a stream can
 grow memory without bound. Reached through `hickory-resolver`, which the
 transport uses for DNS. Updated 0.4.15 to 0.4.18.
 
+### Two majors of x25519-dalek — neither is ours to choose
+
+An audit noted two implementations of the same primitive in one binary, which is
+a fair thing to notice: it doubles the code that has to be right and means a
+fix landing in one does not reach the other.
+
+Neither version is a direct dependency. 2.0.1 arrives through
+`hpke-rs-rust-crypto` under `openmls_rust_crypto`, and 3.0.0 through `x-wing`.
+Unifying them means moving one of those upstreams, and the only route for the
+MLS side is the same release-candidate jump that RUSTSEC-2026-0207 would need.
+That is a large change to the most security-critical dependency in the tree, to
+remove a duplicate rather than a defect.
+
+What makes it tolerable is that the two are not used for the same thing. The MLS
+copy performs the classical half of the ordinary handshake; the X-Wing copy
+performs the classical half of the post-quantum composition. The composition's
+whole claim is that both halves must break, so it does not rest on either copy
+alone.
+
+Revisit with OpenMLS 0.9, alongside the libcrux entries below.
+
 ### RUSTSEC-2023-0071 — rsa — no patch exists, and nothing here performs the operation
 
 The Marvin attack: a non-constant-time private-key operation leaks the key

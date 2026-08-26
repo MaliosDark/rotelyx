@@ -1365,31 +1365,40 @@
     </p>
 
     <h3>The cost of addressing everyone</h3>
-
     <p>
-      One tag per member means one copy per member. Uploading each copy
-      separately makes a group of a hundred unusable on a phone, so the mailbox
-      fans out: a sender uploads once and names every recipient, and the server
-      makes the copies.
+      One tag per member means one copy per member. For a while the server made
+      those copies: a sender uploaded once and named every recipient, which
+      saved uploading the same payload as many times as there are members.
     </p>
-
     <p>
-      That is a real reduction in what the operator has to infer, and it is
-      stated rather than glossed. Before, it saw a burst of deposits and had to
-      correlate them against who subscribes to what. Now the recipient set
-      arrives written down in a single request. The operator could already reach
-      the same conclusion, since it observes which connection listens on which
-      tag, so this makes an existing inference cheap rather than creating a new
-      one. It is the price of groups beyond a few dozen.
+      That request no longer exists. What it handed the operator was the entire
+      recipient set of a message, written down in one frame, requiring no
+      correlation at all. The earlier defence of it was that the operator could
+      reach the same conclusion anyway by watching which connection listens on
+      which tag, so it made an existing inference cheap rather than creating a
+      new one. That is true and it is not enough: cheap and certain are
+      different things, and the second is what reconstructs a membership graph.
     </p>
-
     <p>
-      Padding stays on the client. The server refuses a payload that is not
-      already a bucket size, because a server that padded on the sender&rsquo;s
-      behalf would be handed the true length, which is the one thing the buckets
-      exist to withhold.
+      What settled it was that no client had ever sent one. Both clients seal per
+      recipient and deposit each envelope separately, which is what this section
+      assumed in the first place. It was a capability nobody used, so removing it
+      cost nothing and closed the largest single disclosure left in the design.
     </p>
-
+    <p>
+      The residual is stated rather than claimed away. Separate deposits still
+      leave one connection depositing several envelopes in quick succession, and
+      an operator that counts them learns roughly how large the group is. What it
+      no longer receives is which tags those are, in one place, as a list. The
+      order is shuffled before they go, because a sender index is a position in
+      the sorted roster and depositing in that order would have labelled every
+      recipient with theirs.
+    </p>
+    <p>
+      Should the bandwidth ever have to be reclaimed, it has to be reclaimed
+      without handing the set over: uploading once and letting the server copy is
+      only safe if the server cannot see who the copies are for.
+    </p>
     <h3>Post-quantum material for more than two</h3>
 
     <p>
@@ -2449,7 +2458,7 @@
   <div class="col">
     <p>
       The implementation is written in Rust across eighteen first party crates
-      plus a vendored transport tree, and is exercised by 599 tests. The Android
+      plus a vendored transport tree, and is exercised by 596 tests. The Android
       client is a separate tree with a suite of its own, not counted here. The
       distribution of those tests is more informative than the count.
     </p>

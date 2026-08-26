@@ -2215,10 +2215,14 @@ mod tests {
         );
     }
 
-    /// A fan-out addresses everyone except the sender, and the payload it
-    /// carries is already padded.
+    /// Sealing for a group produces one envelope per other member, each already
+    /// padded.
+    ///
+    /// Named for the client operation rather than for the server one it used to
+    /// feed. The server no longer takes a request that names every recipient at
+    /// once; a client deposits these separately, in an order it shuffles.
     #[test]
-    fn a_fanout_names_every_recipient_and_carries_a_padded_payload() {
+    fn sealing_for_a_group_addresses_everyone_but_the_sender() {
         let mut group = group_of(4);
         let slot = 490_000u64;
 

@@ -124,7 +124,7 @@ read all stored envelopes, retain them past TTL, and correlate timing.
 - **Defended:** taking the free tier away from everybody else. The free
   capability used a constant meter id, so every unauthenticated caller in the
   world shared one 64 MiB bucket that resets once a day. Filling it needed no
-  token, no payment and no identity, and at the free fanout that is 41 deposits:
+  token, no payment and no identity, and at the free payload size that is a few dozen deposits:
   the metering built to stop abuse was the cheapest way to commit it. Each free
   caller now gets its own id. It does not stop somebody opening many connections,
   which is the ordinary flooding question and is **still not defended**, but one

@@ -106,6 +106,29 @@ const LOOKBACK: u64 = 2;
 /// notices on a keystroke and is most of the time spent parked on a socket.
 const TURN: Duration = Duration::from_millis(250);
 
+/// A Fisher-Yates shuffle over whatever randomness the system has.
+///
+/// Refuses rather than falling back to an order, because the caller is using
+/// this to remove an order and a silent no-op would leave it believing the
+/// order was gone.
+fn shuffle<T>(items: &mut [T]) -> Result<()> {
+    if items.len() < 2 {
+        return Ok(());
+    }
+    let mut bytes = vec![0u8; items.len() * 8];
+    getrandom::fill(&mut bytes).context("no randomness to order deposits with")?;
+
+    for i in (1..items.len()).rev() {
+        let mut word = [0u8; 8];
+        word.copy_from_slice(&bytes[i * 8..i * 8 + 8]);
+        // Modulo bias over a 64 bit draw into a range this small is far below
+        // anything an observer could measure.
+        let j = (u64::from_le_bytes(word) % (i as u64 + 1)) as usize;
+        items.swap(i, j);
+    }
+    Ok(())
+}
+
 /// Hours since the Unix epoch, the same formula both clients use.
 fn bucket() -> Result<u64> {
     Ok(SystemTime::now()
@@ -1281,11 +1304,25 @@ impl Meeting {
                     println!("  deposited to {tags:?} at bucket {bucket}");
                 }
 
-        for envelope in self
+        let mut envelopes = self
             .session
             .seal_for_group(&ciphertext, bucket)
-            .map_err(to_anyhow)?
-        {
+            .map_err(to_anyhow)?;
+
+        // Shuffled before they go.
+        //
+        // A sender index is this member's position in the sorted roster, and
+        // `seal_for_group` returns the envelopes in that order. Depositing them
+        // in it tells the operator each recipient's position, which is a stable
+        // label for a member that survives every tag rotation. Shuffling costs
+        // one pass over a short vector and takes that away.
+        //
+        // It does not hide that these deposits belong together. They still
+        // arrive in a burst from one connection, which is the residual the
+        // threat model names and this does not close.
+        shuffle(&mut envelopes)?;
+
+        for envelope in envelopes {
             mailbox.deposit(&envelope).await?;
         }
         Ok(())
@@ -1509,6 +1546,37 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The shuffle actually moves things, and never loses one.
+    ///
+    /// A shuffle that quietly returned its input would be the worst kind of
+    /// fix: the order it exists to remove would still be there and the comment
+    /// would say otherwise.
+    #[test]
+    fn deposits_are_not_left_in_roster_order() {
+        let mut moved = 0;
+        for _ in 0..40 {
+            let mut items: Vec<u8> = (0..16).collect();
+            shuffle(&mut items).expect("randomness");
+
+            let mut back = items.clone();
+            back.sort_unstable();
+            assert_eq!(back, (0..16).collect::<Vec<u8>>(), "the shuffle lost one");
+
+            if items != (0..16).collect::<Vec<u8>>() {
+                moved += 1;
+            }
+        }
+        assert!(
+            moved > 35,
+            "40 shuffles of 16 items left the order alone {} times",
+            40 - moved
+        );
+
+        // And the degenerate sizes do not panic.
+        shuffle::<u8>(&mut []).expect("empty");
+        shuffle(&mut [1u8]).expect("one");
     }
 
     /// A code shown on one side and read on the other becomes a conversation,
