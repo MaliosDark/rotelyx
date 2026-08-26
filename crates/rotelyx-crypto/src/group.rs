@@ -276,11 +276,16 @@ impl Member {
     /// encapsulation itself carries the secret; with more, one chosen secret is
     /// wrapped to each member, because MLS looks a pre-shared key up by a
     /// single id and every member has to arrive at the same value.
+    /// `binding` must name the group, the epoch, and this member's signature
+    /// key. A wrap that does not carry the same three does not open, which is
+    /// what makes it un-mintable by a stranger and un-replayable into a later
+    /// epoch.
     pub fn unwrap_group_pq(
         &self,
         wrapped: &crate::WrappedPqSecret,
+        binding: &crate::hybrid::PqBinding,
     ) -> Result<PqSecret, crate::hybrid::HybridError> {
-        self.hybrid_sk.unwrap_pq(wrapped)
+        self.hybrid_sk.unwrap_pq(wrapped, binding)
     }
 
     /// Produce a key package so others can add this member to a group.
@@ -466,8 +471,16 @@ pub struct MembershipChange {
 /// A caller that does not care can still say so, and has to say it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Received {
-    /// Decrypted application data.
-    Message(Vec<u8>),
+    /// Decrypted application data, and the leaf MLS authenticated as its
+    /// author.
+    ///
+    /// `sender` is `None` only for a message from outside the group's own
+    /// membership, which an application should treat as unattributed rather
+    /// than as anybody in particular.
+    Message {
+        sender: Option<openmls::prelude::LeafNodeIndex>,
+        bytes: Vec<u8>,
+    },
     /// The membership changed. Show this to the user: see ADV-7 in the threat
     /// model, where surfacing it is a security control rather than a nicety.
     MembershipChanged(MembershipChange),
@@ -481,7 +494,15 @@ impl Received {
     /// For callers that have already dealt with the other cases, and for tests.
     pub fn message(self) -> Option<Vec<u8>> {
         match self {
-            Self::Message(bytes) => Some(bytes),
+            Self::Message { bytes, .. } => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// The author, when this was application data and MLS attributed it.
+    pub fn sender(&self) -> Option<openmls::prelude::LeafNodeIndex> {
+        match self {
+            Self::Message { sender, .. } => *sender,
             _ => None,
         }
     }
@@ -583,18 +604,32 @@ impl Conversation {
     /// message key: a leaked tag key must reveal *where* to look in a mailbox,
     /// never what is there.
     ///
-    /// # This value is epoch-bound: pin it
+    /// # Re-derive this per epoch, and keep a bounded window of them
     ///
-    /// The MLS exporter changes with every epoch, which is the whole point of
-    /// forward secrecy and exactly wrong for addressing. If each side derived a
-    /// tag key from its current epoch, a sender one commit ahead of a recipient
-    /// would deposit under a tag the recipient cannot compute, and the message
-    /// would be silently undeliverable.
+    /// The MLS exporter changes with every epoch, so a sender one commit ahead
+    /// of a recipient deposits under a tag the recipient cannot yet compute,
+    /// and the message is silently undeliverable. That is a real problem and it
+    /// has an obvious wrong answer, which this documentation used to give:
+    /// derive the key once at join time and pin it forever.
     ///
-    /// So derive this **once**, at a mutually known epoch (join time), and
-    /// persist it. Unlinkability over time does not depend on rotating this
-    /// key; it comes from [`TagKey::tag_for_epoch`], which already derives a
-    /// fresh tag per coarse time bucket from a fixed key.
+    /// **Do not do that.** A pinned tag key is a permanent one, and a member
+    /// removed from the conversation keeps it. Removal is supposed to end their
+    /// ability to address the group; with a pinned key they can still compute
+    /// every other member's tag for the life of the conversation, which means
+    /// they can still read what is waiting under it and, before delivery and
+    /// removal were separated, could destroy it.
+    ///
+    /// The correct handling is what the clients in this repository do: derive a
+    /// key at each epoch, keep the last few so a message from just before a
+    /// commit still opens, and let the older ones fall out of the window. That
+    /// bounds how long a removed member's knowledge survives to the width of
+    /// that window rather than to the life of the group.
+    ///
+    /// Unlinkability *within* an epoch still comes from
+    /// [`TagKey::tag_for_epoch`], which derives a fresh tag per coarse time
+    /// bucket. The two mechanisms answer different questions and both are
+    /// needed: the time bucket hides a conversation from an observer, and the
+    /// epoch window is what makes removal mean something.
     ///
     /// [`TagKey::tag_for_epoch`]: https://docs.rs/rotelyx-mailbox
     pub fn mailbox_tag_key(&self, member: &Member) -> Result<[u8; 32], GroupError> {
@@ -965,10 +1000,26 @@ impl Conversation {
             .process_message(&receiver.provider, protocol)
             .map_err(mls)?;
 
+        // Who MLS says sent this, taken before the content is consumed.
+        //
+        // It used to be dropped on the floor. OpenMLS authenticates the sending
+        // leaf and the result went nowhere, so `Received::Message` carried
+        // bytes and no author. Harmless with two people, because there is only
+        // one other person it could be from. In a group it means the
+        // application cannot say who spoke, and the same enum's own
+        // documentation exists to make membership changes visible for exactly
+        // that kind of reason. The reasoning was not carried through to
+        // application messages.
+        let sender = match processed.sender() {
+            openmls::prelude::Sender::Member(index) => Some(*index),
+            _ => None,
+        };
+
         match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app) => {
-                Ok(Received::Message(app.into_bytes()))
-            }
+            ProcessedMessageContent::ApplicationMessage(app) => Ok(Received::Message {
+                sender,
+                bytes: app.into_bytes(),
+            }),
             ProcessedMessageContent::StagedCommitMessage(staged) => {
                 // Read the roster on both sides of the merge rather than asking
                 // the staged commit what it contains. A commit can add, remove
@@ -1088,7 +1139,7 @@ mod tests {
                     Err(_) => {}
                     Ok(other) => assert_ne!(
                         other,
-                        Received::Message(plaintext.to_vec()),
+                        Received::Message { sender: None, bytes: plaintext.to_vec() },
                         "a message with byte {position} altered was accepted as the original"
                     ),
                 }

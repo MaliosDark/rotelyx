@@ -311,6 +311,21 @@ fn dispatch(req: &Value) -> Res {
         }
         "session.commitPq" => json!(engine(s.commit_pq())?),
 
+        // A conversation read back from storage cannot send until it has moved
+        // to a fresh epoch.
+        //
+        // A file is a copy, and a copy that resumes sending is sending at
+        // generations the other side has already spent: the receiver deletes
+        // each generation's secret as it uses it, so those messages are refused
+        // and nothing says so. The core marks a restored session and refuses
+        // until this has run.
+        //
+        // It was reachable from the browser, which binds the method directly,
+        // and not from here, so on a phone "keep my chats" produced a
+        // conversation that opened and would not send. Returns the commit, which
+        // the caller must deliver before anything else.
+        "session.rekeyAfterRestore" => json!(engine(s.rekey_after_restore())?),
+
         "session.send" => {
             let text = str_arg(req, "text")?;
             json!(engine(s.send(&text))?)
@@ -636,7 +651,7 @@ fn call_lock() -> std::sync::MutexGuard<'static, HashMap<i64, Call>> {
 /// `call` must point at `call_len` readable bytes, or be null. They are copied
 /// before this returns and are not retained.
 #[no_mangle]
-pub extern "C" fn rotelyx_call_open(
+pub unsafe extern "C" fn rotelyx_call_open(
     session: u64,
     bytes_per_frame: i32,
     fidelity: i32,

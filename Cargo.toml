@@ -111,6 +111,22 @@ opt-level = 2
 # staring at a blank screen saved, and nobody can perceive the difference in
 # how fast an ChaCha20 runs. That trade does not hold for the native build,
 # which is why this is a separate profile rather than a change to `release`.
+# The mobile library, where a panic must not take the host application with it.
+#
+# `release` aborts on panic, which is right for a binary we own: a process in an
+# unknown state should stop. It is wrong for a `cdylib` loaded into somebody
+# else's process, and it quietly disabled the guard at the FFI boundary. That
+# entry point wraps the engine in `catch_unwind` and says a malformed input can
+# crash a call rather than the process, and under `panic = "abort"` there is
+# nothing to catch: the whole application goes.
+#
+# Unwinding costs some binary size and makes that promise true. Anything built
+# from this profile must keep the `catch_unwind`, because unwinding across a C
+# boundary without one is undefined behaviour.
+[profile.mobile]
+inherits = "release"
+panic = "unwind"
+
 [profile.wasm]
 inherits = "release"
 opt-level = "z"

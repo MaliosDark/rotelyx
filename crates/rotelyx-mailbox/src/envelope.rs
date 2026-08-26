@@ -27,6 +27,24 @@ const TAG_CONTEXT: &str = "rotelyx mailbox tag v1";
 /// mistaken for the group key it was derived from.
 const MEMBER_TAG_CONTEXT: &str = "rotelyx mailbox member tag v1";
 
+/// Separate again, so the key a payload is sealed under is not the key tags are
+/// derived from and neither can be computed from the other.
+const PAYLOAD_CONTEXT: &str = "rotelyx mailbox payload v1";
+
+/// What a sealed payload starts with, so a version can be told from a length.
+const PAYLOAD_VERSION: u8 = 2;
+
+/// Domain separation inside the AEAD, bound as associated data.
+const PAYLOAD_AAD: &[u8] = b"rotelyx envelope payload v2";
+
+/// XChaCha20-Poly1305: 24 bytes of nonce, 16 of tag, one of version.
+const NONCE_LEN: usize = 24;
+const AEAD_TAG_LEN: usize = 16;
+/// Marks the end of the real bytes, before the envelope's zero padding.
+const PADDING_TERMINATOR: u8 = 0x80;
+
+pub const PAYLOAD_OVERHEAD: usize = 1 + NONCE_LEN + AEAD_TAG_LEN + 1;
+
 #[derive(Debug, thiserror::Error)]
 pub enum EnvelopeError {
     #[error("payload of {len} bytes exceeds the largest bucket ({max})")]
@@ -37,6 +55,18 @@ pub enum EnvelopeError {
 
     #[error("tag must be exactly 32 bytes, got {0}")]
     BadTag(usize),
+
+    #[error("no randomness available to seal a payload with")]
+    NoRandomness,
+
+    #[error("could not seal the payload")]
+    Sealing,
+
+    #[error("this is not a sealed payload of a version we know")]
+    NotSealed,
+
+    #[error("the payload did not open: it belongs to another conversation or another epoch")]
+    NotOurs,
 }
 
 /// Fixed payload sizes.
@@ -184,6 +214,39 @@ impl TagKey {
         TagKey(out)
     }
 
+    /// The key an envelope's payload is sealed under.
+    ///
+    /// # Why a payload needs sealing at all
+    ///
+    /// Because the thing being deposited was never opaque. An envelope carried
+    /// the serialised MLS message verbatim, and RFC 9420 puts `group_id` and
+    /// `epoch` in **cleartext** in the framing, ahead of the encrypted content.
+    /// So an operator read a stable group identifier out of every envelope it
+    /// held, with no key at all, and every envelope of a conversation linked to
+    /// every other one across every tag rotation and all of time. Rotating tags
+    /// hid *who*. They did not hide *that these belong together*, which is most
+    /// of a social graph, and it is the property this crate exists to provide.
+    ///
+    /// # Why this key and not the tag key
+    ///
+    /// Derived from the same group secret through a separate context, so that
+    /// holding a tag never yields the key that opens what it addresses. It is
+    /// the **group** key rather than a per-member one on purpose: one payload is
+    /// deposited under many tags when a group message fans out, so every
+    /// recipient must open the same bytes.
+    ///
+    /// The epoch is already inside it, because the tag key comes from the MLS
+    /// exporter and that changes with every epoch. A payload from a spent epoch
+    /// therefore cannot be opened under the current one, without anything extra
+    /// being bound in.
+    pub fn payload_key(&self) -> PayloadKey {
+        let mut hasher = blake3::Hasher::new_derive_key(PAYLOAD_CONTEXT);
+        hasher.update(&self.0[..]);
+        let mut out = Zeroizing::new([0u8; 32]);
+        hasher.finalize_xof().fill(&mut out[..]);
+        PayloadKey(out)
+    }
+
     /// The tag to use for `epoch`.
     ///
     /// `epoch` is a coarse time bucket agreed by both sides: hours, not
@@ -276,6 +339,13 @@ impl fmt::Debug for TagKey {
 
 /// An opaque mailbox address. This is the only routing information the operator
 /// receives, and it carries no identity.
+// `Hash` is derived while `PartialEq` is written by hand, which clippy refuses
+// at deny level and is correct here. The hand-written `eq` is constant time and
+// compares the same 32 bytes the derived `hash` reads, so the invariant clippy
+// protects, that equal values hash equally, holds. Making `hash` constant time
+// would mean a linear scan of every subscriber for every deposit, and a hash is
+// not a comparison of secrets.
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Clone, Copy, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Tag([u8; 32]);
 
@@ -341,6 +411,117 @@ impl fmt::Debug for Tag {
     }
 }
 
+/// The key a payload is sealed under. See [`TagKey::payload_key`].
+pub struct PayloadKey(Zeroizing<[u8; 32]>);
+
+impl fmt::Debug for PayloadKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PayloadKey(<redacted>)")
+    }
+}
+
+impl PayloadKey {
+    /// Make a payload opaque, before it is put in an envelope.
+    ///
+    /// The result is what the operator holds. Nothing about the conversation is
+    /// readable in it: not the group, not the epoch, not the length past the
+    /// bucket it is padded to afterwards.
+    /// `tag` binds the payload to the address it is deposited under.
+    ///
+    /// `None` is for the one path that cannot: a group fan-out uploads one
+    /// payload and names every recipient, so the same bytes land under many
+    /// tags and no single one can be bound in. That path already concedes the
+    /// recipient set to the operator, and this is the other half of the same
+    /// trade, said out loud rather than left implicit.
+    ///
+    /// Everywhere else, binding the tag is what stops an operator moving an
+    /// envelope from one address to another. The inner MLS layer would refuse
+    /// the result, so the consequence was small, but "another layer catches it"
+    /// is not the same as "it cannot be done".
+    pub fn seal(&self, tag: Option<Tag>, plaintext: &[u8]) -> Result<Vec<u8>, EnvelopeError> {
+        use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+        use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::fill(&mut nonce).map_err(|_| EnvelopeError::NoRandomness)?;
+
+        let aad = Self::aad(tag);
+        let cipher = XChaCha20Poly1305::new_from_slice(&self.0[..])
+            .map_err(|_| EnvelopeError::Sealing)?;
+        let sealed = cipher
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| EnvelopeError::Sealing)?;
+
+        let mut out = Vec::with_capacity(PAYLOAD_OVERHEAD + plaintext.len());
+        out.push(PAYLOAD_VERSION);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&sealed);
+        // A terminator, so the end of the real bytes can be found without
+        // reading them. The envelope pads with zeroes to a bucket and carries no
+        // length, by design: a length field would hand the operator exactly what
+        // the buckets exist to hide. That leaves the recipient to find where the
+        // padding starts, and "the last byte that is not zero" is wrong, because
+        // the last byte of an authentication tag is zero one time in two hundred
+        // and fifty six. This is the ISO 7816-4 answer and it costs one byte.
+        out.push(PADDING_TERMINATOR);
+        Ok(out)
+    }
+
+    /// The associated data: a label, and the tag when there is one.
+    ///
+    /// A discriminator byte separates "bound to this tag" from "bound to none",
+    /// so a fan-out payload cannot be passed off as a payload for a particular
+    /// address, or the reverse.
+    fn aad(tag: Option<Tag>) -> Vec<u8> {
+        let mut out = Vec::with_capacity(PAYLOAD_AAD.len() + 33);
+        out.extend_from_slice(PAYLOAD_AAD);
+        match tag {
+            Some(t) => {
+                out.push(1);
+                out.extend_from_slice(t.as_bytes());
+            }
+            None => out.push(0),
+        }
+        out
+    }
+
+    /// And back, for a recipient who holds the same group secret.
+    pub fn open(&self, tag: Option<Tag>, sealed: &[u8]) -> Result<Vec<u8>, EnvelopeError> {
+        use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+        use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+
+        // Trailing zeroes from the bucket padding are still attached. The AEAD
+        // would refuse them, so they come off first, and a version byte at the
+        // front is what makes the start of the real bytes findable at all.
+        let sealed = match sealed.iter().rposition(|b| *b != 0) {
+            Some(last) if sealed[last] == PADDING_TERMINATOR => &sealed[..last],
+            _ => return Err(EnvelopeError::NotSealed),
+        };
+
+        if sealed.len() < PAYLOAD_OVERHEAD || sealed[0] != PAYLOAD_VERSION {
+            return Err(EnvelopeError::NotSealed);
+        }
+
+        let cipher = XChaCha20Poly1305::new_from_slice(&self.0[..])
+            .map_err(|_| EnvelopeError::Sealing)?;
+        cipher
+            .decrypt(
+                XNonce::from_slice(&sealed[1..1 + NONCE_LEN]),
+                Payload {
+                    msg: &sealed[1 + NONCE_LEN..],
+                    aad: &Self::aad(tag),
+                },
+            )
+            .map_err(|_| EnvelopeError::NotOurs)
+    }
+}
+
 /// What the operator stores: a tag, and a bucket-sized opaque payload.
 #[derive(Clone, PartialEq, Eq)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -370,6 +551,20 @@ impl Envelope {
 
     pub fn tag(&self) -> Tag {
         self.tag
+    }
+
+    /// What a recipient names this envelope by when acknowledging it.
+    ///
+    /// Collection used to remove on delivery, which meant anybody who learned a
+    /// tag could drain it and the messages simply never arrived: silent,
+    /// permanent, and invisible to both ends. Delivery and removal are separate
+    /// now, and this is the handle in between. It is derived from the stored
+    /// bytes, so a receipt cannot name an envelope the sender never sent.
+    pub fn digest(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("rotelyx envelope receipt v1");
+        hasher.update(self.tag.as_bytes());
+        hasher.update(&self.payload);
+        *hasher.finalize().as_bytes()
     }
 
     pub fn bucket(&self) -> Result<Bucket, EnvelopeError> {
@@ -430,6 +625,51 @@ impl fmt::Debug for Envelope {
 
 #[cfg(test)]
 mod tests {
+    /// The padding must come off whatever the ciphertext ends with.
+    ///
+    /// This is the regression test for a one-in-two-hundred-and-fifty-six bug.
+    /// The envelope pads with zeroes and carries no length, so the recipient has
+    /// to find where the real bytes stop, and the first version looked for the
+    /// last byte that is not zero. The last byte of a Poly1305 tag is zero as
+    /// often as any other value, and when it was, a byte of the tag was eaten
+    /// with the padding and the payload did not open. Intermittent, and it
+    /// looked like a clock-skew problem.
+    #[test]
+    fn a_payload_opens_whatever_its_last_byte_is() {
+        let key = TagKey::new([9u8; 32]).payload_key();
+        let tag = Tag::from_bytes(&[4u8; 32]).expect("tag");
+
+        // Enough attempts that a tag ending in zero is a near certainty.
+        for i in 0..1000u32 {
+            let plaintext = format!("message {i}");
+            let sealed = key.seal(Some(tag), plaintext.as_bytes()).expect("seal");
+
+            // Padded exactly as an envelope pads it.
+            let envelope = Envelope::seal(tag, &sealed).expect("envelope");
+
+            let opened = key
+                .open(Some(tag), envelope.payload())
+                .unwrap_or_else(|e| panic!("attempt {i} did not open: {e}"));
+            assert_eq!(opened, plaintext.as_bytes());
+        }
+    }
+
+    /// A payload bound to one tag must not open under another.
+    #[test]
+    fn a_payload_does_not_move_between_tags() {
+        let key = TagKey::new([9u8; 32]).payload_key();
+        let here = Tag::from_bytes(&[1u8; 32]).expect("tag");
+        let there = Tag::from_bytes(&[2u8; 32]).expect("tag");
+
+        let sealed = key.seal(Some(here), b"addressed to one place").expect("seal");
+        assert!(key.open(Some(here), &sealed).is_ok());
+        assert!(
+            key.open(Some(there), &sealed).is_err(),
+            "an operator moved an envelope to another tag and it still opened"
+        );
+        assert!(key.open(None, &sealed).is_err());
+    }
+
     use super::*;
 
     #[test]

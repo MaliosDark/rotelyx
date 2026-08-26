@@ -153,6 +153,54 @@ impl Mailbox {
             .collect()
     }
 
+    /// Everything waiting under `tags`, **without removing it**.
+    ///
+    /// The delivery half of delivery-then-acknowledgement. Removing on delivery
+    /// meant that anybody who could derive a tag could drain it: a current
+    /// group member can derive every other member's tag, and so can one who was
+    /// removed, for as long as the epochs they still hold are inside the
+    /// polling window. The recipient was never told, and the messages simply
+    /// never arrived.
+    ///
+    /// Nothing here decides whether the asker is entitled to the tag, because
+    /// nothing can: a tag is derived from a secret the server does not hold, so
+    /// possession is the only evidence there is. What changes is the
+    /// consequence. Reading a tag you should not read is now eavesdropping on
+    /// ciphertext you cannot open, rather than destroying it.
+    pub fn peek_many(&self, tags: &[Tag], now: u64) -> Vec<Envelope> {
+        tags.iter()
+            .filter_map(|t| self.slots.get(t))
+            .flat_map(|slot| {
+                slot.iter()
+                    .filter(|s| !self.is_expired(s, now))
+                    .map(|s| s.envelope.clone())
+            })
+            .collect()
+    }
+
+    /// Remove one envelope, named by the digest the recipient acknowledged.
+    ///
+    /// Returns whether anything went. A receipt for something already gone is
+    /// not an error: two clients of one identity can both collect, and the
+    /// second acknowledgement arriving after the first is ordinary.
+    pub fn remove_acknowledged(&mut self, tags: &[Tag], digest: &[u8; 32], now: u64) -> bool {
+        for tag in tags {
+            let Some(slot) = self.slots.get_mut(tag) else {
+                continue;
+            };
+            let before = slot.len();
+            slot.retain(|s| &s.envelope.digest() != digest);
+            if slot.len() != before {
+                if slot.is_empty() {
+                    self.slots.remove(tag);
+                }
+                let _ = now;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Collect across a recipient's whole polling window in one call.
     pub fn collect_many(&mut self, tags: &[Tag], now: u64) -> Vec<Envelope> {
         tags.iter()
@@ -230,6 +278,59 @@ impl Mailbox {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Delivery must not destroy, and only a receipt may.
+    ///
+    /// The regression test for a tag being a weapon. Collection removed on
+    /// delivery, and a tag is derivable by every current member of a group and
+    /// by one recently removed, for as long as the epochs they hold are inside
+    /// the polling window. So any of them could drain another member's mailbox:
+    /// silently, permanently, and with the recipient never told, because a
+    /// message that never arrives looks exactly like a message never sent.
+    #[test]
+    fn reading_a_tag_does_not_destroy_what_is_under_it() {
+        let mut store = Mailbox::new(3600);
+        let tag = Tag::from_bytes(&[7u8; 32]).expect("tag");
+        let envelope = Envelope::seal(tag, b"something worth keeping").expect("seal");
+        let digest = envelope.digest();
+
+        store.deposit(envelope, 0).expect("deposit");
+
+        // Somebody reads it. Twice, because a drain would be silent on the
+        // second read and this is what used to make it silent.
+        assert_eq!(store.peek_many(&[tag], 0).len(), 1);
+        assert_eq!(
+            store.peek_many(&[tag], 0).len(),
+            1,
+            "reading a tag removed what was under it"
+        );
+
+        // The intended recipient acknowledges, and only then does it go.
+        assert!(store.remove_acknowledged(&[tag], &digest, 0));
+        assert_eq!(store.peek_many(&[tag], 0).len(), 0);
+
+        // A second receipt for the same envelope is ordinary, not an error:
+        // two clients of one identity can both have collected it.
+        assert!(!store.remove_acknowledged(&[tag], &digest, 0));
+    }
+
+    /// A receipt may only name an envelope under a tag it was given.
+    #[test]
+    fn a_receipt_does_not_reach_a_tag_it_was_not_given() {
+        let mut store = Mailbox::new(3600);
+        let mine = Tag::from_bytes(&[1u8; 32]).expect("tag");
+        let theirs = Tag::from_bytes(&[2u8; 32]).expect("tag");
+
+        let envelope = Envelope::seal(theirs, b"not yours to drop").expect("seal");
+        let digest = envelope.digest();
+        store.deposit(envelope, 0).expect("deposit");
+
+        // Naming the right digest against the wrong tag list does nothing.
+        assert!(!store.remove_acknowledged(&[mine], &digest, 0));
+        assert_eq!(store.peek_many(&[theirs], 0).len(), 1);
+    }
+
     use super::*;
     use crate::envelope::TagKey;
 

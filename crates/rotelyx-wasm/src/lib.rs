@@ -41,10 +41,18 @@ use wasm_bindgen::prelude::*;
 
 use rotelyx_crypto::{
     deserialize_key_package, serialize_key_package, Conversation, HybridCiphertext,
-    HybridPublicKey, Member, MemberState, PqSecret, WrappedPqSecret,
+    HybridPublicKey, Member, MemberState, PqBinding, PqSecret, WrappedPqSecret,
 };
 use rotelyx_mailbox::{Envelope, Tag, TagKey};
 use zeroize::Zeroizing;
+
+/// What names one staging slot: the group and the epoch the secret is for.
+fn binding_id(group_id: &[u8], epoch: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(group_id.len() + 8);
+    out.extend_from_slice(group_id);
+    out.extend_from_slice(&epoch.to_be_bytes());
+    out
+}
 
 /// How many past epochs of tag keys to keep.
 ///
@@ -204,6 +212,12 @@ pub struct Session {
     /// Set between `encapsulateTo`/`openPq` and `commitPq`. The post-quantum
     /// secret has no home in MLS state until the commit carries it in.
     pending_pq: Option<PqSecret>,
+    /// Which (group, epoch) pairs already have a staged post-quantum secret.
+    ///
+    /// First one wins. Without this, a second wrap arriving after the
+    /// legitimate one would replace the value the commit is about to look up,
+    /// and the member would fall out of the group when the real commit landed.
+    staged_pq: Vec<Vec<u8>>,
 }
 
 #[wasm_bindgen]
@@ -220,6 +234,7 @@ impl Session {
             conversation: None,
             tag_keys: Vec::new(),
             pending_pq: None,
+            staged_pq: Vec::new(),
         })
     }
 
@@ -386,12 +401,36 @@ impl Session {
     /// is chosen here and sealed to each member rather than derived pairwise.
     #[wasm_bindgen(js_name = beginGroupPq)]
     pub fn begin_group_pq(&mut self, hybrid_public_keys: Vec<String>) -> Result<Vec<String>, Error> {
+        let group = self
+            .conversation
+            .as_ref()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+        let group_id = group.group_id();
+        let epoch = group.epoch();
+
+        // Each recipient is named by its own signature key, so a wrap made for
+        // one member does not open for another, and the roster order that pairs
+        // a key with a wrap is the same order the caller passes them in.
+        let roster: Vec<Vec<u8>> = group
+            .roster()
+            .into_iter()
+            .map(|p| p.signature_key)
+            .filter(|k| *k != self.member.signature_key())
+            .collect();
+
+        if roster.len() != hybrid_public_keys.len() {
+            return Err(Error::new(
+                "a hybrid public key is needed for every other member, in roster order",
+            ));
+        }
+
         let secret = PqSecret::generate();
 
         let mut wrapped = Vec::with_capacity(hybrid_public_keys.len());
-        for encoded in &hybrid_public_keys {
+        for (encoded, recipient) in hybrid_public_keys.iter().zip(&roster) {
             let pk = HybridPublicKey::from_bytes(&decode(encoded)?).map_err(err)?;
-            wrapped.push(BASE64.encode(&secret.wrap_for(&pk).map_err(err)?.to_bytes()));
+            let binding = PqBinding::new(&group_id, epoch, recipient);
+            wrapped.push(BASE64.encode(&secret.wrap_for(&pk, &binding).map_err(err)?.to_bytes()));
         }
 
         self.pending_pq = Some(secret);
@@ -406,14 +445,29 @@ impl Session {
     #[wasm_bindgen(js_name = openGroupPq)]
     pub fn open_group_pq(&mut self, wrapped_b64: &str) -> Result<(), Error> {
         let wrapped = WrappedPqSecret::from_bytes(&decode(wrapped_b64)?).map_err(err)?;
-        let secret = self.member.unwrap_group_pq(&wrapped).map_err(err)?;
 
         let member = &self.member;
         let group = self
             .conversation
             .as_ref()
             .ok_or_else(|| Error::new("no conversation yet"))?;
+
+        // The wrap has to have been made for this group, at this epoch, for us.
+        // Anything else does not open, which is what stops a stranger holding
+        // our published hybrid key from minting one, and stops a wrap captured
+        // at an earlier epoch from being replayed into this one.
+        let binding = PqBinding::new(&group.group_id(), group.epoch(), &member.signature_key());
+        let secret = member.unwrap_group_pq(&wrapped, &binding).map_err(err)?;
+
+        // First one wins. Overwriting would let a second wrap, arriving after
+        // the legitimate one, replace the value the commit is about to look up.
+        if self.staged_pq.contains(&binding_id(&group.group_id(), group.epoch())) {
+            return Err(Error::new(
+                "a post-quantum secret is already staged for this group and epoch",
+            ));
+        }
         group.stage_pq_secret(member, &secret).map_err(err)?;
+        self.staged_pq.push(binding_id(&group.group_id(), group.epoch()));
         Ok(())
     }
 
@@ -501,7 +555,7 @@ impl Session {
         // same way. A message with an accent in it produced a document no
         // parser would accept, which in Spanish is most messages.
         let value = match outcome {
-            rotelyx_crypto::Received::Message(plaintext) => {
+            rotelyx_crypto::Received::Message { bytes: plaintext, .. } => {
                 let text = String::from_utf8(plaintext)
                     .map_err(|_| Error::new("decrypted payload is not valid UTF-8"))?;
                 serde_json::json!({ "kind": "message", "text": text })
@@ -537,8 +591,19 @@ impl Session {
     /// Unix epoch, supplied by the caller: reading a clock in here would make
     /// the crate untestable and would hide clock skew instead of surfacing it.
     pub fn seal(&self, ciphertext_b64: &str, time_bucket: u64) -> Result<String, Error> {
-        let tag = self.tag_key()?.tag_for_epoch(time_bucket);
-        let envelope = Envelope::seal(tag, &decode(ciphertext_b64)?).map_err(err)?;
+        let key = self.tag_key()?;
+        let tag = key.tag_for_epoch(time_bucket);
+
+        // The MLS message is made opaque **before** it becomes a payload. Its
+        // own framing carries the group id and the epoch in cleartext, so
+        // depositing it raw handed the operator a stable name for the
+        // conversation in every envelope, under every rotated tag, for ever.
+        let sealed = key
+            .payload_key()
+            .seal(Some(tag), &decode(ciphertext_b64)?)
+            .map_err(err)?;
+
+        let envelope = Envelope::seal(tag, &sealed).map_err(err)?;
         Ok(BASE64.encode(&envelope.to_bytes()))
     }
 
@@ -562,7 +627,22 @@ impl Session {
             ));
         }
 
-        Ok(BASE64.encode(envelope.payload()))
+        // Every tag key we still remember, newest first: a payload deposited
+        // just before a commit was sealed under the epoch before this one, and
+        // refusing it would lose the message rather than protect anything.
+        let sealed = envelope.payload();
+        let tag = envelope.tag();
+        for (_, key) in self.tag_keys.iter().rev() {
+            let pk = key.payload_key();
+            // Bound to this tag, or unbound because it came through a fan-out.
+            if let Ok(plain) = pk.open(Some(tag), sealed).or_else(|_| pk.open(None, sealed)) {
+                return Ok(BASE64.encode(&plain));
+            }
+        }
+
+        Err(Error::new(
+            "the payload did not open under any epoch key we hold",
+        ))
     }
 
     /// Everyone in the conversation, as display names.
@@ -765,14 +845,20 @@ impl Session {
     /// the buckets exist to withhold.
     #[wasm_bindgen(js_name = paddedPayload)]
     pub fn padded_payload(&self, ciphertext_b64: &str) -> Result<String, Error> {
+        // Made opaque first, exactly as a single deposit is. One payload goes
+        // to every recipient of a fan-out, so it is sealed under the group's
+        // key rather than any one member's, and every member can open it.
+        let sealed = self
+            .tag_key()?
+            .payload_key()
+            .seal(None, &decode(ciphertext_b64)?)
+            .map_err(err)?;
+
         // Sealing under a throwaway tag is the shortest path to the padding
         // rule staying in one place: the bucket table lives in the envelope
         // type and is not duplicated here.
-        let envelope = Envelope::seal(
-            Tag::from_bytes(&[0u8; 32]).map_err(err)?,
-            &decode(ciphertext_b64)?,
-        )
-        .map_err(err)?;
+        let envelope =
+            Envelope::seal(Tag::from_bytes(&[0u8; 32]).map_err(err)?, &sealed).map_err(err)?;
 
         Ok(BASE64.encode(envelope.payload()))
     }
@@ -823,7 +909,12 @@ impl Session {
             .ok_or_else(|| Error::new("no conversation yet"))?;
 
         let mine = self.member.signature_key();
-        let payload = decode(payload_b64)?;
+
+        // Sealed once, under the group's key, and then addressed to each member
+        // in turn. Every recipient derives the same payload key from the same
+        // exported secret, so one opaque blob serves all of them, and the
+        // operator sees a different tag and different bytes for each.
+        let plaintext = decode(payload_b64)?;
 
         let mut out = Vec::new();
         for participant in group.roster() {
@@ -833,6 +924,13 @@ impl Session {
             let tag = key
                 .for_member(&participant.signature_key)
                 .tag_for_epoch(time_bucket);
+            // Sealed per recipient rather than once, so each payload is bound
+            // to the address it is deposited under and an operator cannot move
+            // one to another.
+            let payload = key
+                .payload_key()
+                .seal(Some(tag), &plaintext)
+                .map_err(err)?;
             out.push(BASE64.encode(&Envelope::seal(tag, &payload).map_err(err)?.to_bytes()));
         }
         Ok(out)
@@ -851,7 +949,20 @@ impl Session {
         if !self.my_tags(time_bucket, lookback)?.contains(&envelope.tag()) {
             return Err(Error::new("envelope is not addressed to us in this window"));
         }
-        Ok(BASE64.encode(envelope.payload()))
+
+        let sealed = envelope.payload();
+        let tag = envelope.tag();
+        for (_, key) in self.tag_keys.iter().rev() {
+            let pk = key.payload_key();
+            // Bound to this tag, or unbound because it came through a fan-out.
+            if let Ok(plain) = pk.open(Some(tag), sealed).or_else(|_| pk.open(None, sealed)) {
+                return Ok(BASE64.encode(&plain));
+            }
+        }
+
+        Err(Error::new(
+            "the payload did not open under any epoch key we hold",
+        ))
     }
 
     /// The tag to deposit under for `time_bucket`.
@@ -982,6 +1093,7 @@ impl Session {
             // commit that follows it, and resuming into the middle of that
             // would produce a commit the group cannot apply.
             pending_pq: None,
+            staged_pq: Vec::new(),
         })
     }
 
@@ -1635,6 +1747,73 @@ mod tests {
     /// The whole browser handshake, executed on the host.
     ///
     /// This is the sequence the chat page performs. Running it here means a
+    /// Nothing an operator holds may name the conversation.
+    ///
+    /// This is the regression test for the defect that defeated the mailbox's
+    /// reason to exist. An envelope carried the serialised MLS message
+    /// verbatim, and RFC 9420 puts `group_id` and `epoch` in cleartext in the
+    /// framing ahead of the encrypted content. So the operator read a stable
+    /// identifier out of every envelope with no key at all, and every envelope
+    /// of a conversation linked to every other across every tag rotation and
+    /// all of time. Rotating tags hid who. They did not hide that these belong
+    /// together, which is most of a social graph.
+    ///
+    /// The assertion is on the bytes the operator actually stores, at three
+    /// tags hours apart, which is exactly what the auditor's reproduction did.
+    #[test]
+    fn an_envelope_does_not_name_the_conversation() {
+        let mut alice = Session::new("alice").expect("identity");
+        let mut bob = Session::new("bob").expect("identity");
+
+        alice.found().expect("found");
+        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
+
+        let group_id = alice.group_id().expect("group id");
+        let raw = data_encoding::HEXLOWER
+            .decode(group_id.as_bytes())
+            .expect("hex");
+        assert!(!raw.is_empty());
+
+        // Three deposits, hours apart, under three different rotating tags.
+        let mut payloads = Vec::new();
+        let mut tags = Vec::new();
+        for bucket in [100u64, 137, 941] {
+            let ct = alice.send("the same conversation").expect("send");
+            let envelope_b64 = alice.seal(&ct, bucket).expect("seal");
+            let bytes = BASE64.decode(envelope_b64.as_bytes()).expect("b64");
+            let envelope = Envelope::from_bytes(&bytes).expect("parse");
+
+            tags.push(hex(envelope.tag().as_bytes()));
+            payloads.push(envelope.payload().to_vec());
+        }
+
+        // Different tags, which was already true and was never the problem.
+        assert_ne!(tags[0], tags[1]);
+        assert_ne!(tags[1], tags[2]);
+
+        // And now: the group id appears in none of the stored bytes.
+        for (i, payload) in payloads.iter().enumerate() {
+            assert!(
+                !payload.windows(raw.len()).any(|w| w == raw.as_slice()),
+                "envelope {i} carries the group id in the clear"
+            );
+        }
+
+        // Nor do two payloads of one conversation resemble each other. They are
+        // the same plaintext under the same key, and they must still differ,
+        // because a repeated ciphertext is a link of its own.
+        assert_ne!(payloads[0], payloads[1]);
+        assert_ne!(payloads[1], payloads[2]);
+
+        // The recipient still reads them.
+        let ct = alice.send("hello").expect("send");
+        let envelope = alice.seal(&ct, 100).expect("seal");
+        let opened = bob.open(&envelope, 100, 2).expect("open");
+        let text = bob.receive(&opened).expect("receive");
+        assert!(text.contains("hello"), "the recipient could not read it: {text}");
+    }
+
     /// The safety number must move when the roster does.
     ///
     /// This is the regression test for a fingerprint that attested to nothing.

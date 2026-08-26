@@ -221,11 +221,26 @@ impl CallBinding {
     /// the same epoch.
     pub const MIN_BYTES: usize = 8;
 
-    /// Both ends must pass the same bytes, and neither may reuse them.
+    /// Both ends must pass the same bytes, and **neither may ever reuse them**.
     ///
-    /// In practice this is the identifier the call signalling already carries:
-    /// the side that rings mints it, the side that answers echoes it, and both
-    /// derive from it.
+    /// # The obligation this type cannot enforce
+    ///
+    /// Length is checked here. Freshness is not, and cannot be: this crate sees
+    /// one call at a time and has no memory of the last one. **A caller that
+    /// passes the same bytes to two calls reinstates the defect this argument
+    /// exists to close**, in full, with no error and no symptom. Nothing about
+    /// the call will look wrong; an eavesdropper who recorded both simply reads
+    /// them.
+    ///
+    /// So the contract is: a value chosen fresh for each call, from a source
+    /// that will not repeat, agreed by both ends. In practice that is the
+    /// identifier the call signalling already carries. The side that rings mints
+    /// it, the side that answers echoes it, and both derive from it. A counter
+    /// is not enough on its own, because two devices restoring from the same
+    /// backup would count from the same place.
+    ///
+    /// Anything writing a new client against this API should read that
+    /// paragraph twice. It is the one thing here that a compiler cannot check.
     pub fn new(bytes: &[u8]) -> Result<Self, MediaError> {
         if bytes.len() < Self::MIN_BYTES {
             return Err(MediaError::CallBindingTooShort {

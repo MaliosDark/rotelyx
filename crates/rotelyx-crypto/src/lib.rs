@@ -38,5 +38,4 @@ pub use hybrid::{
     WrappedPqSecret, WRAPPED_SECRET_LEN,
     derive_psk, psk_binding,
     HybridCiphertext, HybridError, HybridKem, HybridPublicKey, HybridSecretKey, PqSecret,
-    CIPHERTEXT_LEN, PUBLIC_KEY_LEN, SECRET_KEY_LEN,
-};
+    CIPHERTEXT_LEN, PUBLIC_KEY_LEN, SECRET_KEY_LEN, PqBinding};

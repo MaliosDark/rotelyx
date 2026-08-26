@@ -1,6 +1,6 @@
 # Rotelyx TODO
 
-Status as of 26 August 2026. 592 tests passing.
+Status as of 26 August 2026. 599 tests passing.
 
 **Calls work, between two implementations.** A phone and a desktop have called
 each other over the production relay with this project's own codec, and audio
@@ -58,6 +58,39 @@ group id is fixed at creation, so the number never moved when a member joined,
 when a device was added, or when a key changed. The one primitive a person can
 check by hand could not detect the thing it exists to detect. It is now the
 sorted, length-prefixed set of member signature keys.
+
+**A second audit round confirmed both by reproduction and the rating dropped
+from Critical to High.** The rest of that report is now closed too, and the
+short version of each is below. What none of it changes is the gate: the
+composition still has not had an independent cryptographic review.
+
+- **The mailbox held the group id in the clear.** An envelope carried the MLS
+  message verbatim, and RFC 9420 puts `group_id` and `epoch` in cleartext ahead
+  of the encrypted content, so an operator read a stable name for the
+  conversation out of every envelope with no key. Rotating tags hid who; they
+  did not hide that these belong together. The payload is now sealed under a key
+  derived from the same exporter as the tag key, with the tag bound in.
+- **The post-quantum wrap committed to nothing.** Anyone holding a member's
+  published hybrid key could mint one and knock that member out of the group,
+  and a wrap captured at one epoch replayed into the next. It is bound to the
+  group, the epoch and the recipient now, and staging refuses to overwrite.
+- **Reading a tag destroyed what was under it.** Collection removed on delivery,
+  and a tag is derivable by every member and by one recently removed, so any of
+  them could drain another member's mailbox silently and permanently. Delivery
+  and removal are separate now: nothing goes until the recipient says it arrived.
+- **The panic guard at the C boundary did nothing.** `catch_unwind` under
+  `panic = "abort"` catches nothing, so a malformed input took the host
+  application rather than the call. There is a `mobile` profile that unwinds.
+- **Smaller ones, all closed**: decrypted secrets landed in unzeroized buffers;
+  `receive` threw away the sender MLS had authenticated; the tag-key
+  documentation told a third-party client to pin a key forever, which would let
+  a removed member address the group for life; `Unsubscribe` counted itself as a
+  deposit; there was no `deny.toml`; and the media parser had no fuzz target.
+
+**Two the app shipped rather than wrote.** The bundled WebAssembly and the three
+Android libraries predated the fixes they were supposed to carry, so the source
+was right and the binaries were not. Rebuilt, and `test/shipped_engine_test.dart`
+now fails if that happens again.
 
 This file is the honest ledger. Items move to **Done** only when a test proves
 them, not when the code exists. Three separate defects in this project were

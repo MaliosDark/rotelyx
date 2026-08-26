@@ -267,7 +267,7 @@ pub fn load_conversation(path: &Path, passphrase: &str) -> Result<Option<Vec<u8>
         source,
     })?;
     crate::sealed::open_bytes(&bytes, passphrase)
-        .map(Some)
+        .map(|p| Some(p.to_vec()))
         .map_err(|e| StoreError::Read {
             path: path.to_path_buf(),
             source: std::io::Error::other(e.to_string()),

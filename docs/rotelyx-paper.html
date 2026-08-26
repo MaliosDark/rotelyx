@@ -908,9 +908,22 @@
   <div class="col">
     <h3>Three implementation decisions</h3>
     <p>
-      <strong>No length prefix.</strong> Padding is trailing zeroes, and the
-      recipient recovers the real content because the inner MLS message is self
-      delimiting. Writing a length field is the natural implementation and would
+      <strong>The payload is opaque before it is a payload.</strong> An
+      earlier version deposited the serialised MLS message as it stood, and RFC
+      9420 places <code>group_id</code> and <code>epoch</code> in cleartext in
+      the framing, ahead of the encrypted content. The operator therefore read a
+      stable identifier out of every envelope it held, with no key material at
+      all, and every envelope of one conversation linked to every other across
+      every tag rotation and all of time. Rotating tags hid <em>who</em>; they
+      did not hide <em>that these belong together</em>, which is most of a
+      social graph. The message is now sealed under a key derived from the same
+      exporter the tag key comes from, through a separate context, with the tag
+      bound as associated data so an operator cannot move an envelope from one
+      address to another.
+    </p>
+    <p>
+      <strong>No length prefix.</strong> Padding is trailing zeroes, and the end
+      of the real bytes is found by a terminator rather than by a length. Writing a length field is the natural implementation and would
       have handed the operator precisely the information the buckets exist to
       remove.
     </p>
@@ -2436,7 +2449,7 @@
   <div class="col">
     <p>
       The implementation is written in Rust across eighteen first party crates
-      plus a vendored transport tree, and is exercised by 592 tests. The Android
+      plus a vendored transport tree, and is exercised by 599 tests. The Android
       client is a separate tree with a suite of its own, not counted here. The
       distribution of those tests is more informative than the count.
     </p>

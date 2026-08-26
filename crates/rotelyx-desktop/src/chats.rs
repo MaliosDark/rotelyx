@@ -236,7 +236,7 @@ pub fn list(identity: &Path, key: &SessionKey) -> Vec<Row> {
         })
         .collect();
 
-    rows.sort_by(|a, b| b.at.cmp(&a.at));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.at));
     rows
 }
 

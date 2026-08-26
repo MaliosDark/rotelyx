@@ -273,6 +273,56 @@ mod tests {
             .expect("plus++ key")
     }
 
+    /// A redeemer restored from disk must still be able to finish.
+    ///
+    /// The path that matters in production is blind, put the state away, pay,
+    /// come back later, unblind. The only test for `from_bytes` round-tripped
+    /// `to_bytes` and never called `finish` on the result, and `from_bytes`
+    /// rebuilds the blinding result with an **empty** `blind_message`. Whether
+    /// that matters depends on whether `finalize` reads that field, which an
+    /// audit raised and could not answer from the source. This answers it by
+    /// running it.
+    #[test]
+    fn a_restored_redeemer_can_still_finish() {
+        use blind_rsa_signatures::reexports::rand::rngs::ThreadRng;
+        use blind_rsa_signatures::KeyPair;
+
+        let mut rng = ThreadRng::default();
+        // The same parameters `Public` is typed with, so what is generated here
+        // is the same shape of key the issuer uses.
+        let KeyPair { pk, sk } =
+            KeyPair::<Sha384, PSS, Randomized>::generate(&mut rng, 2048).expect("keypair");
+        let der = pk.to_der().expect("der");
+
+        // Blind, exactly as a buyer would.
+        let (redeemer, blinded_b64) = Redeemer::begin(&der).expect("begin");
+
+        // Put it away and bring it back, which is the whole point of the type.
+        let restored = Redeemer::from_bytes(&redeemer.to_bytes()).expect("restore");
+
+        // The issuer signs the blinded message. Out of tree in production; here
+        // it is the generated secret key.
+        let blinded = BASE64URL_NOPAD
+            .decode(blinded_b64.as_bytes())
+            .expect("base64");
+        let blind_sig = sk.blind_sign(&blinded).expect("blind sign");
+        let sig_b64 = BASE64URL_NOPAD.encode(&blind_sig);
+
+        // And the restored redeemer finishes, producing a token that verifies.
+        let token = restored.finish(&der, &sig_b64).expect(
+            "a redeemer restored from bytes could not finish: the empty \
+             blind_message in from_bytes is load bearing after all",
+        );
+
+        let verifier = BlindVerifier::new()
+            .with_tier(Tier::Plus, &der)
+            .expect("tier");
+        assert!(
+            verifier.verify(&token).is_ok(),
+            "the token from a restored redeemer did not verify"
+        );
+    }
+
     /// Tokens produced by a real blind issuance, frozen before that code left
     /// this repository.
     #[test]

@@ -255,7 +255,10 @@ recovers loss by asking for it again at the cost of seconds of buffer, which is
 right for a voice message and wrong for a live call; zero conceals instead.
 
 `call` is the identifier both ends agreed on for **this** call, at least eight
-bytes, and it is not optional. The media keys are derived from the group's
+bytes, fresh for every call, and it is not optional. **Reusing one reinstates
+the defect it exists to close**, with no error and no symptom: the library
+checks the length and cannot check the freshness, because it sees one call at a
+time. The media keys are derived from the group's
 exported secret and the speaker's position in the roster, and both are fixed for
 an entire MLS epoch while the frame counter restarts at zero, so without a value
 that changes per call a second call repeats the first one's key and nonce from

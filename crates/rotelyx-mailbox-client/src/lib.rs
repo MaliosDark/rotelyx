@@ -42,6 +42,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 #[serde(tag = "op", rename_all = "camelCase")]
 enum Request<'a> {
     Subscribe { tags: Vec<&'a str> },
+    Collected { digests: Vec<String> },
     Unsubscribe { tags: Vec<&'a str> },
     Deposit { envelope: &'a str },
 }
@@ -136,6 +137,39 @@ impl Mailbox {
     /// is in front of it, which is where envelopes get lost. What matters is
     /// that unsubscribing does not recall what the server has already pushed:
     /// those envelopes are already on their way and are still delivered.
+    /// Say which envelopes arrived, so the server can drop them.
+    ///
+    /// Delivery no longer removes: a tag is derivable by anybody in the group
+    /// and by somebody recently removed from it, and removal on delivery let
+    /// any of them drain another member's mailbox permanently and silently.
+    /// Nothing goes now until the recipient says it has it.
+    ///
+    /// Not acknowledging is safe and costs re-delivery until the TTL runs out.
+    /// Acknowledging something not yet processed is the unsafe direction, so
+    /// this is called after the envelope has been opened and written down, not
+    /// when it arrives.
+    pub async fn collected(&mut self, envelopes_b64: &[String]) -> Result<()> {
+        if envelopes_b64.is_empty() {
+            return Ok(());
+        }
+
+        let digests: Vec<String> = envelopes_b64
+            .iter()
+            .filter_map(|b64| {
+                let bytes = data_encoding::BASE64.decode(b64.as_bytes()).ok()?;
+                let envelope = rotelyx_mailbox::Envelope::from_bytes(&bytes).ok()?;
+                Some(data_encoding::HEXLOWER.encode(&envelope.digest()))
+            })
+            .collect();
+
+        if digests.is_empty() {
+            return Ok(());
+        }
+
+        self.send(&Request::Collected { digests }).await?;
+        Ok(())
+    }
+
     pub async fn unsubscribe(&mut self, tags: &[String]) -> Result<()> {
         let refs: Vec<&str> = tags.iter().map(String::as_str).collect();
         self.send(&Request::Unsubscribe { tags: refs }).await

@@ -12,6 +12,8 @@ authors.workspace = true
 blake3.workspace = true
 zeroize.workspace = true
 subtle.workspace = true
+chacha20poly1305.workspace = true
+getrandom.workspace = true
 
 serde.workspace = true
 postcard.workspace = true

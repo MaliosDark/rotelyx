@@ -10,7 +10,7 @@
 
 No accounts, no phone numbers, and no servers belonging to anybody else.
 
-[![tests](https://img.shields.io/badge/tests-592%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
+[![tests](https://img.shields.io/badge/tests-599%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-6a31ee?style=flat-square)](#try-it)
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-8b8b8b?style=flat-square)](#licence)
 [![status](https://img.shields.io/badge/status-unaudited-E0808C?style=flat-square)](#security-status)

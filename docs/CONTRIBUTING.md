@@ -72,7 +72,7 @@ sudo mkswap /swapfile2 && sudo swapon /swapfile2
 cargo test --workspace
 ```
 
-**592 tests**, and 11 more in the issuer crate that is not published here. The
+**599 tests**, and 11 more in the issuer crate that is not published here. The
 distribution matters more than the count:
 
 | Suite | Tests | What it proves |

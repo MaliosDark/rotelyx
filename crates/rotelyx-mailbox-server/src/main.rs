@@ -84,6 +84,16 @@ const KEEPALIVE: Duration = Duration::from_secs(30);
 /// lookback.
 const MAX_TAGS_PER_SUBSCRIPTION: usize = 64;
 
+/// And how many a connection may hold at once, across every subscription it
+/// sends.
+///
+/// The per-message limit bounds one request and bounded nothing else: a client
+/// could send that request again and again, and the set grew until the process
+/// ran out of memory. Two hundred and fifty six is four full subscriptions,
+/// which is past what a client with a few conversations across a few epochs
+/// needs, and it is a number rather than an absence.
+const MAX_TAGS_PER_CONNECTION: usize = 256;
+
 /// The largest bucket is 8 MiB; the rest is envelope overhead and base64
 /// expansion, with room to spare.
 const MAX_FRAME_BYTES: usize = 12 * 1024 * 1024;
@@ -472,11 +482,20 @@ enum Request {
     Subscribe { tags: Vec<String> },
 
     /// Stop listening on these tags.
-    ///
-    /// Needed because collection removes. A client still listening on a tag it
-    /// has finished with silently eats envelopes meant for whoever is still
-    /// using it, and the sender has no way to tell.
     Unsubscribe { tags: Vec<String> },
+
+    /// Say which envelopes have been received, so they can be removed.
+    ///
+    /// Delivery no longer removes. It used to, and that made a tag a weapon:
+    /// anybody who could derive one could drain it, permanently, with the
+    /// recipient never told. Now an envelope goes when the recipient says it
+    /// arrived, or when its TTL runs out, whichever comes first.
+    ///
+    /// A client that never sends this still works. Its messages are re-delivered
+    /// on the next subscription until they expire, which is duplicate delivery
+    /// rather than loss, and duplicate delivery is something a client can
+    /// notice and a loss is not.
+    Collected { digests: Vec<String> },
 
     /// Leave an envelope. No tag field: the tag is inside the envelope, so
     /// there is nothing for a client to get wrong and nothing for the server to
@@ -609,6 +628,19 @@ impl Reply {
         // strings and integers.
         Message::Text(serde_json::to_string(&self).unwrap_or_default().into())
     }
+}
+
+/// A receipt naming one envelope, as hexadecimal. Same shape as a tag and a
+/// different thing, so it gets its own parser rather than borrowing one.
+fn parse_digest(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let bytes: Result<Vec<u8>, _> = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+        .collect();
+    bytes.ok()?.try_into().ok()
 }
 
 fn parse_tag(hex: &str) -> Option<Tag> {
@@ -837,15 +869,25 @@ async fn handle_request(
                 }
             }
 
+            if subscribed.len() + parsed.len() > MAX_TAGS_PER_CONNECTION {
+                return Some(Reply::Error {
+                    message: format!(
+                        "at most {MAX_TAGS_PER_CONNECTION} tags per connection; \
+                         unsubscribe from some first"
+                    ),
+                });
+            }
+
             subscribed.extend(parsed.iter().copied());
 
             // Deliver the backlog before reporting ready, so a client that
             // starts sending immediately cannot interleave with it.
+            // Delivered, not collected. See `Request::Collected`.
             let waiting = server
                 .mailbox
                 .lock()
                 .await
-                .collect_many(&parsed, now_seconds());
+                .peek_many(&parsed, now_seconds());
 
             let count = waiting.len();
             server
@@ -866,13 +908,48 @@ async fn handle_request(
             Some(Reply::Ready { waiting: count })
         }
 
+        Request::Collected { digests } => {
+            if digests.len() > MAX_TAGS_PER_CONNECTION {
+                return Some(Reply::Error {
+                    message: format!("at most {MAX_TAGS_PER_CONNECTION} receipts at a time"),
+                });
+            }
+
+            // Only across tags this connection is listening on. A receipt is
+            // not a capability: without this a caller could name any digest and
+            // remove it, which is the same power delivery-on-collect handed out
+            // and the reason this exists.
+            let listening: Vec<_> = subscribed.iter().copied().collect();
+            let now = now_seconds();
+
+            let mut removed = 0usize;
+            {
+                let mut mailbox = server.mailbox.lock().await;
+                for digest in &digests {
+                    let Some(bytes) = parse_digest(digest) else {
+                        return Some(Reply::Error {
+                            message: "a receipt must be 64 hex characters".into(),
+                        });
+                    };
+                    if mailbox.remove_acknowledged(&listening, &bytes, now) {
+                        removed += 1;
+                    }
+                }
+            }
+
+            debug!(receipts = digests.len(), removed, "collected");
+            Some(Reply::Dropped { listening: removed })
+        }
+
         Request::Unsubscribe { tags } => {
             for tag in &tags {
                 if let Some(parsed) = parse_tag(tag) {
                     subscribed.remove(&parsed);
                 }
             }
-            server.counters.deposits.fetch_add(1, Ordering::Relaxed);
+            // Not a deposit. This counted one on every unsubscribe, which
+            // inflated the figure an operator watches for load by the number of
+            // times clients tidied up after themselves.
             Some(Reply::Dropped {
                 listening: subscribed.len(),
             })

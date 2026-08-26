@@ -16,6 +16,12 @@
 
 use rotelyx_crypto::hybrid::{HybridCiphertext, HybridKem, HybridPublicKey, WrappedPqSecret};
 
+/// A binding for tests that are about parsing rather than about binding.
+fn a_binding() -> rotelyx_crypto::PqBinding {
+    rotelyx_crypto::PqBinding::new(b"a-group", 1, b"a-signature-key")
+}
+
+
 /// Valid specimens, one per parser, produced the way the protocol produces them.
 fn specimens() -> Vec<(&'static str, Vec<u8>, fn(&[u8]) -> bool)> {
     let (secret, public) = HybridKem::generate();
@@ -34,7 +40,7 @@ fn specimens() -> Vec<(&'static str, Vec<u8>, fn(&[u8]) -> bool)> {
         ),
         (
             "WrappedPqSecret",
-            pq.wrap_for(&public).expect("wrap").to_bytes(),
+            pq.wrap_for(&public, &a_binding()).expect("wrap").to_bytes(),
             |b| WrappedPqSecret::from_bytes(b).is_ok(),
         ),
     ]

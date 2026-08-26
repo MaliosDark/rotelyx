@@ -462,7 +462,7 @@ impl Driver {
                     }
 
                     match conversation.receive(&me, &frame.payload) {
-                        Ok(Received::Message(plaintext)) => self.emit(Event::Message {
+                        Ok(Received::Message { bytes: plaintext, .. }) => self.emit(Event::Message {
                             text: String::from_utf8_lossy(&plaintext).into_owned(),
                         }),
                         // A commit. Surfacing this is a security control: MLS

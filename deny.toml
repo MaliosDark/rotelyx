@@ -1,0 +1,101 @@
+# What may enter this dependency graph, enforced rather than hoped for.
+#
+# `cargo deny check` reads this. Without it the licence check fails wholesale
+# and the supply-chain policy is whatever the last person to add a dependency
+# felt like, which is not a policy.
+#
+# The advisory half is deliberately narrow: `scripts/audit-dependencies` already
+# runs the RustSec database against `Cargo.lock` and refuses to pass on an
+# advisory nobody has written a paragraph about in `docs/UPSTREAM.md`. That
+# ledger is where the reasoning lives, because "is this reachable" is a question
+# about our code and not a field in a database.
+
+[graph]
+all-features = false
+
+# The advisory half is delegated, not disabled.
+#
+# `scripts/audit-dependencies` runs the same RustSec database against
+# `Cargo.lock` and refuses to pass on any advisory nobody has written a
+# paragraph about in `docs/UPSTREAM.md`. That is stricter than a list of ignored
+# identifiers, because it forces the question cargo-deny cannot ask: is the
+# affected code reachable from this ciphersuite, on this target, at all. Every
+# advisory in this graph has an answer there.
+#
+# Duplicating it here would mean two lists drifting apart, and the one that
+# drifts is always the one with no prose in it.
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# AGPL for what we wrote; the vendored transport keeps the licences it was
+# granted under. Anything outside this list is a decision, not a default.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "AGPL-3.0-only",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+    "BSD-1-Clause",
+    "MIT-0",
+    "Unlicense",
+]
+
+# `r-efi` is LGPL-2.1-or-later and reaches the graph through `wasi`, on targets
+# this project does not build for. Allowed by exception rather than by widening
+# the list, so the exception is visible and revisited if it ever links.
+confidence-threshold = 0.9
+
+[[licenses.exceptions]]
+crate = "r-efi"
+allow = ["LGPL-2.1-or-later"]
+
+
+[bans]
+# Two majors of one crate in a cryptographic build is two implementations to
+# review and two places for a fix to have landed in only one. Warned rather than
+# denied because the graph has some today, and the list below names them so the
+# count cannot grow quietly.
+multiple-versions = "warn"
+# Warned rather than denied, and the reason is specific rather than a shrug.
+#
+# A wildcard on a crate fetched from a registry is a supply-chain hole: it means
+# any version, chosen by whoever publishes next. A wildcard on a path dependency
+# inside one workspace is not that; it is what a workspace is.
+#
+# `allow-wildcard-paths` exists for exactly this and does not apply here,
+# because the vendored transport crates carry version numbers, which makes
+# cargo-deny treat them as publishable. Nothing in this tree is published to
+# crates.io, so the distinction it is protecting does not exist for us. Denying
+# would mean either publishing crates we do not want to publish or stripping
+# versions from the vendored tree, and both are worse than a warning that says
+# so.
+wildcards = "warn"
+allow-wildcard-paths = true
+
+# Named so that a new duplicate is a new warning rather than noise in an
+# existing one.
+skip = [
+    # Two majors of x25519-dalek reach every binary. This doubles the classical
+    # Diffie-Hellman surface a reviewer has to read. Tracked, not accepted for
+    # ever.
+    { crate = "x25519-dalek@2.0.1" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# The transport is vendored into this repository rather than fetched, which is
+# the point of vendoring it, so there is nothing to allow here.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

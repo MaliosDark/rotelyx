@@ -165,10 +165,11 @@ pub fn seal_bytes(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, SealErr
 /// was close, and there is nothing a legitimate user does differently in the
 /// two cases.
 pub fn open(bytes: &[u8], passphrase: &str) -> Result<Identity, SealError> {
-    let secret: [u8; SECRET_LEN] = open_bytes(bytes, passphrase)?
+    let plain = open_bytes(bytes, passphrase)?;
+    let secret: [u8; SECRET_LEN] = plain[..]
         .try_into()
-        .map_err(|v: Vec<u8>| SealError::Truncated {
-            len: v.len(),
+        .map_err(|_| SealError::Truncated {
+            len: plain.len(),
             min: SECRET_LEN,
         })?;
     Ok(Identity::from_bytes(secret))
@@ -178,7 +179,11 @@ pub fn open(bytes: &[u8], passphrase: &str) -> Result<Identity, SealError> {
 ///
 /// A wrong passphrase and a modified file are the same error, for the reason
 /// given on [`open`].
-pub fn open_bytes(bytes: &[u8], passphrase: &str) -> Result<Vec<u8>, SealError> {
+/// Returns the plaintext wrapped, because what comes out of here is an
+/// identity key. A bare `Vec` would be freed without being scrubbed, leaving it
+/// in heap a core dump or a swapped page still holds. The caller can take it
+/// out if it needs an owned `Vec`, and then the choice is visible.
+pub fn open_bytes(bytes: &[u8], passphrase: &str) -> Result<Zeroizing<Vec<u8>>, SealError> {
     if bytes.len() < MIN_BYTES_LEN {
         return Err(SealError::Truncated {
             len: bytes.len(),
@@ -219,7 +224,7 @@ pub fn open_bytes(bytes: &[u8], passphrase: &str) -> Result<Vec<u8>, SealError> 
         )
         .map_err(|_| SealError::Unopenable)?;
 
-    Ok(plaintext)
+    Ok(Zeroizing::new(plaintext))
 }
 
 /// Whether a file looks like a sealed identity rather than a raw key.
@@ -247,8 +252,8 @@ mod tests {
             let plaintext = vec![0xABu8; len];
             let sealed = seal_bytes(&plaintext, "a passphrase").expect("seal");
             assert_eq!(
-                open_bytes(&sealed, "a passphrase").expect("open"),
-                plaintext,
+                open_bytes(&sealed, "a passphrase").expect("open")[..],
+                plaintext[..],
                 "a {len} byte payload did not survive the round trip"
             );
         }

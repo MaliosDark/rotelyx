@@ -386,7 +386,7 @@ async fn chat(
                 match frame.kind {
                     FrameKind::Message => {
                         match conversation.receive(&me, &frame.payload).context("decrypting")? {
-                            Received::Message(plaintext) => {
+                            Received::Message { bytes: plaintext, .. } => {
                                 println!("peer: {}", String::from_utf8_lossy(&plaintext));
                             }
                             // Who, not how many. A commit can remove one member

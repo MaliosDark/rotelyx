@@ -32,6 +32,7 @@ futures-lite = "2"
 rotelyx-core = { path = "../crates/rotelyx-core" }
 rotelyx-mailbox = { path = "../crates/rotelyx-mailbox" }
 rotelyx-crypto = { path = "../crates/rotelyx-crypto" }
+rotelyx-media = { path = "../crates/rotelyx-media" }
 
 [[bin]]
 name = "frame_reader"
@@ -55,3 +56,10 @@ doc = false
 bench = false
 
 [workspace]
+
+[[bin]]
+name = "media_frame"
+path = "fuzz_targets/media_frame.rs"
+test = false
+doc = false
+bench = false
