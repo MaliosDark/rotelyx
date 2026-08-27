@@ -1,0 +1,25 @@
+[package]
+name = "rotelyx-ct"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Constant-time (timing side-channel) harness for Rotelyx's secret comparisons.
+# Runs DudeCT: feeds a "fixed" class and a "random" class of inputs and applies
+# Welch's t-test to the timing distributions. |t| < ~10 across many samples is
+# the conventional "no timing leak detected" threshold.
+#
+#   cargo run --release --bin ct_tag -- --continuous 1000000
+#
+# Excluded from the workspace: see the note in the root Cargo.toml.
+[dependencies]
+dudect-bencher = "0.7"
+rotelyx-mailbox = { path = "../../crates/rotelyx-mailbox" }
+
+[[bin]]
+name = "ct_tag"
+path = "src/ct_tag.rs"
+
+[profile.release]
+opt-level = 3
+debug = true

@@ -763,15 +763,32 @@
       adversary in this model can actually do something.
     </p>
 
+    <p>
+      Two further checks followed, using the different tools an earlier draft of
+      this section said would be needed. In CryptoVerif the question changes from
+      whether an adversary can derive the secret to whether it can tell the
+      combiner's output from random, and the answer arrives as a bound rather
+      than a yes: secrecy holds up to <code>2 * qH / |sec|</code> with the
+      classical secret in the adversary's hands. And the mailbox tag comparison,
+      which is constant-time by construction and had never been measured, was
+      measured: no timing difference between a match and a miss across 349
+      million samples, Welch's <i>t</i> around 1.0 against a conventional
+      threshold of 10. That comparison is how a mailbox is addressed, so a leak
+      there would hand tags to anybody able to time the server.
+    </p>
+
     <div class="callout risk">
       <span class="label">What this is not</span>
       <p>
-        A symbolic model treats each primitive as a perfect black box. This says
-        <b>nothing</b> about the hardness of ML-KEM, nothing about the interior of
-        the MLS key schedule, and nothing about constant-time behaviour, all three
-        of which need different tools and other people's eyes. What it does
-        establish is the part that was this project's own invention and nobody
-        else's to check: that the composition holds if the primitives do.
+        A symbolic model treats each primitive as a perfect black box, and the
+        computational model covers the combiner rather than the whole protocol.
+        Together they say <b>nothing</b> about the hardness of ML-KEM, nothing
+        about the interior of the MLS key schedule, and nothing about the
+        constant-time behaviour of the primitives underneath: one comparison in
+        our own code was measured, which is not the same claim. All of that needs
+        other people's eyes. What these do establish is the part that was this
+        project's own invention and nobody else's to check: that the composition
+        holds if the primitives do.
       </p>
     </div>
 
@@ -2752,18 +2769,19 @@
     </p>
     <p>
       One part of that has moved. The post quantum composition, which was the
-      only piece of cryptography this work invented, now has a symbolic proof
-      that it holds if its primitives do, and the models are published so the
-      result can be re-run rather than believed. Section 4.4.
+      only piece of cryptography this work invented, is now checked symbolically,
+      computationally and, for one comparison, empirically, and every model is
+      published so the results can be re-run rather than believed. Section 4.4.
     </p>
     <p>
-      The rest has not. A symbolic model says nothing about the hardness of
-      ML-KEM, nothing about constant-time behaviour, and nothing about whether
-      the implementation matches the model it was abstracted from. Four rounds of
-      review by the people who built this is four rounds more than most projects
-      publish and is still not an independent audit. <b>Until one exists,
-      Rotelyx is a design with a working implementation, one verified
-      composition, and no independently verified guarantees.</b>
+      The rest has not. These models say nothing about the hardness of ML-KEM,
+      nothing about the constant-time behaviour of the primitives underneath, and
+      nothing about whether the implementation matches the model it was
+      abstracted from. Five rounds of review by the people who built this is five
+      rounds more than most projects publish and is still not an independent
+      audit. <b>Until one exists, Rotelyx is a design with a working
+      implementation, one verified composition, and no independently verified
+      guarantees.</b>
     </p>
   </div>
 </section>

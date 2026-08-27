@@ -107,18 +107,23 @@ already trusted. Only worth building since the number started binding member
 keys.
 
 **The release gate moved, and it is worth being precise about how much.** The
-post-quantum composition, the only cryptography this project invented, now has a
-symbolic proof in `formal/`. The adversary is handed the whole X25519 private
-key, which is what a quantum break of the classical half looks like, and the
-group secret and the MLS epoch secret both survive; a second model with both
-halves broken shows the secret leaking, which is what makes the first result
-mean something rather than describe a model too weak to express an attack.
+post-quantum composition, the only cryptography this project invented, is now
+checked three ways. Symbolically, in `formal/pq_mls_composition.pv`: the
+adversary is handed the whole X25519 private key, which is what a quantum break
+of the classical half looks like, and the group secret and the MLS epoch secret
+both survive, while `pq_both_broken.pv` breaks both halves and shows the secret
+leaking, which is what makes the first result mean something rather than
+describe a model too weak to express an attack. Computationally, in
+`formal/xwing_combiner.cv`: the combiner's output is indistinguishable from
+random with an explicit bound. And empirically, in `security/ct/`: the mailbox
+tag comparison shows no timing difference over 349 million samples.
 
-That covers the composition. It does not cover the hardness of ML-KEM, the
-interior of the MLS key schedule, constant-time behaviour, or whether the
-implementation matches the model. And four rounds of review by the people who
-built this is not an independent audit, however thorough. **What can now be said
-is one verified composition, not verified guarantees.**
+That covers the composition, and one comparison. It does not cover the hardness
+of ML-KEM, the interior of the MLS key schedule, the constant-time behaviour of
+the primitives underneath, or whether the implementation matches the model. And
+five rounds of review by the people who built this is not an independent audit,
+however thorough. **What can now be said is one verified composition, not
+verified guarantees.**
 
 This file is the honest ledger. Items move to **Done** only when a test proves
 them, not when the code exists. Three separate defects in this project were

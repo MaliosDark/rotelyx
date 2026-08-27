@@ -1,0 +1,37 @@
+(* ================================================================
+   Rotelyx X-Wing combiner - COMPUTATIONAL model (CryptoVerif)  Ideoa Labs
+
+   The hybrid claim, at the KDF layer, in the computational model:
+   the wrapping key  wk = H(k_pq, k_cl)  is indistinguishable from random
+   as long as the POST-QUANTUM shared secret k_pq is unknown to the adversary,
+   EVEN IF the adversary is handed the CLASSICAL shared secret k_cl in full
+   (a quantum break of X25519).
+
+   H is modelled as a random oracle (X-Wing derives the shared secret with
+   SHA3 over both KEM outputs). k_pq stands in for an IND-CCA ML-KEM output
+   the adversary cannot compute.
+   ================================================================ *)
+
+type hashkey [large,fixed].
+type wkey    [large,fixed].
+type sec     [large,fixed].        (* a KEM shared secret *)
+
+(* X-Wing combiner as a random oracle: H(hk, (k_pq,k_cl)) -> wkey *)
+expand ROM_hash_large(hashkey, bitstring, wkey, H, H_oracle, qH).
+
+fun combine(sec, sec): bitstring [data].
+
+(* Secrecy target: the wrapping key derived from both KEM secrets. *)
+query secret wk.
+
+channel start, c.
+
+process
+  in(start, ());
+  new hk: hashkey;                 (* random-oracle key *)
+  new k_pq: sec;                   (* PQ KEM secret - NEVER revealed *)
+  new k_cl: sec;                   (* classical KEM secret *)
+  let wk: wkey = H(hk, combine(k_pq, k_cl)) in
+  (* QUANTUM ADVERSARY: hand it the classical secret, and the hash oracle. *)
+  out(c, k_cl);
+  H_oracle(hk)

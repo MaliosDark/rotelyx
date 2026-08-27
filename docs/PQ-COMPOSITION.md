@@ -46,11 +46,19 @@ the paper. It gives an attacker the whole X25519 private key and the group
 secret still holds; `formal/pq_both_broken.pv` breaks both halves and watches it
 leak, which is what says the first model can express an attack at all.
 
+A computational form followed, in `formal/xwing_combiner.cv`. Where the symbolic
+model asks whether an attacker can derive the secret at all, this one asks
+whether the combiner's output can be told apart from random, and answers with a
+bound rather than a yes or no. The classical secret is handed over there too.
+
+Constant-time behaviour is measured rather than modelled, in `security/ct/`,
+and only for the mailbox tag comparison.
+
 That is the composition and only the composition. The hardness of ML-KEM, the
-interior of the MLS key schedule, constant-time behaviour, and whether this
-implementation matches the model it was abstracted from are all outside it, and
-this document is still written to make a closer reading possible rather than to
-stand in for one.
+interior of the MLS key schedule, the constant-time behaviour of the primitives
+underneath, and whether this implementation matches the model it was abstracted
+from are all outside it, and this document is still written to make a closer
+reading possible rather than to stand in for one.
 
 ---
 

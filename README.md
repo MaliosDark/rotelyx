@@ -301,20 +301,34 @@ redesigned around.
 
 ## Verified rather than asserted
 
-Two things about this code were checked by machine rather than by argument.
+Some things about this code were checked by machine rather than by argument.
 
-**The post-quantum composition has a symbolic proof.** The novel part of Rotelyx
-is feeding an X-Wing secret into the pre-shared-key input MLS already defines,
-and until August 2026 nobody had shown that the result holds. A model of the
-whole construction, in [`formal/`](formal/), gives an attacker the entire X25519
-private key, which is what a quantum break of the classical half would look like,
-and the group secret and the MLS epoch secret both survive. A second model with
-both halves broken shows the secret leaking, which is what says the first result
-is about the construction rather than about a model that proves anything.
+**The post-quantum composition is verified three ways.** The novel part of
+Rotelyx is feeding an X-Wing secret into the pre-shared-key input MLS already
+defines, and until August 2026 nobody had shown that the result holds. All three
+models are in [`formal/`](formal/) and [`security/ct/`](security/ct/), so the
+results below can be re-run and attacked rather than taken on trust.
 
-What that does **not** establish is the hardness of ML-KEM, the interior of the
-MLS key schedule, or constant-time behaviour. Those need different tools and
-somebody else's eyes.
+*Symbolically*, in ProVerif: a model of the whole construction gives an attacker
+the entire X25519 private key, which is what a quantum break of the classical
+half would look like, and the group secret and the MLS epoch secret both
+survive. A second model with both halves broken shows the secret leaking, which
+is what says the first result is about the construction rather than about a
+model that proves anything.
+
+*Computationally*, in CryptoVerif: the X-Wing combiner's output is
+indistinguishable from random with an explicit bound when the post-quantum
+secret is unknown, with the classical secret in the adversary's hands.
+
+*Empirically*, with DudeCT: comparing a mailbox tag shows no timing difference
+between a match and a miss over 349 million samples, `|t|` around 1.0 against a
+conventional threshold of 10. That comparison is how a mailbox is addressed, so
+a leak there would give away tags to anybody who can time the server.
+
+What none of them establish is the hardness of ML-KEM, the interior of the MLS
+key schedule, or the constant-time behaviour of the third-party primitives
+underneath. Those are assumptions the models rest on, not results they produce,
+and they need somebody else's eyes.
 
 **The parsers survive being fuzzed, and the hand-written ones are free of
 undefined behaviour.** `cargo fuzz` on the media frame reader found no crashes,
@@ -341,6 +355,20 @@ to access. Those claims are false for every system that has ever made them.
 
 What it claims is bounded, written down and testable. See
 [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md).
+
+The code has been through five rounds of internal review at Ideoa Labs. Every
+finding raised against code written here is fixed, and each fix has a test that
+fails without it: the arc ran from a critical nonce reuse across calls, through
+a mailbox that leaked which group an envelope belonged to and a post-quantum
+wrap anybody could forge, down to nothing open. The dependency advisories that
+remain are argued unreachable one by one, and `scripts/audit-dependencies`
+fails the build if any of them is ever ignored without that argument written
+down.
+
+**Internal is not independent.** Five rounds by the people who built something is
+five more than most projects publish and is still not an outside audit. The
+third-party primitives underneath, ML-KEM, OpenMLS and libcrux, were never in
+scope. Both are open invitations rather than gaps we are hiding.
 
 **Found something? Email <contact@ideoa.co.uk>, and please do not open a public
 issue.** A public issue is a working exploit handed to everybody reading this

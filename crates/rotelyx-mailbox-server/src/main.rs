@@ -566,12 +566,6 @@ enum Reply {
     /// remain.
     Dropped { listening: usize },
 
-    /// A fan-out finished. `stored` is below `asked` when a recipient's slot
-    /// was full; reported rather than hidden, because a silently dropped
-    /// recipient looks exactly like a person who stopped replying.
-    #[serde(rename = "fannedout")]
-    FannedOut { stored: usize, asked: usize },
-
     /// This device will be woken, and how often.
     ///
     /// The interval is reported rather than assumed so a client can tell its

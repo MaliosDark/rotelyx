@@ -2,7 +2,10 @@
 resolver = "2"
 # Vendored transport stack. Excluded from membership so upstream's own test
 # suites and lint config do not run as part of Rotelyx's. See crates/net/README.md.
-exclude = ["crates/net"]
+# The constant-time harness is excluded too. It pulls a benchmarking dependency
+# that nothing shipped depends on, and it is run deliberately rather than as
+# part of `cargo test`. See security/ct/README.md.
+exclude = ["crates/net", "security/ct"]
 members = [
     "crates/rotelyx-bench",
     "crates/rotelyx-net",

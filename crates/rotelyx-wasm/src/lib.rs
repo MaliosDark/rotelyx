@@ -41,7 +41,7 @@ use wasm_bindgen::prelude::*;
 
 use rotelyx_crypto::{
     deserialize_key_package, serialize_key_package, Conversation, HybridCiphertext,
-    HybridPublicKey, Member, MemberState, PqBinding, PqSecret, WrappedPqSecret,
+    HybridPublicKey, Member, MemberState, PqSecret, WrappedPqSecret,
 };
 use rotelyx_mailbox::{Envelope, Tag, TagKey};
 use zeroize::Zeroizing;

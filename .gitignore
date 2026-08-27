@@ -10,6 +10,12 @@
 crates/net/*/target/
 crates/net/*/Cargo.lock
 
+# The constant-time harness is excluded from the workspace for the same reason,
+# so it drops a `target/` of its own. Its lock file is kept: it builds a binary
+# whose whole purpose is a measurement, and a measurement nobody can reproduce
+# against the same dependency versions is not one.
+security/ct/target/
+
 # --- Secrets and personal data -----------------------------------------------
 #
 # These are the files that must never reach a repository. An identity key is
