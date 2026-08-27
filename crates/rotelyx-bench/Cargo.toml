@@ -1,0 +1,26 @@
+[package]
+name = "rotelyx-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license.workspace = true
+
+# No benchmarking framework.
+#
+# Criterion is the obvious choice and it brings about thirty crates into the
+# lock file of a project that vendors its transport rather than depend on one it
+# does not read. What it buys is statistical rigour over microseconds, and every
+# figure here is either tens of microseconds or milliseconds, where a median of
+# enough runs is honest enough and the number is legible without a report
+# generator.
+#
+# What is not given up: each measurement states its sample count and its
+# median rather than a best case, and the harness refuses to print a figure it
+# took fewer than three samples of.
+[dependencies]
+rotelyx-crypto = { path = "../rotelyx-crypto" }
+rotelyx-mailbox = { path = "../rotelyx-mailbox" }
+rotelyx-media = { path = "../rotelyx-media" }
+rotelyx-codec = { path = "../rotelyx-codec" }
+rotelyx-core = { path = "../rotelyx-core" }
+rotelyx-wasm = { path = "../rotelyx-wasm" }

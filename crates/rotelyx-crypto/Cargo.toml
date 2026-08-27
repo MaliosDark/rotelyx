@@ -18,6 +18,9 @@ js = ["openmls/js"]
 # --- group crypto: adopted wholesale, never reimplemented ---
 openmls.workspace = true
 openmls_traits.workspace = true
+# Verifying a wrap's signature. The MLS ciphersuite pinned here signs with
+# Ed25519, and this is the implementation the rest of the tree already uses.
+ed25519-dalek.workspace = true
 openmls_basic_credential.workspace = true
 openmls_rust_crypto.workspace = true
 openmls_memory_storage.workspace = true

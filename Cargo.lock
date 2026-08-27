@@ -5423,6 +5423,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rotelyx-bench"
+version = "0.1.0"
+dependencies = [
+ "rotelyx-codec",
+ "rotelyx-core",
+ "rotelyx-crypto",
+ "rotelyx-mailbox",
+ "rotelyx-media",
+ "rotelyx-wasm",
+]
+
+[[package]]
 name = "rotelyx-capability"
 version = "0.1.0"
 dependencies = [
@@ -5495,6 +5507,7 @@ dependencies = [
  "blake3",
  "chacha20poly1305 0.11.0",
  "data-encoding",
+ "ed25519-dalek 3.0.0",
  "getrandom 0.4.3",
  "hkdf 0.13.0",
  "openmls",

@@ -500,13 +500,13 @@
     <div class="sec-head col">
       <p class="eyebrow">Post quantum</p>
       <h2>At a point the standard already defines</h2>
-      <p>RFC 9420 defines seven ciphersuites and all of them are classical, so a conversation recorded today is decryptable by a future adversary with a quantum computer. Rotelyx does not fork MLS to fix that. It injects a hybrid secret at the pre shared key input, carried as a proposal inside a commit.</p>
+      <p>RFC 9420 defines seven ciphersuites and all of them are classical, so a conversation recorded today is exposed to harvest now, decrypt later: whoever stores the traffic keeps the option of reading it if a quantum computer capable of it is ever built. Whether one is built is not a claim made here. Rotelyx does not fork MLS. It injects a hybrid secret at the pre shared key input, carried as a proposal inside a commit.</p>
     </div>
     <div class="cards">
       <div class="card">
         <span class="chip yes">Why here</span>
         <h3>The analysis survives</h3>
-        <p>MLS has machine checked symbolic security analysis. Any modification to the protocol forfeits the benefit of it. Injecting at a defined extension point does not, and two properties come free: the material refreshes every epoch, and no member can inject a chosen key silently, because the proposal is part of a commit every member validates.</p>
+        <p>MLS has machine checked symbolic security analysis. Any modification to the protocol forfeits the benefit of it. Injecting at a point the standard already defines keeps the structure those analyses were performed against, so they still apply to the parts that are unchanged, and two properties come free: the material refreshes every epoch, and no member can inject a chosen key silently, because the proposal is part of a commit every member validates. What none of that says is whether the composition itself is sound, which is this project's own contribution and needs its own review.</p>
       </div>
       <div class="card">
         <span class="chip yes">Reviewable</span>

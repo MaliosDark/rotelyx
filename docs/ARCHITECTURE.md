@@ -137,8 +137,9 @@ separation is a design rule, not an accident.
 ### The problem
 
 RFC 9420 defines only classical ciphersuites. The post quantum suites are still
-in draft. A conversation recorded today can be decrypted later by an adversary
-with a quantum computer, which is the harvest now decrypt later attack.
+in draft. A conversation recorded today is exposed to harvest now decrypt
+later: whoever stores the traffic keeps the option of reading it if a quantum
+computer capable of it is ever built.
 
 ### What Rotelyx does
 

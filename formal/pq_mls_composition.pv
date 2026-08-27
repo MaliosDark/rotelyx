@@ -1,0 +1,80 @@
+(* ===================================================================
+   Rotelyx PQ/MLS composition - symbolic model (ProVerif)     Ideoa Labs
+   MAIN MODEL: the hybrid claim + wrap authentication.
+
+   Adversary is QUANTUM: it is handed the classical (X25519) private key,
+   i.e. the classical KEM is fully broken. The PQ (ML-KEM) key is not leaked.
+
+   (Q1) secrecy of the group secret GSECRET  -> must hold (hybrid survives)
+   (Q2) secrecy of the derived MLS epoch secret -> must hold
+   (Q3) authentication: Accepted(s,e,x) ==> Wrapped(s,e,x) -> must hold
+        (a receiver accepts a secret only from a real signing member:
+         the signed-wrap fix for non-member forgery)
+   =================================================================== *)
+
+type skey. type pkey. type ss.
+fun pk(skey): pkey.
+fun encaps(pkey, ss): bitstring.
+reduc forall s:skey, k:ss; decaps(encaps(pk(s),k), s) = k.
+
+fun combine(ss, ss): bitstring.
+
+type key.
+fun kdf_wrap(bitstring): key.
+fun senc(key, bitstring, bitstring): bitstring.
+reduc forall k:key, aad:bitstring, m:bitstring; sdec(k, aad, senc(k,aad,m)) = m.
+
+type sskey. type spkey.
+fun spk(sskey): spkey.
+fun sign(sskey, bitstring): bitstring.
+reduc forall s:sskey, m:bitstring; checksign(spk(s), m, sign(s,m)) = true.
+
+fun binding(bitstring, bitstring, spkey, spkey): bitstring.
+fun epoch_secret(bitstring, bitstring): bitstring.
+
+free c: channel.
+free group_id: bitstring.
+free epoch1: bitstring.
+free commit_secret: bitstring [private].
+free GSECRET: bitstring [private].
+
+query attacker(GSECRET).
+query attacker(epoch_secret(commit_secret, GSECRET)).
+
+event Wrapped(spkey, bitstring, bitstring).
+event Accepted(spkey, bitstring, bitstring).
+query s:spkey, e:bitstring, x:bitstring;
+  event(Accepted(s,e,x)) ==> event(Wrapped(s,e,x)).
+
+let committer(a_ssk: sskey, b_recip_spk: spkey, cl_pk: pkey, pq_pk: pkey) =
+  new k_cl: ss; new k_pq: ss;
+  let ct_cl = encaps(cl_pk, k_cl) in
+  let ct_pq = encaps(pq_pk, k_pq) in
+  let wkey = kdf_wrap(combine(k_pq, k_cl)) in
+  let bind = binding(group_id, epoch1, b_recip_spk, spk(a_ssk)) in
+  let sealed = senc(wkey, bind, GSECRET) in
+  let sig = sign(a_ssk, (bind, sealed)) in
+  event Wrapped(spk(a_ssk), epoch1, GSECRET);
+  out(c, (ct_cl, ct_pq, sealed, sig, spk(a_ssk))).
+
+let recipient(b_ssk: sskey, hsk_cl: skey, hsk_pq: skey, roster_spk: spkey) =
+  in(c, (ct_cl: bitstring, ct_pq: bitstring, sealed: bitstring,
+         sig: bitstring, claimed: spkey));
+  if claimed = roster_spk then
+  let bind = binding(group_id, epoch1, spk(b_ssk), claimed) in
+  if checksign(claimed, (bind, sealed), sig) = true then
+  let k_cl = decaps(ct_cl, hsk_cl) in
+  let k_pq = decaps(ct_pq, hsk_pq) in
+  let wkey = kdf_wrap(combine(k_pq, k_cl)) in
+  let gs = sdec(wkey, bind, sealed) in
+  let es = epoch_secret(commit_secret, gs) in
+  event Accepted(claimed, epoch1, gs).
+
+process
+  new cl_sk: skey;   (* classical hybrid keypair (X25519)  *)
+  new pq_sk: skey;   (* PQ hybrid keypair (ML-KEM)         *)
+  new b_ssk: sskey;  (* Bob's MLS signing key             *)
+  new a_ssk: sskey;  (* Alice's MLS signing key           *)
+  out(c, cl_sk);     (* QUANTUM ADVERSARY: classical KEM key leaked *)
+  ( committer(a_ssk, spk(b_ssk), pk(cl_sk), pk(pq_sk))
+  | recipient(b_ssk, cl_sk, pq_sk, spk(a_ssk)) )

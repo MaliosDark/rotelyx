@@ -66,13 +66,29 @@ sudo fallocate -l 8G /swapfile2 && sudo chmod 600 /swapfile2
 sudo mkswap /swapfile2 && sudo swapon /swapfile2
 ```
 
+## Before you push
+
+```sh
+cargo test --workspace          # 597
+cargo clippy --workspace        # no errors
+cargo deny check                # bans, licences, sources, advisories
+cargo audit                     # the same advisories, the other tool
+scripts/audit-dependencies      # and that those three agree with UPSTREAM.md
+scripts/benchmarks              # what it costs, on your machine
+```
+
+The last one of those is the unusual one. An advisory may only be passed over
+where `deny.toml`, `.cargo/audit.toml` and `docs/UPSTREAM.md` all agree, and the
+argument has to be written down before a tool is told to skip it. Deleting a
+section from the ledger breaks the build, which is checked by deleting one.
+
 ## Testing
 
 ```sh
 cargo test --workspace
 ```
 
-**596 tests**, and 11 more in the issuer crate that is not published here. The
+**597 tests**, and 11 more in the issuer crate that is not published here. The
 distribution matters more than the count:
 
 | Suite | Tests | What it proves |

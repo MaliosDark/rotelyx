@@ -450,7 +450,7 @@ impl PayloadKey {
             .map_err(|_| EnvelopeError::Sealing)?;
         let sealed = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                &XNonce::try_from(&nonce[..]).expect("NONCE_LEN bytes, just built"),
                 Payload {
                     msg: plaintext,
                     aad: &aad,
@@ -512,7 +512,7 @@ impl PayloadKey {
             .map_err(|_| EnvelopeError::Sealing)?;
         cipher
             .decrypt(
-                XNonce::from_slice(&sealed[1..1 + NONCE_LEN]),
+                &XNonce::try_from(&sealed[1..1 + NONCE_LEN]).expect("NONCE_LEN bytes, length checked above"),
                 Payload {
                     msg: &sealed[1 + NONCE_LEN..],
                     aad: &Self::aad(tag),

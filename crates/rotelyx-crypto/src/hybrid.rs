@@ -92,6 +92,12 @@ pub enum HybridError {
     #[error("decapsulation failed")]
     Decapsulation,
 
+    #[error("this wrap carries no signature, so nothing says who produced it")]
+    Unsigned,
+
+    #[error("this wrap was not signed by the member it names")]
+    WrongSender,
+
     #[error("OS entropy source unavailable")]
     Entropy,
 }
@@ -264,6 +270,13 @@ pub struct WrappedPqSecret {
     kem: HybridCiphertext,
     nonce: [u8; 24],
     sealed: Vec<u8>,
+    /// The sender's signature over the binding and the body together.
+    ///
+    /// Empty only for a wrap built by [`PqSecret::wrap_for`], which exists for
+    /// tests that are about the sealing rather than about who sent it. Nothing
+    /// that reaches the network goes out unsigned: the group path signs, and
+    /// the receiver refuses an empty signature.
+    signature: Vec<u8>,
 }
 
 /// What a wrapped post-quantum secret is bound to.
@@ -295,21 +308,41 @@ pub struct PqBinding {
     group_id: Vec<u8>,
     epoch: u64,
     recipient: Vec<u8>,
+    /// Who says this wrap is theirs.
+    ///
+    /// The binding used to name the group, the epoch and the recipient, which
+    /// closed replay and left one thing open: nothing said who produced it. A
+    /// party able to place bytes under the group's tag could substitute a wrap
+    /// of their own. Naming the sender in the associated data means a wrap
+    /// cannot be relabelled, and the signature beside it means one cannot be
+    /// minted by somebody outside the group at all.
+    sender: Vec<u8>,
 }
 
 impl PqBinding {
-    pub fn new(group_id: &[u8], epoch: u64, recipient_signature_key: &[u8]) -> Self {
+    pub fn new(
+        group_id: &[u8],
+        epoch: u64,
+        recipient_signature_key: &[u8],
+        sender_signature_key: &[u8],
+    ) -> Self {
         Self {
             group_id: group_id.to_vec(),
             epoch,
             recipient: recipient_signature_key.to_vec(),
+            sender: sender_signature_key.to_vec(),
         }
+    }
+
+    /// The key a receiver must verify the signature against.
+    pub fn sender(&self) -> &[u8] {
+        &self.sender
     }
 
     /// Length-prefixed throughout, so that no two different bindings can
     /// produce the same bytes by moving a boundary.
     fn to_aad(&self) -> Vec<u8> {
-        const LABEL: &[u8] = b"rotelyx pq group secret wrap v1";
+        const LABEL: &[u8] = b"rotelyx pq group secret wrap v2";
         let mut out = Vec::with_capacity(LABEL.len() + self.group_id.len() + self.recipient.len() + 32);
         out.extend_from_slice(&(LABEL.len() as u64).to_be_bytes());
         out.extend_from_slice(LABEL);
@@ -318,6 +351,8 @@ impl PqBinding {
         out.extend_from_slice(&self.epoch.to_be_bytes());
         out.extend_from_slice(&(self.recipient.len() as u64).to_be_bytes());
         out.extend_from_slice(&self.recipient);
+        out.extend_from_slice(&(self.sender.len() as u64).to_be_bytes());
+        out.extend_from_slice(&self.sender);
         out
     }
 }
@@ -327,7 +362,8 @@ impl PqBinding {
 pub const WRAPPED_SECRET_LEN: usize = CIPHERTEXT_LEN + 24 + 32 + 16;
 
 impl WrappedPqSecret {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    /// Everything except the signature, which is what the signature covers.
+    fn body_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(WRAPPED_SECRET_LEN);
         out.extend_from_slice(&self.kem.to_bytes());
         out.extend_from_slice(&self.nonce);
@@ -335,17 +371,25 @@ impl WrappedPqSecret {
         out
     }
 
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = self.body_bytes();
+        out.extend_from_slice(&self.signature);
+        out
+    }
+
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, HybridError> {
-        if bytes.len() != WRAPPED_SECRET_LEN {
+        if bytes.len() < WRAPPED_SECRET_LEN {
             return Err(HybridError::BadCiphertext);
         }
-        let (kem, rest) = bytes.split_at(CIPHERTEXT_LEN);
+        let (body, signature) = bytes.split_at(WRAPPED_SECRET_LEN);
+        let (kem, rest) = body.split_at(CIPHERTEXT_LEN);
         let (nonce, sealed) = rest.split_at(24);
 
         Ok(Self {
             kem: HybridCiphertext::from_bytes(kem)?,
             nonce: nonce.try_into().map_err(|_| HybridError::BadCiphertext)?,
             sealed: sealed.to_vec(),
+            signature: signature.to_vec(),
         })
     }
 }
@@ -405,11 +449,94 @@ impl PqSecret {
             )
             .map_err(|_| HybridError::BadCiphertext)?;
 
-        Ok(WrappedPqSecret { kem, nonce, sealed })
+        Ok(WrappedPqSecret {
+            kem,
+            nonce,
+            sealed,
+            signature: Vec::new(),
+        })
+    }
+
+    /// Wrap, and sign what was produced with the sender's MLS signature key.
+    ///
+    /// The signature covers the associated data and the sealed bytes together,
+    /// so neither can be moved to the other. A receiver verifies it against a
+    /// key it looked up in its own roster, which is what makes a wrap from
+    /// outside the group unusable rather than merely unopenable.
+    pub fn wrap_and_sign(
+        &self,
+        recipient: &HybridPublicKey,
+        binding: &PqBinding,
+        signer: &impl openmls_traits::signatures::Signer,
+    ) -> Result<WrappedPqSecret, HybridError> {
+        let mut wrapped = self.wrap_for(recipient, binding)?;
+        let signature = signer
+            .sign(&signing_payload(binding, &wrapped))
+            .map_err(|_| HybridError::BadCiphertext)?;
+        wrapped.signature = signature;
+        Ok(wrapped)
     }
 }
 
+/// What a wrap's signature covers.
+///
+/// Length prefixed so the two halves cannot be shifted into one another.
+fn signing_payload(binding: &PqBinding, wrapped: &WrappedPqSecret) -> Vec<u8> {
+    let aad = binding.to_aad();
+    let body = wrapped.body_bytes();
+    let mut out = Vec::with_capacity(aad.len() + body.len() + 16);
+    out.extend_from_slice(&(aad.len() as u64).to_be_bytes());
+    out.extend_from_slice(&aad);
+    out.extend_from_slice(&(body.len() as u64).to_be_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
 impl HybridSecretKey {
+    /// Recover a group secret sealed to us, checking who sent it first.
+    ///
+    /// `binding` names the sender, and the signature is verified against that
+    /// key before anything is decrypted. The caller is responsible for the part
+    /// this cannot see: that the key belongs to a **current member** of the
+    /// group. Verifying a signature only says the holder of that key produced
+    /// it, and a former member still holds theirs.
+    ///
+    /// This is the entry point anything reached from the network should use.
+    /// [`Self::unwrap_pq`] is the unauthenticated half and stays for tests that
+    /// are about the sealing itself.
+    pub fn unwrap_pq_signed(
+        &self,
+        wrapped: &WrappedPqSecret,
+        binding: &PqBinding,
+    ) -> Result<PqSecret, HybridError> {
+        if wrapped.signature.is_empty() {
+            return Err(HybridError::Unsigned);
+        }
+
+        // The pinned ciphersuite signs with Ed25519, so this is that check.
+        // `verify_strict` rather than `verify`: it refuses the small-order and
+        // non-canonical keys that make a signature verify under more than one
+        // key, which is exactly the confusion this check exists to prevent.
+        let key: [u8; 32] = binding
+            .sender()
+            .try_into()
+            .map_err(|_| HybridError::WrongSender)?;
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&key)
+            .map_err(|_| HybridError::WrongSender)?;
+        let signature: [u8; 64] = wrapped
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| HybridError::WrongSender)?;
+        key.verify_strict(
+            &signing_payload(binding, wrapped),
+            &ed25519_dalek::Signature::from_bytes(&signature),
+        )
+        .map_err(|_| HybridError::WrongSender)?;
+
+        self.unwrap_pq(wrapped, binding)
+    }
+
     /// Recover a group secret sealed to us.
     ///
     /// Fails rather than returning something usable if the wrapping is wrong.
@@ -471,6 +598,8 @@ impl HybridKem {
 
 #[cfg(test)]
 mod tests {
+    /// A stand-in sender key for tests that are not about who sent it.
+    const A_SENDER: &[u8] = &[7u8; 32];
     /// A wrap must be usable in one place, once, by one member.
     ///
     /// The regression test for a ciphertext that committed to nothing. The
@@ -485,7 +614,7 @@ mod tests {
 
         let group = b"a-group-id";
         let mine = b"the-recipients-signature-key";
-        let here = PqBinding::new(group, 7, mine);
+        let here = PqBinding::new(group, 7, mine, A_SENDER);
 
         let secret = PqSecret::generate();
         let wrapped = secret.wrap_for(&public, &here).expect("wrap");
@@ -496,26 +625,26 @@ mod tests {
         // A later epoch does not. This is the replay the audit reproduced: PQ
         // rotation is supposed to recover from a compromised secret, and it
         // cannot if yesterday's wrap still installs today.
-        let later = PqBinding::new(group, 8, mine);
+        let later = PqBinding::new(group, 8, mine, A_SENDER);
         assert!(
             recipient.unwrap_pq(&wrapped, &later).is_err(),
             "a wrap from an earlier epoch replayed into a later one"
         );
 
         // Another group does not, even at the same epoch.
-        let elsewhere = PqBinding::new(b"a-different-group", 7, mine);
+        let elsewhere = PqBinding::new(b"a-different-group", 7, mine, A_SENDER);
         assert!(recipient.unwrap_pq(&wrapped, &elsewhere).is_err());
 
         // And a wrap addressed to somebody else does not open for us, which is
         // what stops one member's wrap being redirected at another.
-        let somebody_else = PqBinding::new(group, 7, b"another-members-key");
+        let somebody_else = PqBinding::new(group, 7, b"another-members-key", A_SENDER);
         assert!(recipient.unwrap_pq(&wrapped, &somebody_else).is_err());
 
         // The mirror of the first case: a stranger who holds the published
         // public key can still produce bytes, but not ones that open under the
         // binding the recipient will use.
         let strangers = PqSecret::generate()
-            .wrap_for(&public, &PqBinding::new(b"whatever-they-choose", 7, mine))
+            .wrap_for(&public, &PqBinding::new(b"whatever-they-choose", 7, mine, A_SENDER))
             .expect("wrap");
         assert!(
             recipient.unwrap_pq(&strangers, &here).is_err(),

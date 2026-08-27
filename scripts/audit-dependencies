@@ -236,7 +236,61 @@ def main():
             "Matching a version range is not the same as being exposed, and this\n"
             "script deliberately cannot tell the difference."
         )
-    return 1 if unreviewed else 0
+    drift = check_the_three_agree()
+    return 1 if (unreviewed or drift) else 0
+
+
+def check_the_three_agree():
+    """Three files carry the same decisions, and none may drift from the others.
+
+    `deny.toml` is what `cargo deny` reads, `.cargo/audit.toml` is what
+    `cargo audit` reads, and this document is where the reasoning lives. They
+    were not always the same: for four consecutive review rounds one tool
+    reported a finding the other had already accepted, because only one of them
+    had been configured, and the analysis answering it sat here unread.
+
+    Two dependency tools disagreeing is how a real finding gets lost between
+    them, so this refuses to pass when they do.
+    """
+    import re
+
+    def ids(path, pattern):
+        try:
+            text = open(path, encoding="utf-8").read()
+        except OSError:
+            return None
+        return set(re.findall(pattern, text))
+
+    deny = ids(os.path.join(ROOT, "deny.toml"), r'id = "(RUSTSEC-[0-9-]+)"')
+    audit = ids(os.path.join(ROOT, ".cargo", "audit.toml"), r'"(RUSTSEC-[0-9-]+)"')
+
+    if deny is None or audit is None:
+        print("\nmissing deny.toml or .cargo/audit.toml, so nothing enforces the")
+        print("decisions this file records")
+        return True
+
+    ledger = open(LEDGER, encoding="utf-8").read()
+    problems = []
+
+    for missing in sorted(deny - audit):
+        problems.append(f"{missing} is accepted in deny.toml and not in audit.toml")
+    for missing in sorted(audit - deny):
+        problems.append(f"{missing} is accepted in audit.toml and not in deny.toml")
+    for advisory in sorted(deny | audit):
+        if advisory not in ledger:
+            problems.append(f"{advisory} is accepted by a tool with no section in UPSTREAM.md")
+
+    if not problems:
+        print("\ndeny.toml, .cargo/audit.toml and this ledger agree on %d advisories"
+              % len(deny))
+        return False
+
+    print("\nThe three records of what has been accepted have drifted:\n")
+    for line in problems:
+        print("  " + line)
+    print("\nAn advisory may only be passed over where all three agree, and the")
+    print("argument has to be written down before a tool is told to skip it.")
+    return True
 
 
 if __name__ == "__main__":

@@ -26,7 +26,78 @@ all-features = false
 # drifts is always the one with no prose in it.
 [advisories]
 yanked = "deny"
-ignore = []
+
+# Every entry here is an advisory that has been read and traced, not one that
+# was noisy. The reasoning lives in docs/UPSTREAM.md, one section each, and the
+# rule for adding to this list is that the section has to say why the code
+# cannot run rather than why the fix is inconvenient.
+#
+# `scripts/audit-dependencies` enforces the same thing from the other side: it
+# fails on any advisory whose id does not appear in that document, so an entry
+# here without a written argument breaks the build.
+ignore = [
+  # libcrux-sha3 0.0.8, pinned by hpke-rs 0.6.1 at `^0.0.8`, which no version
+  # of 0.0.10 satisfies. Not reachable: the only two calls to `shake256` in
+  # hpke-rs sit in the `XWingDraft06` and `MlKem768 | MlKem1024` arms of
+  # `derive_key_pair`, and the pinned ciphersuite's KEM is `DhKem25519`, which
+  # takes the `dh_kem` arm and never reaches SHAKE. 0207 additionally needs the
+  # incremental XOF API, which nothing calls; 0208 needs the AVX2 path, and the
+  # call is to `portable`.
+  { id = "RUSTSEC-2026-0207", reason = "unreachable: this ciphersuite's KEM never calls SHAKE" },
+  { id = "RUSTSEC-2026-0208", reason = "unreachable: the call is to portable, not avx2" },
+
+  # libcrux-secrets 0.0.5, arriving only under libcrux-traits under
+  # libcrux-sha3. Constant-time select and swap on aarch64, which is every
+  # phone this runs on, and worth the careful look it got: libcrux-sha3
+  # contains no reference to Select or Swap at all.
+  { id = "RUSTSEC-2026-0212", reason = "unreachable: nothing in the graph calls the affected functions" },
+
+  # rsa 0.10.0-rc.18 under blind-rsa-signatures. There is no fixed version:
+  # stable rsa is affected too. Marvin is a private-key timing attack, and the
+  # private half is touched only by `blind_sign`, whose only callers in this
+  # tree are behind #[cfg(test)]. The mailbox holds a public key and nothing
+  # else. An out-of-tree issuer built on this crate would be exposed, which is
+  # written down in UPSTREAM.md as a constraint on future work.
+  { id = "RUSTSEC-2023-0071", reason = "no patched version exists; the private-key path is not built here" },
+
+  # Unmaintained rather than vulnerable, and none of them ours to move. The
+  # gtk-rs bindings are what Tauri links on Linux; the unic tables and the rest
+  # are transitive. Listed one by one rather than silenced by kind, so a real
+  # advisory against any of them still fails the build.
+  { id = "RUSTSEC-2024-0411", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0412", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0413", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0414", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0415", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0416", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0417", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0418", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0419", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2024-0420", reason = "gtk-rs bindings under Tauri" },
+  { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill, transitive and unmaintained" },
+  { id = "RUSTSEC-2024-0384", reason = "instant, transitive and unmaintained" },
+  { id = "RUSTSEC-2024-0436", reason = "paste, transitive and unmaintained" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error, build-time only" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2, build-time only" },
+  { id = "RUSTSEC-2025-0007", reason = "ring, unmaintained; still the rustls default" },
+  { id = "RUSTSEC-2026-0210", reason = "libcrux-aesgcm renamed; not in the build graph" },
+
+  # The libcrux AEAD advisories, and glib. These reach Cargo.lock and not the
+  # build graph, which is why `cargo deny` resolves them away and `cargo audit`
+  # does not: one walks the graph, the other reads the lock. Both lists are kept
+  # identical anyway, because two dependency tools disagreeing is how a real
+  # finding gets lost between them.
+  { id = "RUSTSEC-2026-0209", reason = "libcrux-aead is in the lock, not in any build graph" },
+  { id = "RUSTSEC-2026-0211", reason = "libcrux-aead is in the lock, not in any build graph" },
+  { id = "RUSTSEC-2026-0124", reason = "libcrux-aead is in the lock, not in any build graph" },
+  { id = "RUSTSEC-2024-0429", reason = "glib iterator unsoundness, under Tauri" },
+  { id = "RUSTSEC-2025-0075", reason = "unic-char-range, transitive" },
+  { id = "RUSTSEC-2025-0080", reason = "unic-common, transitive" },
+  { id = "RUSTSEC-2025-0081", reason = "unic-char-property, transitive" },
+  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version, transitive" },
+  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident, transitive" },
+]
+
 
 [licenses]
 version = 2

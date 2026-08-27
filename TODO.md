@@ -1,6 +1,6 @@
 # Rotelyx TODO
 
-Status as of 26 August 2026. 596 tests passing.
+Status as of 27 August 2026. 597 tests passing.
 
 **Calls work, between two implementations.** A phone and a desktop have called
 each other over the production relay with this project's own codec, and audio
@@ -97,6 +97,28 @@ composition still has not had an independent cryptographic review.
 Android libraries predated the fixes they were supposed to carry, so the source
 was right and the binaries were not. Rebuilt, and `test/shipped_engine_test.dart`
 now fails if that happens again.
+
+**Comparing the safety number is enforced where it matters.** A conversation
+that has never been compared is marked rather than blocked; one whose number
+changed after being compared refuses to send until somebody looks. That
+distinction is the design: blocking first contact trains people to dismiss the
+warning, and the case worth catching is a device added quietly to a conversation
+already trusted. Only worth building since the number started binding member
+keys.
+
+**The release gate moved, and it is worth being precise about how much.** The
+post-quantum composition, the only cryptography this project invented, now has a
+symbolic proof in `formal/`. The adversary is handed the whole X25519 private
+key, which is what a quantum break of the classical half looks like, and the
+group secret and the MLS epoch secret both survive; a second model with both
+halves broken shows the secret leaking, which is what makes the first result
+mean something rather than describe a model too weak to express an attack.
+
+That covers the composition. It does not cover the hardness of ML-KEM, the
+interior of the MLS key schedule, constant-time behaviour, or whether the
+implementation matches the model. And four rounds of review by the people who
+built this is not an independent audit, however thorough. **What can now be said
+is one verified composition, not verified guarantees.**
 
 This file is the honest ledger. Items move to **Done** only when a test proves
 them, not when the code exists. Three separate defects in this project were

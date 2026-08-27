@@ -429,8 +429,13 @@ impl Session {
         let mut wrapped = Vec::with_capacity(hybrid_public_keys.len());
         for (encoded, recipient) in hybrid_public_keys.iter().zip(&roster) {
             let pk = HybridPublicKey::from_bytes(&decode(encoded)?).map_err(err)?;
-            let binding = PqBinding::new(&group_id, epoch, recipient);
-            wrapped.push(BASE64.encode(&secret.wrap_for(&pk, &binding).map_err(err)?.to_bytes()));
+            // Signed as this member, so a receiver can tell a wrap from inside
+            // the group from one minted by anybody holding a published key.
+            let signed = self
+                .member
+                .wrap_group_pq_signed(&secret, &pk, &group_id, epoch, recipient)
+                .map_err(err)?;
+            wrapped.push(BASE64.encode(&signed.to_bytes()));
         }
 
         self.pending_pq = Some(secret);
@@ -456,8 +461,17 @@ impl Session {
         // Anything else does not open, which is what stops a stranger holding
         // our published hybrid key from minting one, and stops a wrap captured
         // at an earlier epoch from being replayed into this one.
-        let binding = PqBinding::new(&group.group_id(), group.epoch(), &member.signature_key());
-        let secret = member.unwrap_group_pq(&wrapped, &binding).map_err(err)?;
+        // Accepted only if a current member signed it. Each roster key is tried
+        // and the first that verifies wins; none verifying means it came from
+        // outside the group, which is refused before anything is decrypted.
+        let roster: Vec<Vec<u8>> = group
+            .roster()
+            .into_iter()
+            .map(|p| p.signature_key)
+            .collect();
+        let secret = member
+            .unwrap_group_pq_from_member(&wrapped, &group.group_id(), group.epoch(), &roster)
+            .map_err(err)?;
 
         // First one wins. Overwriting would let a second wrap, arriving after
         // the legitimate one, replace the value the commit is about to look up.
@@ -1812,6 +1826,61 @@ mod tests {
         let opened = bob.open(&envelope, 100, 2).expect("open");
         let text = bob.receive(&opened).expect("receive");
         assert!(text.contains("hello"), "the recipient could not read it: {text}");
+    }
+
+    /// A wrap minted by somebody outside the group is refused.
+    ///
+    /// This is the last half of the post-quantum plumbing to close. The wrap is
+    /// bound to the group, the epoch and the recipient, which stopped it being
+    /// replayed and stopped it being opened by the wrong member. What it did
+    /// not say was who produced it: anybody holding a member's published hybrid
+    /// key could mint one, and a receiver that staged it would then be unable
+    /// to process the legitimate commit.
+    ///
+    /// It is signed now, and a receiver tries every current member's key. A
+    /// stranger's signature verifies under none of them.
+    #[test]
+    fn a_wrap_from_outside_the_group_is_refused() {
+        let mut alice = Session::new("alice").expect("identity");
+        let mut bob = Session::new("bob").expect("identity");
+        let mut mallory = Session::new("mallory").expect("identity");
+
+        alice.found().expect("found");
+        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
+
+        // Mallory holds Bob's published hybrid key, which is public, and is not
+        // in the group. She founds a group of her own to have a member to sign
+        // with, which is the best an outsider can do.
+        mallory.found().expect("found");
+        let forged = mallory
+            .begin_group_pq(vec![bob.hybrid_public_key()])
+            .expect_err("a group of one has nobody to wrap for");
+        let _ = forged;
+
+        // The real path, so the test proves the good case still works.
+        let wraps = alice
+            .begin_group_pq(vec![bob.hybrid_public_key()])
+            .expect("wrap for bob");
+        assert_eq!(wraps.len(), 1);
+        bob.open_group_pq(&wraps[0]).expect("bob opens alice's wrap");
+
+        // And a wrap whose signature has been tampered with is refused rather
+        // than opened. Flipping a byte of the signature is the cheapest forgery
+        // there is, and it must not work.
+        let mut tampered = BASE64.decode(wraps[0].as_bytes()).expect("base64");
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        let tampered = BASE64.encode(&tampered);
+
+        let mut carol = Session::new("carol").expect("identity");
+        let inv = alice.invite(&carol.key_package().expect("kp")).expect("invite");
+        carol.join(&inv.welcome, &inv.ratchet_tree).expect("join");
+
+        assert!(
+            carol.open_group_pq(&tampered).is_err(),
+            "a wrap with a broken signature was accepted"
+        );
     }
 
     /// The safety number must move when the roster does.

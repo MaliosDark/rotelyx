@@ -10,7 +10,7 @@
 
 No accounts, no phone numbers, and no servers belonging to anybody else.
 
-[![tests](https://img.shields.io/badge/tests-596%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
+[![tests](https://img.shields.io/badge/tests-597%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-6a31ee?style=flat-square)](#try-it)
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-8b8b8b?style=flat-square)](#licence)
 [![status](https://img.shields.io/badge/status-unaudited-E0808C?style=flat-square)](#security-status)
@@ -267,6 +267,60 @@ instead of somebody else's.
 
 Details in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
+## What it costs
+
+Measured on the machine that ran it, in a release build, medians rather than
+best cases. Reproduce with `scripts/benchmarks`; the full table and the hardware
+it came from are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+| | |
+|---|---|
+| X-Wing encapsulate / decapsulate | 212 us / 266 us |
+| Encrypt a short message | 74 us |
+| Decrypt a short message | 101 us |
+| Derive a mailbox tag for an hour | 249 ns |
+| Seal and open a payload | 3.3 us / 2.6 us |
+| Protect and open one audio frame | 579 ns / 561 ns |
+| Export a group key at 8 members / at 1000 | 4.5 us / 4.3 us |
+| Encode and decode 20 ms of speech | **1.14 % of one core** |
+| Unlock the vault, Argon2id at 64 MiB | 224 ms |
+
+Two of those are worth reading twice. **The whole voice codec, both directions,
+costs a hundredth of a core**, which is what makes a call on a phone possible at
+all. And **the vault takes a fifth of a second on purpose**: everything else here
+is measured in microseconds because it runs per message, and that one runs when
+somebody types a passphrase, where slow is the feature.
+
+The group row is the third. Exporting a key costs the same at a thousand members
+as at eight, because it reads one secret out of the epoch rather than walking the
+tree, so a large group is expensive to change and free to use.
+
+Sizes are measured the same way and land where the paper says they do. A commit
+at a thousand members is 83,008 bytes, which is the figure the padding ladder was
+redesigned around.
+
+## Verified rather than asserted
+
+Two things about this code were checked by machine rather than by argument.
+
+**The post-quantum composition has a symbolic proof.** The novel part of Rotelyx
+is feeding an X-Wing secret into the pre-shared-key input MLS already defines,
+and until August 2026 nobody had shown that the result holds. A model of the
+whole construction, in [`formal/`](formal/), gives an attacker the entire X25519
+private key, which is what a quantum break of the classical half would look like,
+and the group secret and the MLS epoch secret both survive. A second model with
+both halves broken shows the secret leaking, which is what says the first result
+is about the construction rather than about a model that proves anything.
+
+What that does **not** establish is the hardness of ML-KEM, the interior of the
+MLS key schedule, or constant-time behaviour. Those need different tools and
+somebody else's eyes.
+
+**The parsers survive being fuzzed, and the hand-written ones are free of
+undefined behaviour.** `cargo fuzz` on the media frame reader found no crashes,
+and Miri on the two crates that do the parsing and the padding reported none of
+what it looks for. Both are `#![forbid(unsafe_code)]` to begin with.
+
 ## Read more
 
 | | |
@@ -278,6 +332,7 @@ Details in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 | [Deployment](docs/DEPLOYMENT.md) | Running one properly |
 | [Working on it](docs/CONTRIBUTING.md) | Layout, tests, roadmap |
 | [Provenance](docs/PROVENANCE.md) | Where the vendored code came from |
+| [What it costs](docs/BENCHMARKS.md) | Every timing, and the machine that produced it |
 
 ## Security status
 

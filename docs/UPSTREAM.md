@@ -27,7 +27,7 @@ is cleared by reading the source in this tree, never by comparing versions.
 
 Each entry says what the advisory is and what was found here.
 
-### RUSTSEC-2026-0185 — quinn-proto — ported
+### RUSTSEC-2026-0185, quinn-proto: ported
 
 Remote memory exhaustion. Out-of-order stream fragments are buffered until they
 can be joined into contiguous chunks. A peer that leaves a gap between every
@@ -42,23 +42,23 @@ and both call sites close the connection instead. Covered by
 `fragments_that_never_touch_are_refused_before_memory_runs_out` in
 `crates/net/rotelyx-quic-proto/src/connection/assembler.rs`.
 
-### RUSTSEC-2026-0037 — quinn-proto — already fixed here
+### RUSTSEC-2026-0037, quinn-proto: already fixed here
 
 Panic on malformed transport parameters: `unwrap()` on a truncated
 `max_datagram_frame_size` or `min_ack_delay`. Both sites in
 `crates/net/rotelyx-quic-proto/src/transport_parameters.rs` already use `?`, so
 the fork was taken after quinn PR 2559.
 
-### RUSTSEC-2024-0373 — quinn-proto — not applicable
+### RUSTSEC-2024-0373, quinn-proto: not applicable
 
 Fixed in quinn-proto 0.11.7. The transport-parameters check above places this
 fork after 0.11.14, so it carries this fix.
 
-### RUSTSEC-2023-0063 — quinn-proto — not applicable
+### RUSTSEC-2023-0063, quinn-proto: not applicable
 
 Fixed in quinn-proto 0.10.5, long before the fork point established above.
 
-### RUSTSEC-2021-0035 — quinn — not applicable
+### RUSTSEC-2021-0035, quinn: not applicable
 
 Fixed in quinn 0.7.0, in 2021. The async layer here derives from a fork made
 years after that.
@@ -80,13 +80,57 @@ named here makes the check exit non-zero.
 
 ## Vulnerabilities
 
-### RUSTSEC-2026-0258 — h2 — fixed by updating
+### RUSTSEC-2026-0258, h2: fixed by updating
 
 Empty DATA frames queued without limit, so a peer that never drains a stream can
 grow memory without bound. Reached through `hickory-resolver`, which the
 transport uses for DNS. Updated 0.4.15 to 0.4.18.
 
-### Two majors of x25519-dalek — neither is ours to choose
+### Three records, and none of them may drift
+
+`deny.toml` is what `cargo deny` reads. `.cargo/audit.toml` is what `cargo audit`
+reads. This document is where the reasoning lives. All three carry the same list,
+and `scripts/audit-dependencies` fails if they stop agreeing.
+
+That check exists because they did not always agree, and it cost something. For
+four consecutive review rounds a continuous audit harness reported the same
+dependency finding as open, recommending a `cargo update` that cannot work,
+while the analysis answering it sat in this file. `cargo deny` had been told;
+`cargo audit` had not. **Two dependency tools disagreeing is how a real finding
+gets lost between them**, and a report that carries a permanent false red trains
+its readers to skim exactly the section where a true one will eventually appear.
+
+The two tools also disagree honestly, which is worth knowing when reading their
+output: `cargo deny` resolves the build graph and `cargo audit` reads
+`Cargo.lock`, so a crate that is locked but never compiled shows up in one and
+not the other. The libcrux AEAD entries are exactly that case. The lists are
+kept identical anyway.
+
+### Why these are in `deny.toml` and not merely written about
+
+Every advisory below appears in the `ignore` list of `deny.toml`, and that is
+deliberate rather than a way of quieting a tool.
+
+An audit listed the same three dependency findings in three consecutive rounds,
+each time recommending `cargo update`, and each time the recommendation did not
+apply: `hpke-rs 0.6.1` pins `libcrux-sha3` at `^0.0.8`, which no `0.0.10` can
+satisfy, and there is no fixed `rsa` at all. An open finding that cannot be
+closed and is not real is worse than either: it trains everybody reading the
+report to skim that section, which is where a real one will eventually sit.
+
+So the tools now carry the conclusion. `cargo deny check advisories` passes,
+with a one-line reason beside each id. And `scripts/audit-dependencies` refuses
+to pass if an advisory id is missing from **this file**, so an entry cannot be
+added to `deny.toml` without the argument that justifies it being written down
+first. Deleting a section here breaks the build, which was checked by deleting
+one.
+
+The bar for an entry is that the code cannot run, not that the fix is
+inconvenient. Where that bar is not met, the entry says so: the `rsa` one is
+accepted because no patched version exists, and it carries a constraint on
+future work rather than a clean bill of health.
+
+### Two majors of x25519-dalek: neither is ours to choose
 
 An audit noted two implementations of the same primitive in one binary, which is
 a fair thing to notice: it doubles the code that has to be right and means a
@@ -107,7 +151,7 @@ alone.
 
 Revisit with OpenMLS 0.9, alongside the libcrux entries below.
 
-### RUSTSEC-2023-0071 — rsa — no patch exists, and nothing here performs the operation
+### RUSTSEC-2023-0071, rsa: no patch exists, and nothing here performs the operation
 
 The Marvin attack: a non-constant-time private-key operation leaks the key
 through timing an attacker can measure over the network. There is no fixed
@@ -128,7 +172,7 @@ the key that mints capability tokens.** It does not touch message content: MLS
 keys are unrelated. When an issuer is built, either the timing has to be
 unobservable or the signing has to move off this crate.
 
-### RUSTSEC-2026-0207, RUSTSEC-2026-0208 — libcrux-sha3 — the affected functions are not called
+### RUSTSEC-2026-0207, RUSTSEC-2026-0208, libcrux-sha3: the affected functions are not called
 
 Both are fixed in 0.0.10 and both are unreachable at 0.0.8, which is where
 `hpke-rs 0.6.1` pins us with `^0.0.8`. Getting 0.0.10 means `hpke-rs 0.7`, which
@@ -156,7 +200,7 @@ is in this graph and nothing calls that path.
 
 Revisit when OpenMLS 0.9 is stable.
 
-### RUSTSEC-2026-0212 — libcrux-secrets — not called on any platform
+### RUSTSEC-2026-0212, libcrux-secrets: not called on any platform
 
 Constant-time `select` and `swap` could return the wrong answer on aarch64,
 because the inline assembly compared a 32-bit register against an 8-bit
@@ -167,7 +211,7 @@ It does not reach us: `libcrux-secrets` arrives only as a dependency of
 `libcrux-traits`, which arrives as a dependency of `libcrux-sha3`, and
 `libcrux-sha3` contains no reference to `Select` or `Swap` at all.
 
-### RUSTSEC-2026-0209, RUSTSEC-2026-0211, RUSTSEC-2026-0124 — libcrux AEAD — never compiled
+### RUSTSEC-2026-0209, RUSTSEC-2026-0211, RUSTSEC-2026-0124, libcrux AEAD: never compiled
 
 An unbounded AAD length, a non-constant-time GCM tag comparison, and a panic on
 an overlong ciphertext buffer. All three would matter if this code ran.

@@ -288,6 +288,55 @@ impl Member {
         self.hybrid_sk.unwrap_pq(wrapped, binding)
     }
 
+    /// The same, but only if a member of this group signed it.
+    ///
+    /// The caller supplies the signature keys of the current roster. Each is
+    /// tried, and the wrap is accepted under the first that verifies; if none
+    /// does, it came from outside the group and is refused before anything is
+    /// decrypted.
+    ///
+    /// Trying every key rather than being told which one is deliberate. The
+    /// receiver has no way to know in advance who will rotate the material, and
+    /// asking it to guess would mean either a wrong guess refusing a legitimate
+    /// wrap or a caller passing whatever the sender claimed, which is not a
+    /// check at all.
+    pub fn unwrap_group_pq_from_member(
+        &self,
+        wrapped: &crate::WrappedPqSecret,
+        group_id: &[u8],
+        epoch: u64,
+        roster_signature_keys: &[Vec<u8>],
+    ) -> Result<PqSecret, crate::hybrid::HybridError> {
+        let mut last = crate::hybrid::HybridError::WrongSender;
+        for sender in roster_signature_keys {
+            let binding =
+                crate::hybrid::PqBinding::new(group_id, epoch, &self.signature_key(), sender);
+            match self.hybrid_sk.unwrap_pq_signed(wrapped, &binding) {
+                Ok(secret) => return Ok(secret),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    /// Wrap a group secret for one recipient and sign it as this member.
+    pub fn wrap_group_pq_signed(
+        &self,
+        secret: &PqSecret,
+        recipient: &crate::hybrid::HybridPublicKey,
+        group_id: &[u8],
+        epoch: u64,
+        recipient_signature_key: &[u8],
+    ) -> Result<crate::WrappedPqSecret, crate::hybrid::HybridError> {
+        let binding = crate::hybrid::PqBinding::new(
+            group_id,
+            epoch,
+            recipient_signature_key,
+            &self.signature_key(),
+        );
+        secret.wrap_and_sign(recipient, &binding, &self.signer)
+    }
+
     /// Produce a key package so others can add this member to a group.
     ///
     /// Published through the blind mailbox, never a directory: a key package

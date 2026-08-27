@@ -1,0 +1,53 @@
+# What `cargo audit` is allowed to pass over, and why.
+#
+# This file exists because the repository had two dependency tools disagreeing.
+# `cargo deny` carried the reviewed decisions and `cargo audit` did not, so a
+# continuous audit harness reported the same finding on four consecutive rounds
+# while the analysis that answers it sat in docs/UPSTREAM.md unread.
+#
+# An open finding that cannot be closed and is not real is worse than either:
+# it teaches everybody reading the report to skim that section, which is where
+# a real one will eventually sit.
+#
+# Three things now have to agree, and `scripts/audit-dependencies` fails if they
+# do not: this file, the ignore list in deny.toml, and a written section in
+# docs/UPSTREAM.md for every id. An entry cannot be added here without the
+# argument that justifies it being written down first.
+#
+# The bar is that the code cannot run, not that the fix is inconvenient. Where
+# that bar is not met the section says so: the rsa entry is accepted because no
+# patched version exists, and it carries a constraint on future work.
+
+[advisories]
+ignore = [
+  "RUSTSEC-2026-0207",  # unreachable: this ciphersuite's KEM never calls SHAKE
+  "RUSTSEC-2026-0208",  # unreachable: the call is to portable, not avx2
+  "RUSTSEC-2026-0212",  # unreachable: nothing in the graph calls the affected functions
+  "RUSTSEC-2023-0071",  # no patched version exists; the private-key path is not built here
+  "RUSTSEC-2024-0411",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0412",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0413",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0414",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0415",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0416",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0417",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0418",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0419",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2024-0420",  # gtk-rs bindings under Tauri
+  "RUSTSEC-2023-0089",  # atomic-polyfill, transitive and unmaintained
+  "RUSTSEC-2024-0384",  # instant, transitive and unmaintained
+  "RUSTSEC-2024-0436",  # paste, transitive and unmaintained
+  "RUSTSEC-2024-0370",  # proc-macro-error, build-time only
+  "RUSTSEC-2026-0173",  # proc-macro-error2, build-time only
+  "RUSTSEC-2025-0007",  # ring, unmaintained; still the rustls default
+  "RUSTSEC-2026-0210",  # libcrux-aesgcm renamed; not in the build graph
+  "RUSTSEC-2026-0209",  # libcrux-aead is in the lock, not in any build graph
+  "RUSTSEC-2026-0211",  # libcrux-aead is in the lock, not in any build graph
+  "RUSTSEC-2026-0124",  # libcrux-aead is in the lock, not in any build graph
+  "RUSTSEC-2024-0429",  # glib iterator unsoundness, under Tauri
+  "RUSTSEC-2025-0075",  # unic-char-range, transitive
+  "RUSTSEC-2025-0080",  # unic-common, transitive
+  "RUSTSEC-2025-0081",  # unic-char-property, transitive
+  "RUSTSEC-2025-0098",  # unic-ucd-version, transitive
+  "RUSTSEC-2025-0100",  # unic-ucd-ident, transitive
+]

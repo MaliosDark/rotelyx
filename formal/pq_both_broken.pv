@@ -1,0 +1,26 @@
+(* SANITY MODEL: both KEM halves broken -> secrecy MUST fail.
+   Confirms the main model is not vacuously true: if the adversary is
+   handed BOTH the classical and the PQ private keys, GSECRET leaks. *)
+type skey. type pkey. type ss.
+fun pk(skey): pkey.
+fun encaps(pkey, ss): bitstring.
+reduc forall s:skey, k:ss; decaps(encaps(pk(s),k), s) = k.
+fun combine(ss, ss): bitstring.
+type key.
+fun kdf_wrap(bitstring): key.
+fun senc(key, bitstring, bitstring): bitstring.
+reduc forall k:key, aad:bitstring, m:bitstring; sdec(k, aad, senc(k,aad,m)) = m.
+fun binding(bitstring): bitstring.
+free c: channel.
+free bind0: bitstring.
+free GSECRET: bitstring [private].
+query attacker(GSECRET).
+process
+  new cl_sk: skey; new pq_sk: skey;
+  new k_cl: ss; new k_pq: ss;
+  let ct_cl = encaps(pk(cl_sk), k_cl) in
+  let ct_pq = encaps(pk(pq_sk), k_pq) in
+  let wkey = kdf_wrap(combine(k_pq, k_cl)) in
+  let sealed = senc(wkey, bind0, GSECRET) in
+  out(c, (ct_cl, ct_pq, sealed));
+  out(c, cl_sk); out(c, pq_sk)     (* BOTH keys leaked *)

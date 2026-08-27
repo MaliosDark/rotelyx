@@ -16,9 +16,12 @@
 
 use rotelyx_crypto::hybrid::{HybridCiphertext, HybridKem, HybridPublicKey, WrappedPqSecret};
 
+/// A stand-in sender key for tests that are not about who sent it.
+const A_SENDER: &[u8] = &[7u8; 32];
+
 /// A binding for tests that are about parsing rather than about binding.
 fn a_binding() -> rotelyx_crypto::PqBinding {
-    rotelyx_crypto::PqBinding::new(b"a-group", 1, b"a-signature-key")
+    rotelyx_crypto::PqBinding::new(b"a-group", 1, b"a-signature-key", A_SENDER)
 }
 
 

@@ -4,6 +4,7 @@ resolver = "2"
 # suites and lint config do not run as part of Rotelyx's. See crates/net/README.md.
 exclude = ["crates/net"]
 members = [
+    "crates/rotelyx-bench",
     "crates/rotelyx-net",
     "crates/rotelyx-path",
     "crates/rotelyx-core",

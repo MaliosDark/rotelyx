@@ -19,8 +19,10 @@ X-Wing. This document covers only the join between them.
 
 RFC 9420 defines seven ciphersuites and all of them are classical. Post-quantum
 ciphersuites for MLS are still in draft. A conversation recorded today is
-therefore decryptable later by an adversary with a cryptographically relevant
-quantum computer.
+therefore exposed to harvest-now-decrypt-later: an adversary who stores the
+traffic keeps the option of reading it if a cryptographically relevant quantum
+computer is ever built. Whether one is built, and when, is not a claim this
+document makes.
 
 Two options were available:
 
@@ -31,6 +33,24 @@ Two options were available:
    pre-shared keys and mixes them into every epoch through its own key schedule.
 
 Rotelyx takes the second option. No line of MLS is modified.
+
+**What that does and does not buy.** Not modifying the protocol means the
+existing analyses continue to apply to the parts that are unchanged, which is
+the whole reason for choosing an extension point over a fork. It says nothing
+about this composition. Whether feeding an X-Wing shared secret into the
+pre-shared-key input yields an epoch secret that is post-quantum secure in the
+formal sense is a separate question, it is the contribution this document
+describes, and it requires its own analysis. A symbolic form of that analysis now
+exists, in `formal/pq_mls_composition.pv`, and it is described in section 4.4 of
+the paper. It gives an attacker the whole X25519 private key and the group
+secret still holds; `formal/pq_both_broken.pv` breaks both halves and watches it
+leak, which is what says the first model can express an attack at all.
+
+That is the composition and only the composition. The hardness of ML-KEM, the
+interior of the MLS key schedule, constant-time behaviour, and whether this
+implementation matches the model it was abstracted from are all outside it, and
+this document is still written to make a closer reading possible rather than to
+stand in for one.
 
 ---
 

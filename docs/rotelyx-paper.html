@@ -356,7 +356,7 @@
   <div class="byline">
     <span><b>Andryu Schittone</b> (Malios Dark)</span>
     <span>Ideoa Labs</span>
-    <span>26 August 2026</span>
+    <span>27 August 2026</span>
     <span>Revision 4</span>
   </div>
 
@@ -587,9 +587,13 @@
     <p>
       RFC 9420 defines seven ciphersuites, all of them classical.<sup><a href="#r1">[1]</a></sup>
       Post quantum ciphersuites for MLS remain in draft. A conversation recorded
-      today is therefore decryptable by a future adversary with a
-      cryptographically relevant quantum computer, an attack pattern usually
-      called harvest now, decrypt later.
+      today is therefore exposed to harvest now, decrypt later: an adversary
+      that stores the traffic keeps the option of reading it if a
+      cryptographically relevant quantum computer is ever built. Whether one is
+      built, and when, is not a claim this report makes. What it does claim is
+      that the cost of assuming it will not is borne entirely by the person
+      whose conversation was recorded, and that the cost of assuming it might is
+      1216 bytes.
     </p>
 
     <h3>Choice of primitive</h3>
@@ -705,9 +709,72 @@
       MLS has received machine checked symbolic security analysis, both for
       TreeKEM<sup><a href="#r4">[4]</a></sup> and for the external operations
       introduced in RFC 9420.<sup><a href="#r5">[5]</a></sup> Any modification
-      to the protocol forfeits the benefit of that analysis. Injecting at a
-      defined extension point does not.
+      to the protocol forfeits the benefit of that analysis. Injecting at an
+      extension point the standard already defines preserves the protocol
+      structure those analyses were performed against, so they remain applicable
+      to the parts that are unchanged.
     </p>
+    <p>
+      That is a narrower claim than it may read as, and the narrowness is the
+      point. <b>It says nothing about the composition itself.</b> Whether feeding
+      an X-Wing shared secret into the pre shared key input yields an epoch
+      secret that is post quantum secure in the formal sense is a separate
+      question, it is this work's own contribution, and it requires its own
+      analysis. Three consecutive reviews said the same thing and named it the
+      one piece of external work worth more than any other.
+    </p>
+
+    <h3>The composition, checked by machine</h3>
+
+    <p>
+      That analysis now exists in symbolic form. The construction was modelled in
+      ProVerif: X-Wing over ML-KEM-768 and X25519, the signed wrap that carries
+      the group secret, and the injection of that secret at the pre shared key
+      input. The models are published beside the source rather than described
+      here, because a proof nobody can run is a paragraph.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Query</th><th>Result</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td><code>not attacker(GSECRET)</code></td><td class="t-good">true</td><td>The group secret is not derivable by the adversary</td></tr>
+          <tr><td><code>not attacker(epoch_secret(...))</code></td><td class="t-good">true</td><td>Nor is the MLS epoch secret that consumes it</td></tr>
+          <tr><td><code>event(Accepted) ==&gt; event(Wrapped)</code></td><td class="t-good">true</td><td>A secret is only ever accepted if a member produced it</td></tr>
+          <tr><td><code>not attacker(GSECRET)</code>, both KEMs broken</td><td class="t-risk">false</td><td>With both halves broken the secret does leak</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      <b>The first three results are obtained with the entire X25519 private key
+      handed to the adversary.</b> That is what a quantum break of the classical
+      half looks like, and the secret survives it as long as ML-KEM does, which
+      is the hybrid claim stated as a query rather than as an intention. The
+      third result is the one the signature bought: before the wrap was signed,
+      the same query failed.
+    </p>
+
+    <p>
+      The fourth row is why the other three mean anything. A model that proves
+      everything proves nothing, and the standard failure of symbolic analysis is
+      an abstraction so strong that no attack could be expressed in it. Breaking
+      both halves and watching the secret leak is the sanity check that says the
+      adversary in this model can actually do something.
+    </p>
+
+    <div class="callout risk">
+      <span class="label">What this is not</span>
+      <p>
+        A symbolic model treats each primitive as a perfect black box. This says
+        <b>nothing</b> about the hardness of ML-KEM, nothing about the interior of
+        the MLS key schedule, and nothing about constant-time behaviour, all three
+        of which need different tools and other people's eyes. What it does
+        establish is the part that was this project's own invention and nobody
+        else's to check: that the composition holds if the primitives do.
+      </p>
+    </div>
+
     <div class="callout">
       <span class="label">Review target</span>
       <p>
@@ -2458,7 +2525,7 @@
   <div class="col">
     <p>
       The implementation is written in Rust across eighteen first party crates
-      plus a vendored transport tree, and is exercised by 596 tests. The Android
+      plus a vendored transport tree, and is exercised by 597 tests. The Android
       client is a separate tree with a suite of its own, not counted here. The
       distribution of those tests is more informative than the count.
     </p>
@@ -2684,11 +2751,44 @@
       made.
     </p>
     <p>
-      The work required before any public security claim is a full independent
-      cryptographic audit covering the post quantum composition and the
-      implementation of both encryption layers. Until then, Rotelyx is a design
-      with a working implementation and no verified guarantees.
+      One part of that has moved. The post quantum composition, which was the
+      only piece of cryptography this work invented, now has a symbolic proof
+      that it holds if its primitives do, and the models are published so the
+      result can be re-run rather than believed. Section 4.4.
     </p>
+    <p>
+      The rest has not. A symbolic model says nothing about the hardness of
+      ML-KEM, nothing about constant-time behaviour, and nothing about whether
+      the implementation matches the model it was abstracted from. Four rounds of
+      review by the people who built this is four rounds more than most projects
+      publish and is still not an independent audit. <b>Until one exists,
+      Rotelyx is a design with a working implementation, one verified
+      composition, and no independently verified guarantees.</b>
+    </p>
+  </div>
+</section>
+
+<!-- ================= revisions ================= -->
+<section>
+  <h2>Revisions</h2>
+  <div class="col">
+    <p>
+      Recorded because this document has changed materially four times in a
+      month, and a reader who saw an earlier one should be able to tell what
+      moved. Numbers quoted in an older revision were true of the tree that
+      produced it.
+    </p>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Revision</th><th>Date</th><th>What changed</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>August 2026</td><td>Initial architecture: the layering, the post quantum composition, path selection, the blind mailbox</td></tr>
+        <tr><td>2</td><td>20 August 2026</td><td>Padding measured and twice corrected, reachability and abuse resistance, groups, the media chapter and the codec</td></tr>
+        <tr><td>3</td><td>25 August 2026</td><td>Meeting codes, a call between two implementations, echo cancellation measured against a room, the listening sessions corrected</td></tr>
+        <tr><td>4</td><td>27 August 2026</td><td>Four rounds of review. The mailbox no longer stores framing an operator can read, the post quantum wrap is bound and signed, collection is acknowledged rather than destructive, one request type removed, and the composition checked in ProVerif. Two findings are fixed and deliberately not described here yet; see section 12</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 

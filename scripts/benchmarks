@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+#
+# Every figure this project quotes about time, measured on this machine.
+#
+#   scripts/benchmarks              print them
+#   scripts/benchmarks --write      print them and rewrite docs/BENCHMARKS.md
+#
+# # Why a script rather than `cargo bench`
+#
+# `cargo bench` wants a benchmarking framework, and the obvious one brings about
+# thirty crates into the lock file of a project that vendors its transport
+# rather than depend on something it has not read. What it buys is statistical
+# rigour over microseconds; every figure here is tens of microseconds or
+# milliseconds, where the median of enough runs is honest and legible without a
+# report generator.
+#
+# # Read the numbers as a property of a machine
+#
+# They are medians on the hardware that ran them, in a release build, with
+# whatever else that machine was doing. Two runs on different hardware differ.
+# The output carries no claim about what is fast, only about what it took.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+WRITE=0
+[ "${1:-}" = "--write" ] && WRITE=1
+
+# Release, always. A debug build measures the absence of optimisation.
+OUT=$(cargo run -q -p rotelyx-bench --release 2>/dev/null)
+echo "$OUT"
+
+[ "$WRITE" = 0 ] && exit 0
+
+CPU=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//' || echo unknown)
+RUSTC=$(rustc --version)
+
+{
+  echo "# What it costs"
+  echo
+  echo "Written by \`scripts/benchmarks --write\`. Do not edit by hand: the next"
+  echo "run overwrites it."
+  echo
+  echo "The paper quotes sizes throughout and timings almost nowhere, and the two"
+  echo "are not equally checkable. A size can be recomputed by reading the code."
+  echo "A timing cannot be recomputed by anybody who does not run it, which is"
+  echo "why this file exists and why it names the machine that produced it."
+  echo
+  echo "| | |"
+  echo "|---|---|"
+  echo "| Machine | $CPU |"
+  echo "| Compiler | $RUSTC |"
+  echo "| Profile | release |"
+  echo
+  echo "Each figure is the median of the sample count the harness states, after a"
+  echo "warm-up, not a best case. A best case is what a machine produces when"
+  echo "nothing else is happening, which is not the condition any of this runs in."
+  echo
+  echo '```'
+  echo "$OUT"
+  echo '```'
+  echo
+  echo "## What is deliberately absent"
+  echo
+  echo "Anything that needs a network: establishing a direct path, reaching a"
+  echo "relay, depositing to a mailbox over a socket. Those are dominated by the"
+  echo "network, and a number for them would say more about one room's wifi than"
+  echo "about Rotelyx. They belong in a field test across real NATs, which is"
+  echo "listed as open in \`TODO.md\` and has not been done."
+  echo
+  echo "## Reproducing it"
+  echo
+  echo '```sh'
+  echo "git clone <this repository> && cd rotelyx"
+  echo "cargo test --workspace              # 597 tests"
+  echo "cargo test -p rotelyx-crypto --test pq_vectors   # the published vectors"
+  echo "scripts/benchmarks                  # this file"
+  echo "scripts/audit-dependencies          # every advisory, reviewed"
+  echo "cargo deny check                    # bans, licences, sources, advisories"
+  echo '```'
+} > docs/BENCHMARKS.md
+
+echo
+echo "wrote docs/BENCHMARKS.md"
+echo "README.md carries a summary of these rows under \"What it costs\"."
+echo "It is not generated. Check it against the run above before you push."
