@@ -71,8 +71,18 @@ hole-punch.
   hold no session state.
 - **Not defended:** **A2.** The relay sees which address sends to which. This
   is the single largest metadata exposure in the system and it is inherent to
-  relayed transport. Mitigations: prefer direct paths and surface relay use in
-  the UI; support self-hosted relays; rotate relay selection.
+  relayed transport *as it is built today*. Mitigations: prefer direct paths and
+  surface relay use in the UI; support self-hosted relays; rotate relay
+  selection.
+- **The one design that would change this is written down and not built.**
+  Chaining two relays leaves the first knowing who sends and the second knowing
+  who receives, so no single operator holds the pair. `docs/RELAY-CHAINING.md`
+  carries the design, including the part that decides whether it is worth
+  anything: two operators who collude, or one person running both, hold exactly
+  what one relay holds today, and the software cannot tell. The sealing is
+  implemented and tested in `rotelyx-crypto::circuit`; the protocol work is in
+  the vendored relay and has not started. Until it is built, this row stands as
+  written.
 - **What a name per contact does and does not change here.** The identity key
   never reaches the wire; each invitation carries a transport key of its own, so
   no two people you invited are given the same **address**; and each conversation

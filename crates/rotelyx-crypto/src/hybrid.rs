@@ -398,6 +398,23 @@ impl WrappedPqSecret {
 ///
 /// Separated from the PSK derivation by its own context string: the same KEM
 /// output must never produce both a wrapping key and key-schedule material.
+/// Derive a 32 byte key from an encapsulated secret, under a context string.
+///
+/// Crate-visible so a sibling module can derive without reaching into
+/// `PqSecret`'s bytes. The bytes stay inside the module that owns them, which
+/// is the point: a secret whose representation is readable from anywhere is a
+/// secret that ends up copied somewhere it should not be.
+///
+/// The context separates uses. Two derivations from one encapsulation must not
+/// produce the same key, or a value sealed for one purpose opens under another.
+pub(crate) fn derive_key(kem_secret: &PqSecret, context: &str) -> Zeroizing<[u8; 32]> {
+    let mut hasher = blake3::Hasher::new_derive_key(context);
+    hasher.update(&kem_secret.0[..]);
+    let mut out = Zeroizing::new([0u8; 32]);
+    hasher.finalize_xof().fill(&mut out[..]);
+    out
+}
+
 fn wrapping_key(kem_secret: &PqSecret) -> Zeroizing<[u8; 32]> {
     let mut hasher = blake3::Hasher::new_derive_key(WRAP_CONTEXT);
     hasher.update(&kem_secret.0[..]);

@@ -349,6 +349,7 @@ what it looks for. Both are `#![forbid(unsafe_code)]` to begin with.
 | [Threat model](docs/THREAT-MODEL.md) | Ten adversaries, and what is not defended |
 | [The voice codec](docs/CODEC.md) | Why calls do not use Opus, and what a listener made of it |
 | [Post quantum](docs/PQ-COMPOSITION.md) | The construction, written for review |
+| [Relay chaining](docs/RELAY-CHAINING.md) | A design, not an implementation: what two relays would buy and what they would not |
 | [Deployment](docs/DEPLOYMENT.md) | Running one properly |
 | [Working on it](docs/CONTRIBUTING.md) | Layout, tests, roadmap |
 | [Provenance](docs/PROVENANCE.md) | Where the vendored code came from |

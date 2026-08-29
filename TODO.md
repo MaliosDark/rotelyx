@@ -2014,7 +2014,7 @@ discovers them by surprise.
 | Group size is capped at 1000 | Beyond it a commit exceeds 83 KB and the per member cost of a join keeps climbing. TreeKEM, not padding: the ladder no longer cliffs |
 | Padding above 1 KiB is coarser than it was | The ladder doubles instead of jumping 64 KiB to 1 MiB. Lengths above the floor are known to within a factor of two rather than eight. Conversation is unaffected, since the 1 KiB floor did not move |
 | An envelope stays until somebody acknowledges it | Delivery peeks and the client acks with `Collected`, so two devices on one tag both receive it. The cost is that an envelope nobody acks sits until its TTL, and a caller can read a tag it guessed. Reading a tag you should not read is eavesdropping on ciphertext you cannot open, where it used to be destroying it |
-| Relay chaining not implemented | A single relay sees both endpoints of a session. Chaining two would split that knowledge, at a latency cost |
+| Relay chaining not implemented | A single relay sees both endpoints of a session. Chaining two would split that knowledge, at a round trip. Designed in `docs/RELAY-CHAINING.md`, with the sealing built and tested in `rotelyx-crypto::circuit`; the protocol work is in the vendored relay and has not started |
 
 ---
 

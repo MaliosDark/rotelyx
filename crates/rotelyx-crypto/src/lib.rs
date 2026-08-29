@@ -28,12 +28,14 @@
 #![warn(missing_debug_implementations)]
 
 pub mod group;
+pub mod circuit;
 pub mod hybrid;
 
 pub use group::{
     MembershipChange, MemberState, Participant, Received,
     deserialize_key_package, serialize_key_package, Conversation, GroupError, Member, CIPHERSUITE,
 };
+pub use circuit::{circuit_binding, Hop, SealedHop, SEALED_HOP_LEN};
 pub use hybrid::{
     WrappedPqSecret, WRAPPED_SECRET_LEN,
     derive_psk, psk_binding,

@@ -1,0 +1,982 @@
+#!/usr/bin/env python3
+"""Write the legal and support pages.
+
+Generated rather than hand-written, for one reason: they share a header and a
+footer, and the footer is the map. Ten hand-maintained copies of a link list is
+ten chances for one page to point at something that moved, and the pages nobody
+edits are exactly the ones a stranger lands on from a search.
+
+The body of each page is prose and lives here, in full. Nothing is templated
+except the shell around it.
+
+    scripts/build-legal          write site/*.html for the pages below
+"""
+
+import pathlib, re, sys
+
+SITE = pathlib.Path(__file__).resolve().parent.parent / "site"
+UPDATED = "29 August 2026"
+
+# How the address is written, and why it is not a mailto link.
+#
+# The host rewrites any address it recognises into an obfuscated span plus a
+# decoder served from /cdn-cgi/, and this site's policy refuses that decoder, so
+# the page would show the literal text "[email protected]" to every visitor.
+# `.htaccess` says so beside the policy, and it was right: uploading one page
+# with a plain address produced exactly that.
+#
+# Allowing the decoder is the wrong fix, because it means allowing a script this
+# site does not control on pages that are otherwise `default-src 'none'`. So the
+# address is assembled by nothing at all: it is written in parts the scanner
+# does not join, and a person reads it without difficulty.
+MAIL = ('<strong>contact</strong> <span aria-hidden="true">&#64;</span>'
+        '<span class="sr">at</span> <strong>ideoa.co.uk</strong>')
+
+
+# The footer, and therefore the site map. Order is what a person needs first.
+FOOTER = [
+    ("Rotelyx", [
+        ("index.html", "Home"),
+        ("how-it-works.html", "How it works"),
+        ("architecture.html", "Architecture"),
+        ("paper.html", "Technical report"),
+        ("chat.html", "Try it in your browser"),
+    ]),
+    ("Support", [
+        ("faq.html", "Questions and answers"),
+        ("security.html", "Report a vulnerability"),
+        ("self-hosting.html", "Run your own server"),
+        ("accessibility.html", "Accessibility"),
+        ("contact.html", "Contact"),
+    ]),
+    ("Legal", [
+        ("privacy.html", "Privacy policy"),
+        ("terms.html", "Terms of service"),
+        ("data-deletion.html", "Data and deletion"),
+        ("children.html", "Children and age"),
+        ("law-enforcement.html", "Law enforcement"),
+        ("licence.html", "Licence and credits"),
+    ]),
+]
+
+NAV = [
+    ("index.html", "Home"),
+    ("how-it-works.html", "How it works"),
+    ("paper.html", "Paper"),
+    ("faq.html", "Questions"),
+    ("privacy.html", "Privacy"),
+]
+
+
+def footer_html() -> str:
+    cols = []
+    for title, links in FOOTER:
+        items = "\n".join(
+            f'        <li><a href="{href}">{label}</a></li>' for href, label in links
+        )
+        cols.append(
+            f'      <div>\n        <h4>{title}</h4>\n        <ul>\n{items}\n        </ul>\n      </div>'
+        )
+    return (
+        '  <footer class="sitefoot">\n'
+        '    <div class="cols">\n' + "\n".join(cols) + "\n    </div>\n"
+        '    <p class="fine">\n'
+        "      Rotelyx by Ideoa Labs. The protocol and both servers are AGPL-3.0 and the\n"
+        "      source is public. Rotelyx is pre-release and has not been reviewed by\n"
+        "      anybody outside the project: see the\n"
+        '      <a href="security.html">security page</a> before relying on it.\n'
+        "    </p>\n"
+        "  </footer>\n"
+    )
+
+
+def page(slug: str, title: str, description: str, eyebrow: str, h1: str, body: str) -> str:
+    nav = "".join(
+        f'<a href="{href}">{label}</a>' for href, label in NAV if href != slug
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="theme-color" content="#07070a" />
+<title>{title}</title>
+<meta name="description" content="{description}" />
+<link rel="canonical" href="https://rotelyx.com/{slug}" />
+<link rel="icon" href="assets/favicon.png" />
+<link rel="stylesheet" href="legal.css" />
+<link rel="stylesheet" href="footer.css" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="{title}" />
+<meta property="og:description" content="{description}" />
+<meta property="og:url" content="https://rotelyx.com/{slug}" />
+<meta property="og:image" content="https://rotelyx.com/assets/logo-dark.png" />
+<meta name="twitter:card" content="summary_large_image" />
+</head>
+<body>
+
+  <header class="header">
+    <a class="brand" href="index.html" aria-label="Rotelyx home"><img src="assets/logo-dark.png" alt="Rotelyx" /></a>
+    <nav>{nav}</nav>
+  </header>
+
+  <main>
+    <p class="eyebrow">{eyebrow}</p>
+    <h1>{h1}</h1>
+    <p class="updated">Last updated {UPDATED}</p>
+{body}
+  </main>
+
+{footer_html()}</body>
+</html>
+"""
+
+
+PRIVACY = f"""
+    <div class="note">
+      <p>
+        <strong>Rotelyx has no account, so there is no profile to describe.</strong>
+        There is no sign-up, no phone number, no email address and no directory.
+        Nothing here is a promise to handle your data carefully. It is an
+        account of how little of it exists.
+      </p>
+    </div>
+
+    <h2>What we collect</h2>
+
+    <p>
+      Nothing, in the ordinary sense of the word. There is no server that holds
+      an account for you, because there are no accounts. What follows is
+      everything a server sees while carrying a message, and it is written as a
+      list of what each one <em>can</em> see rather than what it stores.
+    </p>
+
+    <h3>Your identity</h3>
+    <p>
+      Your identity is a cryptographic key generated on your device. It is never
+      sent to us, never published, and never registered anywhere. Each person
+      you invite reaches you at a different address and is shown a different
+      name, so two of your contacts cannot compare notes and discover that they
+      both know you.
+    </p>
+
+    <h3>Your messages and calls</h3>
+    <p>
+      Encrypted on your device before they touch the network, with a key no
+      server holds. This is not a policy choice that could be reversed by a
+      future version of this page: no server has ever had a key that opens your
+      messages, so there is nothing for anyone to hand over, including us.
+    </p>
+
+    <h3>The mailbox, when somebody is offline</h3>
+    <p>
+      When the person you are writing to is not online, the message waits in a
+      mailbox. What the mailbox holds is a sealed envelope with no sender field
+      and a payload padded to one of a few fixed sizes, addressed to an opaque
+      tag that rotates every hour. It cannot read the message, is never told who
+      sent it, and cannot tell the length of what it carries.
+    </p>
+    <p>
+      What it does see is arrival time, and that is not removable: something has
+      to know when a message arrived in order to deliver it. An operator that
+      logged everything could observe that a deposit under one tag is often
+      followed within seconds by a collection under another, and over enough
+      exchanges that pattern identifies a conversation. We do not claim
+      otherwise, and it is written up in
+      <a href="paper.html">the technical report</a>, section 11.1.
+    </p>
+    <p>
+      An envelope is removed when the recipient acknowledges it. One that nobody
+      collects expires after seven days.
+    </p>
+
+    <h3>The relay, when a direct path is impossible</h3>
+    <p>
+      Roughly ten to twenty percent of network pairs cannot connect directly. In
+      those cases traffic goes through a relay, which forwards encrypted data it
+      cannot read. <strong>It does learn which two endpoints are talking</strong>,
+      and no configuration removes that. It is the reason Rotelyx prefers a
+      direct path over a relayed one at any latency, and the reason you can run
+      your own.
+    </p>
+
+    <h3>Notifications, on a phone</h3>
+    <p>
+      Waking a sleeping phone requires the platform's push service, which means
+      Apple or Google sees that your device received a wake signal and when.
+      They do not see the content: the push carries none. Rotelyx wakes every
+      registered device on one fixed schedule rather than when a message arrives
+      for that device, so a wake signal does not indicate that somebody wrote to
+      you. This is inherent to mobile platforms and we cannot remove it.
+    </p>
+
+    <h3>On your device</h3>
+    <p>
+      Your conversations are stored on your own device, sealed with a key
+      derived from your passphrase. Nobody else holds a copy, including us. If
+      you lose the device and have no backup, the conversations are gone: there
+      is no account to restore from. That is the trade this design makes and it
+      is not a bug to be fixed later.
+    </p>
+
+    <h2>What we do not do</h2>
+    <ul>
+      <li>No analytics, of any kind, first party or third party.</li>
+      <li>No crash reporting service.</li>
+      <li>No advertising identifiers and no advertising.</li>
+      <li>No third-party SDKs in the application.</li>
+      <li>No fonts, scripts or images loaded from anybody else's server.</li>
+      <li>No tracking pixels, and no cookies on this website.</li>
+      <li>Nothing is sold, rented or shared, because nothing is collected.</li>
+    </ul>
+    <p>
+      These are checkable rather than asserted: a test in the client fails the
+      build if any code names a host outside a short reviewed list, and the list
+      is published with a reason for each entry.
+    </p>
+
+    <h2>This website</h2>
+    <p>
+      These pages set no cookies and run no analytics. They are served through a
+      content delivery network, which sees the IP address of anybody who loads a
+      page, as every web server does. We do not add anything to that and we do
+      not build anything from it.
+    </p>
+
+    <h2>Paying for extra capacity</h2>
+    <p>
+      Extra mailbox capacity can be bought. The token that carries the allowance
+      is issued blindly, so what the issuer sees during a sale does not appear in
+      the token, and the mailbox cannot link a token to a purchase. The token
+      does carry a random identifier, because an allowance has to be counted
+      against something, and <strong>that identifier links one buyer's deposits
+      to each other</strong> without naming them. We state it here rather than
+      leave it to be discovered.
+    </p>
+
+    <h2>Children</h2>
+    <p>
+      Rotelyx is not directed at children under 13, and there is no account
+      system through which an age could be collected or verified. See
+      <a href="children.html">Children and age</a>.
+    </p>
+
+    <h2>Requests for your data</h2>
+    <p>
+      There is nothing to request and nothing to delete on our side, because
+      there is no account and no stored content. Everything you have is on your
+      own device and you can remove it there. See
+      <a href="data-deletion.html">Data and deletion</a>, which explains exactly
+      what that means and what it cannot reach.
+    </p>
+    <p>
+      For legal demands, see <a href="law-enforcement.html">Law enforcement</a>,
+      which states what could be produced under compulsion. It is short.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      If this page changes materially, the date at the top changes and the
+      previous version stays in the public source history, which is a stronger
+      record than our word for it.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      <a href="contact.html">the contact page</a>. For a security problem,
+      read <a href="security.html">the security page</a> first: it asks you not
+      to open a public issue, and says why.
+    </p>
+"""
+
+
+TERMS = f"""
+    <div class="note">
+      <p>
+        <strong>There is no account, so there is nothing to suspend and nothing
+        to sign up for.</strong> These terms cover the software and the servers
+        Ideoa Labs runs. Run your own and only the licence applies.
+      </p>
+    </div>
+
+    <h2>What this is</h2>
+    <p>
+      Rotelyx is software for private messages and calls. The protocol and both
+      servers are published under the AGPL-3.0 and can be read, modified and run
+      by anybody. See <a href="licence.html">Licence and credits</a>.
+    </p>
+
+    <h2>Pre-release, and what that means for you</h2>
+    <p>
+      Rotelyx has not been reviewed by anybody outside the project.
+      <strong>Do not use it to protect anything whose exposure would harm
+      you.</strong> That is not a formality: five rounds of internal review is
+      more than most projects publish and it is still the people who wrote the
+      code checking their own work.
+    </p>
+
+    <h2>The servers we run</h2>
+    <p>
+      A relay and a mailbox are provided for convenience. They are offered as
+      they are, with no uptime promised and no guarantee that a message will
+      arrive. An envelope nobody collects expires after seven days. A restart
+      can drop messages that were waiting. If delivery matters to you, run your
+      own: <a href="self-hosting.html">it is one command</a>.
+    </p>
+    <p>
+      We may limit or refuse traffic that threatens the service for everybody,
+      by volume rather than by content, because we cannot read content. Refusals
+      are by connection and by allowance, and both are documented.
+    </p>
+
+    <h2>What you agree not to do</h2>
+    <ul>
+      <li>Do not use our servers to send unsolicited bulk messages.</li>
+      <li>Do not attack the servers or attempt to exhaust them for others.</li>
+      <li>Do not use Rotelyx for anything illegal where you are.</li>
+    </ul>
+    <p>
+      We cannot see what you send, so enforcement of the last one is not
+      something we are able to perform, and we do not pretend to. What we can
+      act on is load.
+    </p>
+
+    <h2>Your content</h2>
+    <p>
+      Yours. We claim no licence over it and could not exercise one: it is
+      encrypted before it reaches any server we run.
+    </p>
+
+    <h2>No warranty</h2>
+    <p>
+      The software is provided without warranty of any kind, as the AGPL-3.0
+      states in sections 15 and 16. To the extent the law allows, Ideoa Labs is
+      not liable for loss arising from use of the software or the servers,
+      including undelivered or lost messages.
+    </p>
+    <p>
+      Some jurisdictions do not allow that exclusion, and where yours does not,
+      this clause applies only as far as it is permitted.
+    </p>
+
+    <h2>Ending</h2>
+    <p>
+      Stop using it. There is no account to close. Delete the application and
+      its data goes with it, because the data was only ever on your device.
+    </p>
+
+    <h2>Changes and law</h2>
+    <p>
+      Material changes move the date at the top, and the previous text stays in
+      the public history. These terms are governed by the law of England and
+      Wales, without affecting any rights you have as a consumer where you live.
+    </p>
+"""
+
+
+DATA_DELETION = f"""
+    <div class="note">
+      <p>
+        <strong>There is no account to delete.</strong> Play and the App Store
+        both require a route for deleting an account and its data. This page is
+        that route, and it is short because the data is not held anywhere we
+        could delete it from.
+      </p>
+    </div>
+
+    <h2>What exists, and where</h2>
+
+    <table>
+      <thead><tr><th>What</th><th>Where it lives</th><th>Held by us</th></tr></thead>
+      <tbody>
+        <tr><td>Your identity key</td><td>Your device</td><td class="no">No</td></tr>
+        <tr><td>Your conversations and their history</td><td>Your device, sealed</td><td class="no">No</td></tr>
+        <tr><td>Your contacts</td><td>Your device</td><td class="no">No</td></tr>
+        <tr><td>Your name, email, phone number</td><td>Never asked for</td><td class="no">No</td></tr>
+        <tr><td>An undelivered message</td><td>The mailbox, sealed, up to seven days</td><td class="yes">Ciphertext only</td></tr>
+        <tr><td>A push token, if notifications are on</td><td>The mailbox, until revoked</td><td class="yes">Yes</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Deleting everything</h2>
+
+    <h3>On a phone</h3>
+    <p>
+      Uninstall the application. Its storage goes with it, and that storage was
+      the only copy. There is nothing to ask us for afterwards, and nothing we
+      could return if you did.
+    </p>
+    <p>
+      To be sure a device stops being woken first, turn notifications off in the
+      application before uninstalling: that revokes the push registration on the
+      mailbox. Uninstalling without doing so leaves a token there, which the
+      platform will report as dead the next time it is used and which is then
+      removed.
+    </p>
+
+    <h3>In the browser</h3>
+    <p>
+      Clear site data for this origin, or use the private mode, which writes
+      nothing down and asks again next time.
+    </p>
+
+    <h3>On a desktop</h3>
+    <p>
+      Delete the key file and the conversation files the client created. Their
+      location is in <a href="self-hosting.html">the deployment notes</a>.
+    </p>
+
+    <h2>What deleting cannot reach</h2>
+    <p>
+      This is the part usually left out. Deleting your copy does not delete
+      anybody else's. The people you wrote to still have what you sent them, and
+      no message ever leaves your device with a promise attached that the other
+      end will honour it. Self-destructing messages are removed by the other
+      application because it agreed to, and anybody who wants to keep a message
+      can photograph their own screen. That is true of every messenger and we
+      say so rather than implying otherwise.
+    </p>
+
+    <h2>Asking us anyway</h2>
+    <p>
+      If you want written confirmation that we hold nothing, write to
+      <a href="contact.html">the contact page</a> and we will send it. We
+      cannot identify you to check, which is the point: there is no record with
+      your name on it to look up.
+    </p>
+"""
+
+
+LAW = f"""
+    <div class="note">
+      <p>
+        <strong>We cannot produce message content, because we never have it.</strong>
+        This page says what could be produced instead, so that nobody has to
+        guess and so that the answer is on the record before it is asked for.
+      </p>
+    </div>
+
+    <h2>What we could hand over</h2>
+
+    <table>
+      <thead><tr><th>Asked for</th><th>What exists</th></tr></thead>
+      <tbody>
+        <tr><td>Message or call content</td><td class="no">Nothing. Encrypted before it reaches any server, with a key no server holds</td></tr>
+        <tr><td>An account, or a name behind one</td><td class="no">Nothing. There are no accounts</td></tr>
+        <tr><td>A phone number or email address</td><td class="no">Nothing. Never collected</td></tr>
+        <tr><td>A contact list</td><td class="no">Nothing. It lives on the device</td></tr>
+        <tr><td>Message history</td><td class="no">Nothing. Held only on the devices</td></tr>
+        <tr><td>Undelivered messages</td><td class="yes">Sealed envelopes under opaque tags, unreadable, for up to seven days</td></tr>
+        <tr><td>Which endpoints a relay carried</td><td class="yes">Only while a session is live and only if we were logging, which we are not by default</td></tr>
+        <tr><td>Connecting IP addresses</td><td class="yes">Whatever the web and proxy layers log, as any server does</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      A demand for content would be answered with an explanation of why there is
+      none. That is not defiance and it is not a legal strategy: it is the
+      consequence of a design in which the keys exist only on the participants'
+      own devices.
+    </p>
+
+    <h2>What we would do</h2>
+    <ul>
+      <li>Require valid legal process from a jurisdiction that applies to us.</li>
+      <li>Produce only what the process actually compels and nothing beyond it.</li>
+      <li>Tell the person affected, unless we are forbidden to. Where we are
+          forbidden, we will say so once the prohibition ends.</li>
+      <li>Publish the numbers, once there are any to publish.</li>
+    </ul>
+
+    <h2>The limits of this page</h2>
+    <p>
+      We run one relay and one mailbox. Anybody can run their own, and many
+      people should, so a demand made to us reaches only the traffic that
+      happened to cross our machines. That is a property of the design rather
+      than a jurisdictional trick: compromising one operator compromises one
+      community rather than a population.
+    </p>
+    <p>
+      Nothing here is a promise about what a future legal regime could compel.
+      If we were ever ordered to change the software in a way that undermined
+      it, the source is public and the builds are reproducible: what a server
+      hands you can be checked against the source it claims to come from. That
+      check is the protection, not this paragraph.
+    </p>
+
+    <h2>Where to write</h2>
+    <p>
+      <a href="contact.html">the contact page</a>, with the words
+      <code>legal request</code> in the subject.
+    </p>
+"""
+
+
+CHILDREN = f"""
+    <h2>Who this is for</h2>
+    <p>
+      Rotelyx is not directed at children under 13, and it is not designed as a
+      children's product. We do not knowingly provide it to them.
+    </p>
+
+    <h2>Why we cannot verify an age</h2>
+    <p>
+      There is no account, no sign-up, and no identity of any kind collected, so
+      there is nothing through which an age could be asked for or checked.
+      Building one would mean building the thing this project exists to avoid: a
+      register of who its users are.
+    </p>
+    <p>
+      We would rather say that plainly than add an unchecked box asking somebody
+      to confirm they are old enough, which verifies nothing and exists to move
+      responsibility rather than to protect anybody.
+    </p>
+
+    <h2>What that means for a parent</h2>
+    <ul>
+      <li>
+        Rotelyx has no directory and no discovery. Nobody can find or contact a
+        person who has not handed them an invitation first. That is the default
+        and it cannot be switched off.
+      </li>
+      <li>
+        There are no public groups, no channels, no recommendations and no
+        strangers.
+      </li>
+      <li>
+        Message content is not visible to us, which also means we cannot moderate
+        it. There is no reporting mechanism that could reach content we cannot
+        read.
+      </li>
+      <li>
+        The application holds its data on the device. Device-level controls,
+        which you already have, are the ones that apply.
+      </li>
+    </ul>
+
+    <h2>If you believe a child is using it</h2>
+    <p>
+      There is no account for us to close and no data for us to delete: removing
+      the application removes everything. If you want to tell us anyway, write to
+      <a href="contact.html">the contact page</a>.
+    </p>
+"""
+
+
+FAQ = f"""
+    <h2>Do I need a phone number?</h2>
+    <p>
+      No. There is no phone number, no email address and no account. Your
+      identity is a key your device generates, and it is never published
+      anywhere.
+    </p>
+
+    <h2>Then how does somebody reach me?</h2>
+    <p>
+      You hand them an invitation, or you both read the same short code. There
+      is no directory to look anyone up in, which is the same reason nobody can
+      look you up either. See <a href="how-it-works.html">how it works</a>.
+    </p>
+
+    <h2>What can the server see?</h2>
+    <p>
+      Not what you write, not how long it is, and not who you are. When a
+      message waits for somebody offline, the mailbox sees an opaque tag, a
+      payload padded to a fixed size, and the time it arrived. When traffic has
+      to go through a relay, the relay sees which two endpoints are talking,
+      which is why a direct path is always preferred and why you can run your
+      own. Full detail is in <a href="privacy.html">the privacy policy</a>.
+    </p>
+
+    <h2>Is it audited?</h2>
+    <p>
+      Not by anybody outside the project. It has been through five rounds of
+      internal review and every finding is fixed, and internal review is not the
+      same thing. Until somebody independent has looked, treat it as
+      pre-release. The <a href="security.html">security page</a> says what that
+      means and invites the review.
+    </p>
+
+    <h2>Is it quantum-proof?</h2>
+    <p>
+      The key agreement is hybrid: it combines a classical algorithm with
+      ML-KEM-768, and both would have to be broken for the shared secret to
+      fall. That protects against traffic recorded today being read later. It is
+      not a claim that everything in the system is post-quantum, and the
+      composition is described in <a href="paper.html">the report</a>.
+    </p>
+
+    <h2>Can I run my own server?</h2>
+    <p>
+      Yes, and it is one command for each. Neither needs an account, a key or a
+      payment. See <a href="self-hosting.html">running your own</a>.
+    </p>
+
+    <h2>Are calls really not WebRTC?</h2>
+    <p>
+      They are not. Rotelyx has its own codec and media transport, and calls are
+      always relayed rather than direct, because a direct path would hand your
+      network address to whoever is on the call.
+    </p>
+
+    <h2>What happens if I lose my phone?</h2>
+    <p>
+      The conversations on it are gone: there is no account to restore from and
+      nobody else holds a copy. If you still have another device in the same
+      conversation, you can remove the lost one, which moves the group to keys
+      it cannot follow.
+    </p>
+
+    <h2>Can you read my messages if a court asks?</h2>
+    <p>
+      No, and not as a matter of policy. The keys exist only on the participants'
+      devices, so there is nothing to produce. See
+      <a href="law-enforcement.html">law enforcement</a>.
+    </p>
+
+    <h2>Is it free?</h2>
+    <p>
+      Yes. Extra mailbox capacity can be bought for heavy use, and the token that
+      carries it is issued blindly so a purchase cannot be tied to the use.
+    </p>
+
+    <h2>Where is the source?</h2>
+    <p>
+      Public, under the AGPL-3.0, including both servers. See
+      <a href="licence.html">licence and credits</a>.
+    </p>
+"""
+
+
+SECURITY = f"""
+    <div class="note">
+      <p>
+        <strong>Found something? Write to
+        {MAIL} and please
+        do not open a public issue.</strong> A public issue is a working exploit
+        handed to everybody reading, including everybody currently running the
+        affected build.
+      </p>
+    </div>
+
+    <h2>Where this stands</h2>
+    <p>
+      Rotelyx has been through five rounds of internal review at Ideoa Labs.
+      Every finding raised against code written here is fixed, and each fix has a
+      test that fails without it. The arc ran from a critical key-reuse defect in
+      calls, through a mailbox that leaked which conversation an envelope
+      belonged to, down to nothing open.
+    </p>
+    <p>
+      <strong>Internal is not independent.</strong> Five rounds by the people who
+      built something is five more than most projects publish and it is still
+      not an outside audit. There is no budget to commission one, so this is an
+      invitation rather than a placeholder: the formal models, the constant-time
+      harness and the reachability arguments for every dependency advisory are
+      all in the public source, to be re-run and attacked.
+    </p>
+
+    <h2>What to send</h2>
+    <p>
+      Whatever you have. A partial report that arrives is worth more than a
+      complete one that does not. What breaks, what an attacker gets, how to
+      reproduce it, and which build you were looking at. If you want it
+      encrypted, say so in a first message with nothing sensitive in it.
+    </p>
+
+    <h2>What happens next</h2>
+    <ul>
+      <li>We acknowledge within three working days. If you hear nothing, assume
+          the mail went astray and send it again.</li>
+      <li>We say what we think it is within ten working days.</li>
+      <li>We fix it and publish what was wrong once a fix is out, naming you
+          unless you ask us not to.</li>
+    </ul>
+    <p>
+      There is no bug bounty. This is a pre-release project run by a small team
+      and we would rather say so than imply a payment that does not exist.
+    </p>
+
+    <h2>Disclosure</h2>
+    <p>
+      We ask for ninety days before publication and will move faster whenever we
+      can. If we go quiet, or if we are still arguing about severity after ninety
+      days, publish. A deadline only the reporter honours is not a deadline.
+    </p>
+
+    <h2>What is not a finding</h2>
+    <ul>
+      <li>That the project has not been independently audited. It says so here
+          and on the front page.</li>
+      <li>Anything listed as unsolved in the threat model: a compromised device
+          rendering plaintext, a global observer correlating flows. A new attack
+          within one of those classes may still be worth reporting, and a way to
+          solve one certainly is.</li>
+      <li>A missing header or a scanner grade on a page that holds no key and
+          serves no session, unless you can say what an attacker does with it.</li>
+    </ul>
+"""
+
+
+SELF_HOSTING = f"""
+    <div class="note">
+      <p>
+        <strong>Both servers are one command and neither needs an account, a key
+        or a payment.</strong> Point your client at your own and the table on
+        the privacy page describes a machine you control instead of somebody
+        else's.
+      </p>
+    </div>
+
+    <h2>Why you might</h2>
+    <p>
+      Two things a server can learn are not removable by cryptography. A relay
+      sees which two endpoints are talking. A mailbox sees when an envelope
+      arrived and when it was collected. Running your own does not delete those
+      observations; it changes who holds them, which for many people is the whole
+      question.
+    </p>
+
+    <h2>Building them</h2>
+    <p>You need <a href="https://rustup.rs">Rust</a> 1.85 or newer.</p>
+    <pre><code>cargo build -p rotelyx-relay -p rotelyx-mailbox-server</code></pre>
+
+    <h2>Running them</h2>
+    <pre><code>./target/debug/rotelyx-relay          --bind 0.0.0.0:3340 --open
+./target/debug/rotelyx-mailbox-server --bind 0.0.0.0:3341</code></pre>
+    <p>
+      The relay refuses to start without either <code>--open</code> or
+      <code>--allow &lt;file&gt;</code>, on purpose: an open relay should be
+      something somebody decided rather than the result of forgetting a flag. An
+      empty allowlist admits nobody rather than everybody.
+    </p>
+
+    <h2>What each one costs you</h2>
+    <ul>
+      <li>
+        <strong>An open relay</strong> costs bandwidth and a connection log
+        covering people you have no relationship with. It costs no
+        confidentiality: it forwards data it cannot read either way.
+      </li>
+      <li>
+        <strong>A mailbox</strong> holds sealed envelopes for up to seven days.
+        Without a state file a restart drops them, which is the
+        seizure-resistant choice: a stopped server with nothing on disk hands
+        over nothing.
+      </li>
+    </ul>
+
+    <h2>Keeping them up</h2>
+    <p>
+      Both ship systemd units, and the reason they exist is worth reading: an
+      outage went unnoticed because the processes had been started by hand and
+      nothing was watching. The units are in the source under
+      <code>docs/systemd/</code>, with the nginx blocks beside them.
+    </p>
+
+    <h2>Full notes</h2>
+    <p>
+      <code>docs/DEPLOYMENT.md</code> in the source covers TLS, the reverse
+      proxy, rate limits and what an operator can and cannot see.
+    </p>
+"""
+
+
+ACCESSIBILITY = f"""
+    <h2>Where this stands</h2>
+    <p>
+      Rotelyx aims at WCAG 2.1 AA. It is not there yet and this page says what is
+      known rather than claiming a level nobody has measured.
+    </p>
+
+    <h2>What is done</h2>
+    <ul>
+      <li>Text contrast on these pages and in the application meets AA.</li>
+      <li>Every interactive control is reachable by keyboard, with a visible
+          focus ring that is not removed.</li>
+      <li>Nothing conveys meaning by colour alone: the safety-number states, the
+          delivery marks and the connection status all carry words.</li>
+      <li>Text scales with the system setting rather than being pinned in pixels.</li>
+      <li>No flashing, and no motion that cannot be stopped.</li>
+    </ul>
+
+    <h2>What is not</h2>
+    <ul>
+      <li>
+        <strong>The application draws to a canvas.</strong> It is built with
+        Flutter, which renders its own interface rather than emitting a document
+        a screen reader can walk. Semantic labels are attached, and the result
+        has not been tested with a screen reader by somebody who uses one daily.
+        That is the honest state and it is the largest gap.
+      </li>
+      <li>The safety number is twelve groups of five digits, which is a lot to
+          read aloud. There is no shorter form that is as hard to forge.</li>
+      <li>No formal audit against WCAG has been carried out.</li>
+    </ul>
+
+    <h2>Tell us</h2>
+    <p>
+      If something is unusable for you, write to
+      <a href="contact.html">the contact page</a>. Specific beats general: the
+      screen, the assistive technology and what happened.
+    </p>
+"""
+
+
+CONTACT = f"""
+    <h2>Email</h2>
+    <p>
+      {MAIL} reaches us for
+      everything. We are a small team and answer in days rather than minutes.
+    </p>
+
+    <h2>Which subject line to use</h2>
+    <table>
+      <thead><tr><th>If it is</th><th>Put this in the subject</th></tr></thead>
+      <tbody>
+        <tr><td>A security problem</td><td><code>security</code>, and read <a href="security.html">the security page</a> first</td></tr>
+        <tr><td>A legal demand</td><td><code>legal request</code>. See <a href="law-enforcement.html">law enforcement</a></td></tr>
+        <tr><td>Something unusable for you</td><td><code>accessibility</code></td></tr>
+        <tr><td>Press</td><td><code>press</code></td></tr>
+        <tr><td>Anything else</td><td>Whatever it is about</td></tr>
+      </tbody>
+    </table>
+
+    <h2>What we cannot do</h2>
+    <p>
+      We cannot recover a lost conversation, identify a user, read a message or
+      close an account. Not as a matter of policy: there are no accounts, and the
+      keys exist only on the devices. <a href="data-deletion.html">Data and
+      deletion</a> sets out exactly what exists and where.
+    </p>
+
+    <h2>Who we are</h2>
+    <p>
+      Ideoa Labs. The source, the threat model and the technical report are all
+      public, which is a better introduction than a page about us would be.
+    </p>
+"""
+
+
+LICENCE = f"""
+    <h2>Rotelyx</h2>
+    <p>
+      The protocol, both servers and the clients are published under the
+      <strong>GNU Affero General Public License, version 3</strong>. That licence
+      is deliberate: it requires that anybody running a modified version as a
+      network service publishes their modifications. For software whose whole
+      claim is what a server cannot see, being able to read what a server is
+      actually running is the point.
+    </p>
+
+    <h2>What that gives you</h2>
+    <ul>
+      <li>Run it, for any purpose.</li>
+      <li>Read the source and check that a build corresponds to it. The builds
+          are reproducible and the hashes are published in the repository rather
+          than served from the same origin as the files they describe.</li>
+      <li>Change it and share your changes, under the same licence.</li>
+    </ul>
+
+    <h2>Standards this implements</h2>
+    <table>
+      <thead><tr><th>What</th><th>Where it comes from</th></tr></thead>
+      <tbody>
+        <tr><td>Group and message encryption</td><td>MLS, RFC 9420</td></tr>
+        <tr><td>Post-quantum key agreement</td><td>X-Wing, over ML-KEM-768 and X25519</td></tr>
+        <tr><td>Media framing</td><td>SFrame, RFC 9605</td></tr>
+        <tr><td>Transport</td><td>QUIC with TLS 1.3</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Work by other people</h2>
+    <p>
+      The transport is derived from iroh, whose socket layer comes from Tailscale
+      and whose QUIC layer is a fork of quinn, under MIT, Apache-2.0 and
+      BSD-3-Clause. It is vendored into the source rather than downloaded, and
+      the full provenance, including which parts were rewritten and which were
+      not, is recorded in the repository. Group encryption is OpenMLS.
+    </p>
+    <p>
+      Rotelyx owns the policy layers and the media stack. It does not claim to
+      have written a QUIC implementation.
+    </p>
+
+    <h2>The name</h2>
+    <p>Rotelyx and the mark are Ideoa Labs'. The code is yours to fork; the name is not.</p>
+"""
+
+
+PAGES = [
+    ("privacy.html", "Privacy policy · Rotelyx",
+     "What Rotelyx collects, which is nothing, and exactly what each server can see while carrying a message.",
+     "Legal", "Privacy policy", PRIVACY),
+    ("terms.html", "Terms of service · Rotelyx",
+     "The terms for the software and the servers Ideoa Labs runs. There is no account, so there is nothing to sign up for.",
+     "Legal", "Terms of service", TERMS),
+    ("data-deletion.html", "Data and deletion · Rotelyx",
+     "What data exists, where it lives, and how to delete all of it. There is no account to delete.",
+     "Legal", "Data and deletion", DATA_DELETION),
+    ("law-enforcement.html", "Law enforcement requests · Rotelyx",
+     "What could be produced under legal process, and what could not, because the keys are only on the devices.",
+     "Legal", "Law enforcement", LAW),
+    ("children.html", "Children and age · Rotelyx",
+     "Rotelyx is not directed at children under 13, and why an age cannot be verified without building the thing this project avoids.",
+     "Legal", "Children and age", CHILDREN),
+    ("licence.html", "Licence and credits · Rotelyx",
+     "Rotelyx is AGPL-3.0, including both servers. The standards it implements and the work it is built on.",
+     "Legal", "Licence and credits", LICENCE),
+    ("faq.html", "Questions and answers · Rotelyx",
+     "No phone number, no account, no directory. What the servers can see, whether it is audited, and how to run your own.",
+     "Support", "Questions and answers", FAQ),
+    ("security.html", "Report a vulnerability · Rotelyx",
+     "How to report a security problem, what happens next, and where the project stands on review.",
+     "Support", "Security", SECURITY),
+    ("self-hosting.html", "Run your own server · Rotelyx",
+     "The relay and the mailbox are one command each. What each one costs you, and what it does not.",
+     "Support", "Run your own server", SELF_HOSTING),
+    ("accessibility.html", "Accessibility · Rotelyx",
+     "Where Rotelyx stands against WCAG 2.1 AA, what is done and what is not, including the canvas problem.",
+     "Support", "Accessibility", ACCESSIBILITY),
+    ("contact.html", "Contact · Rotelyx",
+     "How to reach Ideoa Labs, which subject line to use, and what we cannot do for you.",
+     "Support", "Contact", CONTACT),
+]
+
+
+def sitemap() -> str:
+    """Every page, so a search engine finds the ones nothing links to prominently."""
+    urls = ["index.html", "how-it-works.html", "architecture.html", "paper.html",
+            "chat.html"] + [slug for slug, *_ in PAGES]
+    body = "\n".join(
+        f"  <url><loc>https://rotelyx.com/{u}</loc><lastmod>2026-08-29</lastmod></url>"
+        for u in urls
+    )
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            f"{body}\n</urlset>\n")
+
+
+def main() -> int:
+    for slug, title, description, eyebrow, h1, body in PAGES:
+        (SITE / slug).write_text(page(slug, title, description, eyebrow, h1, body))
+        print(f"  {slug}")
+
+    (SITE / "sitemap.xml").write_text(sitemap())
+    print("  sitemap.xml")
+
+    robots = SITE / "robots.txt"
+    text = robots.read_text() if robots.exists() else "User-agent: *\nAllow: /\n"
+    if "Sitemap:" not in text:
+        text = text.rstrip() + "\n\nSitemap: https://rotelyx.com/sitemap.xml\n"
+        robots.write_text(text)
+        print("  robots.txt now names the sitemap")
+
+    print(f"\n{len(PAGES)} pages written. Upload site/ whole: the footer on every")
+    print("one of them links to the others, so a half-finished upload leaves")
+    print("dead links on the pages that did go up.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
