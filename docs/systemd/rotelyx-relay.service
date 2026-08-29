@@ -44,7 +44,8 @@ Wants=network-online.target
 Type=exec
 User=OPERATOR
 WorkingDirectory=/home/OPERATOR/rotelyx
-ExecStart=/home/OPERATOR/rotelyx/target/release/rotelyx-relay --bind 0.0.0.0:3340 --open
+ExecStart=/home/OPERATOR/rotelyx/target/release/rotelyx-relay --bind 0.0.0.0:3340 --open \
+  --status /home/OPERATOR/.local/state/rotelyx/relay-status
 
 Restart=always
 RestartSec=2
@@ -54,6 +55,16 @@ PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=read-only
+
+# The one hole in ProtectHome, and it is needed.
+#
+# The landing page reports whether this service is running, and it reports
+# it by reading the file named above, which this process writes. Under a
+# read-only home that write fails silently: the service comes up, the page
+# keeps showing the last state it managed to record, and a stopped server
+# reads as a running one. A status monitor that cannot go red is worse than
+# none, because somebody is relying on it.
+ReadWritePaths=/home/OPERATOR/.local/state/rotelyx
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

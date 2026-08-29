@@ -809,8 +809,11 @@ impl Session {
 
     /// The tags of everyone else, for the current epoch.
     ///
-    /// Paired with `paddedPayload` to fan out server side: one upload names
-    /// every recipient, instead of one upload per recipient.
+    /// Kept for callers that address tags themselves. It used to be paired with
+    /// `paddedPayload` for a server-side fan-out, one upload naming every
+    /// recipient; that request handed the operator the whole membership in one
+    /// frame and is gone. Sending to a group goes through `sealForGroup`, which
+    /// returns one sealed envelope per member to deposit separately.
     #[wasm_bindgen(js_name = recipientTags)]
     pub fn recipient_tags(&self, time_bucket: u64) -> Result<Vec<String>, Error> {
         self.tags_with(self.tag_key()?, time_bucket)
@@ -857,11 +860,19 @@ impl Session {
     /// The padding happens **here**, never on the server. A server that padded
     /// on our behalf would be handed the true length, which is precisely what
     /// the buckets exist to withhold.
+    ///
+    /// **No client calls this.** It existed for the server-side fan-out, where
+    /// one padded payload was uploaded once and the server addressed it to
+    /// every recipient; that request handed the operator the whole membership
+    /// in one frame and was removed. Sending to a group goes through
+    /// `sealForGroup`, which seals and pads per recipient. Kept because it is
+    /// part of the published C ABI and because padding without addressing is a
+    /// reasonable thing for a third-party client to want.
     #[wasm_bindgen(js_name = paddedPayload)]
     pub fn padded_payload(&self, ciphertext_b64: &str) -> Result<String, Error> {
-        // Made opaque first, exactly as a single deposit is. One payload goes
-        // to every recipient of a fan-out, so it is sealed under the group's
-        // key rather than any one member's, and every member can open it.
+        // Made opaque first, exactly as a single deposit is. Sealed under the
+        // group's key rather than any one member's, so every member can open
+        // it: that is what made one payload serve every recipient.
         let sealed = self
             .tag_key()?
             .payload_key()
@@ -1255,6 +1266,32 @@ impl TokenRequest {
 // ---------------------------------------------------------------------------
 // Rendezvous
 // ---------------------------------------------------------------------------
+
+/// What to name an envelope by when acknowledging it.
+///
+/// Delivery peeks and removal waits for a receipt, so an envelope nobody
+/// acknowledges sits until its TTL: the tag fills at `MAX_PER_TAG` and the
+/// server then refuses further deposits, which loses messages silently.
+/// Acknowledging is not optional housekeeping.
+///
+/// It lives in the engine rather than in each client because the digest is
+/// over the envelope's stored bytes, and computing it means parsing the wire
+/// format. Two more implementations of that format is two more places for it
+/// to drift, which is the reason this crate exists.
+///
+/// No session: an envelope names itself, and a receipt for one the caller
+/// cannot open is refused by the server anyway, which only honours a digest on
+/// a tag that connection is listening on.
+///
+/// **Call it after the envelope is opened and written down, never on arrival.**
+/// Not acknowledging costs re-delivery until the TTL; acknowledging something
+/// not yet stored loses it.
+#[wasm_bindgen(js_name = receiptFor)]
+pub fn receipt_for(envelope_b64: &str) -> Result<String, Error> {
+    let envelope = Envelope::from_bytes(&decode(envelope_b64)?).map_err(err)?;
+    Ok(data_encoding::HEXLOWER.encode(&envelope.digest()))
+}
+
 
 /// Derive a meeting tag from a phrase both sides already know.
 ///
@@ -1839,6 +1876,39 @@ mod tests {
     ///
     /// It is signed now, and a receiver tries every current member's key. A
     /// stranger's signature verifies under none of them.
+    /// The receipt names the envelope and nothing else.
+    ///
+    /// It has to be computable by a client that only holds the base64 it was
+    /// handed, and it has to be the same value the server derives from the
+    /// bytes it stored, or an acknowledgement removes nothing and the tag
+    /// fills.
+    #[test]
+    fn a_receipt_names_the_envelope_it_is_for() {
+        let tag = Tag::from_bytes(&[9u8; 32]).expect("tag");
+        let one = Envelope::seal(tag, b"the first").expect("seal");
+        let two = Envelope::seal(tag, b"the second").expect("seal");
+
+        let for_one = receipt_for(&BASE64.encode(&one.to_bytes())).expect("receipt");
+        let for_two = receipt_for(&BASE64.encode(&two.to_bytes())).expect("receipt");
+
+        assert_eq!(
+            for_one,
+            data_encoding::HEXLOWER.encode(&one.digest()),
+            "the client's receipt must be the digest the server compares against"
+        );
+        assert_ne!(for_one, for_two, "two envelopes must not share a receipt");
+
+        // Same bytes, same name, however many times a client is handed them.
+        assert_eq!(for_one, receipt_for(&BASE64.encode(&one.to_bytes())).expect("again"));
+    }
+
+    /// Rubbish is refused rather than named.
+    #[test]
+    fn a_receipt_is_refused_for_something_that_is_not_an_envelope() {
+        assert!(receipt_for("not base64 at all !!").is_err());
+        assert!(receipt_for(&BASE64.encode(b"short")).is_err());
+    }
+
     #[test]
     fn a_wrap_from_outside_the_group_is_refused() {
         let mut alice = Session::new("alice").expect("identity");

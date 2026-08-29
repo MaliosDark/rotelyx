@@ -2,7 +2,7 @@
 #
 # Check what a server is actually handing out against what the source says.
 #
-#   scripts/verify-deployment https://rotelyx.ideoa.co
+#   scripts/verify-deployment https://rotelyx.com
 #
 # # What this closes, and what it does not
 #
@@ -29,7 +29,7 @@ set -uo pipefail
 BASE="${1:-}"
 if [ -z "$BASE" ]; then
     echo "usage: scripts/verify-deployment <base-url>" >&2
-    echo "  e.g. scripts/verify-deployment https://rotelyx.ideoa.co" >&2
+    echo "  e.g. scripts/verify-deployment https://rotelyx.com" >&2
     exit 2
 fi
 BASE="${BASE%/}"
@@ -74,6 +74,41 @@ for artifact in "${!SERVED[@]}"; do
         fail=1
     fi
 done
+
+# Is the deployment consistent with itself?
+#
+# The check above asks whether a server is up to date. This asks something
+# different and worse to get wrong: whether the page and the engine it loads
+# came from the same build. A deployment that is uniformly old still works. One
+# where the page is new and the module is not does not work at all, because the
+# page imports names by hand and an ES module import of a name the module does
+# not export is a SyntaxError before a line of it runs.
+#
+# That is not hypothetical. On 29 August 2026 `chat.html` was uploaded and
+# `rotelyx/` was not, and the browser client stopped loading entirely: it asked
+# for `receiptFor` from a module built six days before that function existed.
+# The check above reported both files as stale, correctly, and said nothing
+# about the page being broken rather than behind.
+echo
+stamped=$(curl -sS --fail --max-time 60 "$BASE/chat.html" 2>/dev/null |
+    grep -oE "rotelyx_wasm\.js\?v=[0-9a-f]+" | head -1 | grep -oE '[0-9a-f]+$')
+served=$(curl -sS --fail --max-time 60 "$BASE/rotelyx/rotelyx_wasm_bg.wasm" 2>/dev/null |
+    sha256sum | cut -c1-12)
+
+if [ -z "$stamped" ] || [ -z "$served" ]; then
+    echo "  could not read the page's cache stamp or the served module"
+    fail=1
+elif [ "$stamped" = "$served" ]; then
+    echo "  the page and the engine it loads are the same build"
+else
+    echo "  THE PAGE AND THE ENGINE DISAGREE"
+    echo "    chat.html asks for  $stamped"
+    echo "    the module here is  $served"
+    echo
+    echo "  This is a half-finished upload, and it is worse than an old one."
+    echo "  The page will not load at all. Upload site/ whole, engine included."
+    fail=1
+fi
 
 echo
 if [ "$fail" != "0" ]; then

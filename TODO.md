@@ -16,9 +16,9 @@ every layer said it was healthy. `CallEnded` reports concealment now.
 **A conversation crosses the mailbox too.** A code shown on a phone and read by
 the desktop window is one conversation, both directions, with read receipts.
 
-**What a call still lacks:** echo cancellation that works in a room, congestion
-control, more than two participants, and any measurement under deliberate loss
-or on a mobile network.
+**What a call still lacks:** echo cancellation that works in a room, more than
+two participants, and any measurement under deliberate loss or on a mobile
+network. Congestion control is built and wired, in `rotelyx-audio::pace`.
 
 **Echo cancellation was measured against a real room and removed -0.0 dB**, or
 1.3 with the residual suppressor written after seeing that. `docs/ACOUSTIC.md`
@@ -28,13 +28,6 @@ Two people have listened to the codec, and what that found was a broken test:
 the rating scale was never shown to either of them. There is no perceptual
 measurement of this codec yet, only the objective one.
 `docs/listening-2026-08-21.txt` records how it was found.
-
-**Open, found by running the phone's suite against this engine.** A conversation
-read back from storage refuses to send: `Session::rekey_after_restore` has to run
-first, and `session.rekeyAfterRestore` is not one of the operations
-`rotelyx-mobile` exposes over the C ABI, so the phone cannot call it. The browser
-build can, because it binds the method directly. Two tests in the phone client
-fail on it. Ghost mode is unaffected, since nothing is read back.
 
 **An external audit found two defects that every test here passed through.**
 Both are fixed, both have regression tests, and both are worth stating plainly
@@ -148,7 +141,7 @@ is written" is not a completion criterion here.
 ### Foundations
 
 - [x] Threat model written before code, ten adversaries modelled
-- [x] Cargo workspace, sixteen first party crates
+- [x] Cargo workspace, nineteen first party crates
 - [x] Ed25519 identity with a `Debug` that redacts and key generation that
       panics rather than degrading if the OS entropy source is unavailable
 - [x] Safety numbers, twelve groups of five digits, order independent
@@ -221,8 +214,6 @@ is written" is not a completion criterion here.
 - [x] Groups of up to 1000, with per member mailbox tags, epoch-tracked tag
       keys, and a post-quantum secret sealed to each member rather than derived
       pairwise
-- [x] Server side fan-out, so a sender uploads once regardless of group size,
-      with the padding still applied by the client
 - [x] Tiers, capability tokens and metering. A token carries its own quota, so
       sharing it shares the allowance and one purchase cannot serve a thousand
       people without anybody being identified
@@ -302,8 +293,10 @@ Everything needed for this is built.
       blocking became withdrawing an invitation
 - [ ] Derive the sealing key from the device keystore rather than a passphrase,
       where the platform offers one
-- [x] **Encrypted MLS group state at rest, in the browser**, which is the only
-      client that keeps any. `sealSession` puts the signing key, the hybrid key
+- [x] **Encrypted MLS group state at rest, in the browser.** It was the only
+      client that kept any when this was written; the native clients and the
+      phone keep theirs now, sealed the same way, in the two items below.
+      `sealSession` puts the signing key, the hybrid key
       and the whole group state behind Argon2id at 64 MiB, because the obvious
       place to keep it there is local storage, which any script on the origin can
       read and which outlives the tab
@@ -395,13 +388,19 @@ Everything needed for this is built.
 
 ### 4. Relay hardening
 
-- [!] **nginx connection and request rate limits: documented, not deployed.**
-      `docs/nginx-relay.conf` carries `limit_conn` and `limit_req`, and CWP
-      rejected both, so they were removed from the live configuration and the
-      documents were not. Measured on 18 August: **35 unique requests in a few
-      seconds, 35 answers, not one refusal.** There is no rate limit at any
-      layer, which is the fourth time in this project a document has claimed a
-      guarantee nothing enforces
+- [x] **nginx rate limits were rejected by the panel, so the limit moved into
+      the servers.** `docs/nginx-relay.conf` carried `limit_conn` and
+      `limit_req`, CWP refused both, they came out of the live configuration and
+      the document went on describing them: the fourth time here that a document
+      claimed a guarantee nothing enforced. Measured on 18 August and again on
+      23 August, dozens of requests and not one refusal.
+
+      A configuration file an operator has to write, on a panel that can veto
+      it, is not where a limit belongs. Both servers now carry their own, so
+      every deployment has one whether or not anybody reads that file, and
+      `docs/nginx-relay.conf` says plainly that it is an optional extra rather
+      than the limit. What nginx would still add, if a panel ever accepts it, is
+      refusing before the TLS handshake completes
 - [x] **Admission control, in `rotelyx-relay::limits`.** Not in the vendored
       tree, so re-vendoring cannot silently remove it, and composed around the
       access control so the allowlist and the open relay both get it:
@@ -487,8 +486,10 @@ Everything needed for this is built.
       given, so a guessable secret was a device anybody could silence. The same
       measurement that forced the vault cache put that path at thousands of
       attempts a second. A secret is now absent or at least 32 characters. No
-      client implements `registerWake` yet, which is why this cost nothing to
-      add and why it had to be added before one did
+      client implemented `registerWake` when this was written, which is why it
+      cost nothing to add and why it had to be added before one did. The phone
+      client implements it now, and sends 64 hex characters, which clears the
+      floor
 - [x] **The sweep never removed anything.** It handed each token Apple reported
       dead to `revoke`, which hashes what it is given and compares it against
       hashes of secrets. A token is not a secret, so nothing matched: dead rows
@@ -820,6 +821,24 @@ Everything needed for this is built.
       an epoch derived without that leaf and sees the device in
       `MembershipChange::removed`. A revocation nobody else notices is one the
       removed device does not have to respect.
+
+      **The phone could not do it until 29 August 2026.** `removeMember` was on
+      the wasm surface and not on the C ABI, so the browser and the desktop
+      could revoke and the Android client could not, which is the wrong way
+      round: a phone is the device that gets lost. It is on the ABI now, with
+      `rosterDetail` beside it, because either without the other is useless:
+      `roster` gives labels, a label is a claim two members can both make, and
+      removal takes a signature key.
+
+      Long-press a member in the safety panel, which is the panel somebody
+      opens when they are worried. The dialog says the three things that are
+      assumed wrongly: everyone sees it, there is no undo, and it does not reach
+      backwards.
+
+      Two tests, and one of them found a real defect in the first version of
+      this: the Dart sent `session.removeMember` without the session handle, so
+      it failed at the boundary rather than removing anybody. Nothing above the
+      ABI would have noticed.
 
       Keyed on the signature key rather than a leaf index, because an index is a
       position in a tree that shifts as members come and go and a caller holding
@@ -1315,8 +1334,8 @@ wide margin the largest single task remaining in the project.
       automatic gain control, or any of the tuning by ear that a decade of
       shipping buys. What we do have is measured rather than assumed, which is
       the trade in the other direction: 58.3 dB of echo removed against a
-      synthetic path and about 7 dB against a real room, both measured in
-      `docs/ACOUSTIC.md`; 12.9 dB off synthetic hiss and 4.8 dB off a real room,
+      synthetic path and 1.3 dB against a real room running continuously, both
+      measured in `docs/ACOUSTIC.md`; 12.9 dB off synthetic hiss and 4.8 dB off a real room,
       with the limitation of a
       minimum-statistics estimator written into a test, pre-echo at -40.7 dB,
       concealment that fades rather than repeats, and a codec that costs 2.4% of
@@ -1327,9 +1346,17 @@ wide margin the largest single task remaining in the project.
       else's tuning is going to arrive and fix them
 - [x] **A forwarding unit for group calls**, `rotelyx-media::forward`. The frame
       format already suited one: the header is authenticated but not encrypted,
-      so it routes by sender without reading anything. Below a handful of people
+      so it routes by sender without reading anything.
+
+      Below a handful of people
       nothing is needed, but a six-way mesh asks a phone on a home connection to
       upload five streams at once, and that is where calls happen.
+
+      **No client calls it.** The unit is written and tested; nothing wires it
+      to a call, so a group call is not a thing anybody can place today. Said
+      here because a ticked box beside the words "group calls" reads as a
+      feature, and the gap between a component existing and a feature working is
+      how three guarantees in this project ended up documented and unenforced.
 
       **The leak this item named turned out to be two leaks, and one of them
       closes.** Sizes were the first: speech is not a constant bit rate, a coded
@@ -1368,8 +1395,9 @@ wide margin the largest single task remaining in the project.
       `rotelyx-relay-proto`
 
 - [x] **The echo canceller removed 1 dB in a real room, against 38.3 on the
-      synthetic path. It removes about 7 now.** Measured on this machine with a real speaker and a real
-      microphone, written up in `docs/ACOUSTIC.md`, repeatable with
+      synthetic path. It removes 1.3 dB run continuously, which is how a call
+      runs, and 6.1 when something keeps it aligned.** Measured on this machine
+      with a real speaker and a real microphone, written up in `docs/ACOUSTIC.md`, repeatable with
       `scripts/measure-echo`.
 
       Two assumptions were doing the work and both come out one at a time. The
@@ -1477,7 +1505,7 @@ wide margin the largest single task remaining in the project.
 ### 7. Mobile clients
 
 - [x] **`rotelyx-mobile`: the engine as a native library.** The same crate the
-      browser gets, behind a C ABI of three symbols instead of `wasm_bindgen`.
+      browser gets, behind a C ABI of nine symbols instead of `wasm_bindgen`.
       Depends on `rotelyx-wasm` as an rlib and reimplements nothing: two
       implementations of one handshake diverge, and the divergence is a security
       bug that presents as an interoperability bug. Contract in `docs/MOBILE.md`,
@@ -1547,7 +1575,7 @@ wide margin the largest single task remaining in the project.
       the `xcframework` step are in `scripts/build-mobile ios` and have never
       been run
 - [x] **The C ABI is enough, demonstrated rather than argued.** The question was
-      whether a foreign runtime can reach the engine through twelve C symbols and
+      whether a foreign runtime can reach the engine through nine C symbols and
       a JSON string, or whether it needs generated glue for records, enums and
       error types.
 
@@ -1624,17 +1652,12 @@ wide margin the largest single task remaining in the project.
       failure three frames later. One round trip per conversation, and the
       comment says so after an earlier draft claimed it was free.
 
-- [ ] **The Flutter app ships a wasm three builds behind and cannot talk to
-      anything current.** It reaches the engine through `rotelyx-wasm` and a JS
-      bridge rather than the native library, and its copy hashes `b04f4425`
-      against `9a71d887` from this source. That is older than the deployed site
-      was before it was rebuilt, so it predates the credential change and is in
-      the seven-in-eight case above.
-
-      Not touched: it is somebody else's directory and it is in production. What
-      it needs is `scripts/build-wasm` and the two files from `site/rotelyx/`
-      copied into its `web/rotelyx/`, after which `WIRE_VERSION` will say plainly
-      whether it worked
+- [x] **The Flutter app shipped a wasm three builds behind.** Its copy hashed
+      `b04f4425` against the source, which predated the credential change and put
+      it in the seven-in-eight case above. Rebuilt and copied: its
+      `web/rotelyx/rotelyx_wasm_bg.wasm` and this repository's `site/rotelyx/`
+      copy are the same bytes, `d95035a6`, and `test/shipped_engine_test.dart`
+      fails if they drift again
 
 - [ ] **Redeploy `site/`. The live one is behind, and mixing it with a current
       client fails one time in eight.** This session changed the MLS credential
@@ -1656,12 +1679,38 @@ wide margin the largest single task remaining in the project.
       rebuilt and redeployed together: `site/`, and any CLI or desktop binary
       anybody is carrying.
 
-      The new build is verified: `scripts/build-wasm` reproduces
-      `9a71d8877f3db90df24de2018c83ad9e2fb3518ccc9b9723d5b9344d606a34c0`,
-      `docs/ARTIFACTS.md` carries it, and `scripts/browser-test/run` drove two
-      real tabs through a whole conversation against it with the safety numbers
-      matching. `scripts/verify-deployment` reports DIFFERS until it is uploaded,
-      which is the check working rather than failing
+      Deployed and verified in a browser on 29 August 2026:
+      `scripts/browser-test/run https://rotelyx.com/chat.html` drove two Chrome
+      tabs through a whole conversation against the live site, safety numbers
+      matching on both sides and a message delivered each way.
+
+      **Six days of uploads went nowhere, and the cause was one word.** The
+      `location /rotelyx/` block that `docs/BROWSER.md` recommends, to serve the
+      module as `application/wasm` with `no-cache`, was deployed with `root`
+      where it needed `alias`. `root` appends the whole request URI to the path
+      it is given, so a request for `/rotelyx/x.js` was looked for in
+      `public_html/rotelyx/rotelyx/`, which does not exist. Every upload to that
+      directory was ignored: the site served a module from six days earlier and
+      then 404ed, and the page stopped loading at all, because an ES module
+      import of a name the module does not export is a SyntaxError before a line
+      of it runs.
+
+      Found by putting one file in three places and asking for all three: the
+      root and `/assets/` answered, `/rotelyx/` did not. Fixed on the server,
+      and `docs/BROWSER.md` now carries the working block rather than a
+      description of one.
+
+      `verify-deployment` gained the check that would have named this: whether
+      the page and the module it loads are the same build. Both files differing
+      from source is also true of a merely old deployment and does not say the
+      site is down.
+
+      It only started reporting it after `docs/ARTIFACTS.md` was regenerated.
+      The manifest had not been rewritten since the wasm was rebuilt on 27
+      August, so all four hashes in it were stale and the check was comparing
+      the live site against an out-of-date record and passing. A verification
+      whose reference is not kept current is a verification that agrees with
+      whatever it finds
 
 - [x] Deploy `rotelyx-mailbox-server` to `m1.telyx.me:3341`, verified
       end to end: `101 Switching Protocols` through Cloudflare, pfSense and nginx
@@ -1877,13 +1926,73 @@ wide margin the largest single task remaining in the project.
 
 ## Blocking any public security claim
 
-- [!] **Independent cryptographic audit.** Protocol design plus implementation
-      review by a firm that does this as its primary business. Industry range
-      is roughly 50,000 to 150,000 USD for work of this scope
+- [!] **Review by somebody outside the project.** Protocol design plus
+      implementation. A commissioned audit runs roughly 50,000 to 150,000 USD
+      for work of this scope, there is no budget for one, and pretending
+      otherwise would leave this item open forever with a plan nobody intends
+      to fund. So the realistic path is an unpaid reviewer, and the work that
+      makes that possible is done: the models, the harness and the reachability
+      arguments are all in the repository, and `SECURITY.md` promises ninety
+      days and tells a reporter to publish anyway if we go quiet.
 
-Until that is done, the README, the site and every public statement must keep
-saying **unaudited**. See `docs/THREAT-MODEL.md` section 5 for the full list of
-review gates.
+Five rounds of internal review are finished and closed every finding raised
+against code written here, so public statements now say **internally audited**.
+What they must never say is "audited" on its own, which would be read as an
+outside firm. See `docs/THREAT-MODEL.md` section 5 for the full list of gates.
+
+---
+
+### A spent allowance is silent on two of the three clients
+
+- [ ] **`overQuota` is handled by the browser and by nobody else.** When the
+      period's allowance is spent the server refuses the deposit and replies
+      with the limit, what was used, and the tier. `site/chat.html` puts that on
+      screen. The phone's reply switch has no case for it and no default, and
+      `rotelyx-mailbox-client` folds it into `Reply::Other`, whose comment used
+      to justify that by saying quotas belong to a phone. They do not: an
+      unauthenticated caller is issued a free capability and metered like any
+      other, so a desktop hits the same wall.
+
+      On both, `deposit` returns as though it worked. The message is not stored
+      and the sender is not told, which is the same shape as the fan-out defect
+      and the reason that one survived: a refusal that produces no error looks
+      exactly like success.
+
+      The free allowance is 64 MiB a period, so text alone will not reach it,
+      about sixty five thousand messages at the 1 KiB floor. Attachments will.
+
+---
+
+### The phone and the browser never acknowledge, so nothing they receive is removed
+
+- [ ] **`Collected` is sent by the Rust client and by nobody else.** Delivery
+      peeks and removal waits for an acknowledgement, which is the P-4 fix. The
+      desktop and terminal clients send it, in
+      `rotelyx-mailbox-client::collected`. The phone does not and `site/chat.html`
+      does not, so every envelope those two receive stays in the mailbox for the
+      full seven-day TTL.
+
+      Three consequences, in the order they matter.
+
+      **Retention.** `rotelyx_store.dart` opens by saying the mailbox keeps
+      nothing and that an envelope is removed when it is collected. For this
+      client that is false: a seized disk yields seven days of ciphertext rather
+      than only what was never delivered. Content stays unreadable, and the
+      seizure-resistance argument is still weaker than the document claims.
+
+      **A tag fills.** `MAX_PER_TAG` is 256. Nothing is removed, so a
+      conversation past 256 messages inside one TTL fills the recipient's tag
+      and the server refuses further deposits: messages lost, to the sender's
+      eye silently. That is the one a user would meet.
+
+      **Re-delivery.** Every reconnect re-downloads the whole backlog. MLS
+      refuses the replays so nothing is shown twice, which is exactly why this
+      has not been noticed: the failure is invisible from the screen and costs
+      battery and bandwidth on a phone.
+
+      The fix is one message per client, naming the digests it opened. The
+      server already refuses a receipt for a tag the connection is not listening
+      on, so the receipt is not a capability.
 
 ---
 
@@ -1895,18 +2004,16 @@ discovers them by surprise.
 | Gap | Why it matters |
 |---|---|
 | Full workspace builds are memory hungry | 121,000 vendored lines plus Tauri. `.cargo/config.toml` caps jobs at four; a machine with 2 GiB of swap can still stall |
-| Message history is not persisted | Conversations live only for the session. Encrypted history at rest is not implemented |
 | Mailbox timing correlation | An operator that logs everything can correlate a deposit with a collection. Padding and tag rotation raise the cost, they do not eliminate it |
 | Push notification metadata | Apple and Google see that a device was woken and when. Inherent to mobile platforms, and unsolved |
 | Browser harness trust boundary | Plaintext crosses loopback. The desktop app does not have this problem, its IPC is in process |
 | The browser client has no direct path, ever | A browser cannot open a UDP socket, so QUIC and hole punching cannot run there. Every browser message goes through the mailbox, which means the operator always learns that two parties are talking. On a direct path nobody does |
 | Web code is re delivered on every load | An installed binary is verified once. A page is served again on each visit, so the operator could serve different code to one visitor. This is not in the threat model, which assumes an installed binary |
 | Persisting the mailbox trades seizure resistance for delivery | A stopped server with no state file hands over nothing. With one, a seized disk plus the passphrase yields tags and ciphertext. Content stays unreadable either way |
-| The recipient set is explicit on send | A fan-out names every recipient's tag in one request. The operator could already infer this from a burst of deposits plus who subscribes to what, so it makes an existing inference cheap rather than creating a new one. It is still a reduction, taken to make groups beyond a few dozen possible |
 | Commits grow with the group | 21.8 KB at 256 members, downloaded by everyone on every membership change. Fine at 256, heavy past it |
 | Group size is capped at 1000 | Beyond it a commit exceeds 83 KB and the per member cost of a join keeps climbing. TreeKEM, not padding: the ladder no longer cliffs |
 | Padding above 1 KiB is coarser than it was | The ladder doubles instead of jumping 64 KiB to 1 MiB. Lengths above the floor are known to within a factor of two rather than eight. Conversation is unaffected, since the 1 KiB floor did not move |
-| Mailbox delivery is exactly once | Collection removes, so two devices polling one tag race and one loses the message. The alternative is a mailbox that keeps copies of what it delivered, which is worse |
+| An envelope stays until somebody acknowledges it | Delivery peeks and the client acks with `Collected`, so two devices on one tag both receive it. The cost is that an envelope nobody acks sits until its TTL, and a caller can read a tag it guessed. Reading a tag you should not read is eavesdropping on ciphertext you cannot open, where it used to be destroying it |
 | Relay chaining not implemented | A single relay sees both endpoints of a session. Chaining two would split that knowledge, at a latency cost |
 
 ---

@@ -32,7 +32,7 @@ crates/
   rotelyx-mailbox-server   the blind mailbox as a WebSocket service
   rotelyx-desktop          native desktop window, Tauri v2, no Node
   rotelyx-web              local browser harness
-  net/                     the vendored transport stack, 123,893 lines
+  net/                     the vendored transport stack, 124,632 lines
 site/                          the public site and the browser client, self contained
 docs/
   brand/                       logo, light and dark variants, and the square mark
@@ -47,7 +47,7 @@ TODO.md                        what is done, what is next, what is blocked
 
 ## Building and memory
 
-The vendored transport is 121,000 lines and includes a 50,000 line QUIC state
+The vendored transport is 124,632 lines and includes a 50,000 line QUIC state
 machine. Cargo defaults to one compile job per core, and on a machine with a
 small swap file that peak is enough to make the kernel start killing processes.
 An editor is a large, easy target.
@@ -77,7 +77,28 @@ scripts/audit-dependencies      # and that those three agree with UPSTREAM.md
 scripts/benchmarks              # what it costs, on your machine
 ```
 
-The last one of those is the unusual one. An advisory may only be passed over
+And if you rebuilt anything that ships, the wasm module or either server:
+
+```sh
+scripts/artifact-hashes         # rewrite docs/ARTIFACTS.md
+scripts/verify-deployment https://rotelyx.com   # does the live one match
+```
+
+`ARTIFACTS.md` is the reference the deployment check compares against, so a
+manifest nobody regenerates turns that check into one that agrees with whatever
+it finds. It went stale for two days in August 2026 and `verify-deployment`
+passed the whole time against a live site that was two builds behind.
+
+**Upload `site/` whole, or not at all.** The page names the module it wants by
+hash, and imports functions from it by name. A page newer than the module in
+the engine next to it does not degrade: an ES module import of a name the
+module does not export is a SyntaxError, so nothing on the page runs. That
+happened on 29 August 2026, `chat.html` went up and `rotelyx/` did not, and the
+browser client stopped loading for everybody. `verify-deployment` says so
+directly now, in its own paragraph, because "both files differ from source" is
+true of a merely old deployment too and does not tell you the site is down.
+
+The dependency script is the unusual one. An advisory may only be passed over
 where `deny.toml`, `.cargo/audit.toml` and `docs/UPSTREAM.md` all agree, and the
 argument has to be written down before a tool is told to skip it. Deleting a
 section from the ledger breaks the build, which is checked by deleting one.

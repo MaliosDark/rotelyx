@@ -19,8 +19,19 @@ import re, sys
 stamp = sys.argv[1]
 p = 'site/chat.html'
 s = open(p).read()
-s = re.sub(r"from '\./rotelyx/rotelyx_wasm\.js(\?v=[0-9a-f]+)?'",
-           f"from './rotelyx/rotelyx_wasm.js?v={stamp}'", s)
+# The directory is matched rather than named, so this keeps working if the
+# engine moves again. It has moved once: `/rotelyx/` is intercepted on the
+# production server and unreadable, so the engine lives in `assets/`. A rewrite
+# that hardcoded the old directory would have silently undone that move on the
+# next build, which is the kind of repair that lasts until somebody runs a
+# script.
+s, n = re.subn(r"from '\./[a-z]+/rotelyx_wasm\.js(\?v=[0-9a-f]+)?'",
+               lambda m: m.group(0).split('?')[0].rstrip("'") + f"?v={stamp}'", s)
+if n != 1:
+    raise SystemExit(
+        f"expected one module import to stamp in {p}, found {n}. "
+        "Stamping nothing leaves the page asking for a cached build for ever."
+    )
 s = re.sub(r"rotelyx_wasm_bg\.wasm(\?v=[0-9a-f]+)?", f"rotelyx_wasm_bg.wasm?v={stamp}", s)
 open(p, 'w').write(s)
 print(f"  stamped {stamp}")

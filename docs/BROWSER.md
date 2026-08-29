@@ -13,7 +13,7 @@ Last updated 17 August 2026.
 
 ## Building it
 
-`site/chat.html` plus `site/rotelyx/`, built from `crates/rotelyx-wasm`.
+`site/chat.html` plus the engine in `site/assets/`, built from `crates/rotelyx-wasm`.
 
 ```sh
 scripts/build-wasm
@@ -62,8 +62,37 @@ now it is not. The stamp must go on the **binary** too, passed
 explicitly to `init()`: the generated loader resolves the wasm path against
 `import.meta.url`, which drops the query string.
 
-That is a workaround. The `location /rotelyx/` block with `Cache-Control:
-no-cache` is the fix.
+That is a workaround. The fix is the `location /rotelyx/` block below, and it
+is deployed. **Use `alias`, not `root`.**
+
+It is in [`docs/nginx-site.conf`](nginx-site.conf), beside the relay's, so it
+is reviewable rather than living only on one machine:
+
+```nginx
+location /rotelyx/ {
+    alias /home/OPERATOR/public_html/rotelyx/;   # trailing slash required
+    types {
+        application/wasm  wasm;
+        text/javascript   js;
+    }
+    add_header Cache-Control "no-cache";
+}
+```
+
+`root` appends the whole request URI to the path it is given, so
+`root .../public_html/rotelyx` turns a request for `/rotelyx/x.js` into a look
+in `public_html/rotelyx/rotelyx/`, which does not exist. `alias` replaces the
+matched prefix instead. The block was deployed with `root` for six days: every
+upload to that directory was ignored, the site served a stale module and then
+404ed, and the page went dead in exactly the way the paragraph above predicts.
+
+Two things worth keeping from that. **Recommending an nginx block in a document
+is not the same as somebody writing a correct one**, and nothing checked this
+one. And the failure was silent in the worst way: `verify-deployment` reported
+both files as differing from source, which is also true of a merely old
+deployment, so the report read as "behind" when it meant "down". It compares the
+page's cache stamp against the served module now, and says so in its own
+paragraph.
 
 **`.wasm` must be served as `application/wasm`.** With the wrong type the
 browser refuses the streaming compile and falls back to a slower path, with only
@@ -152,22 +181,24 @@ affects files and control traffic and not conversation.
 **Membership changes are rare next to messages.** An ordinary text message costs
 each member 1 KiB at any group size.
 
-**Every member has their own tag.** Mailbox collection removes, so a single
-shared tag would hand each message to whichever member collected first and the
-rest would never see it. A member's tag is derived from the group's pinned key
+**Every member has their own tag.** A single shared tag would hand every member
+every other member's mail, and whichever one acknowledged a message first would
+remove it from under the rest. A member's tag is derived from the group's pinned key
 and that member's signature key, so everyone computes the same value for a given
 recipient and nobody outside can.
 
-**The mailbox fans out.** A sender uploads once and names every recipient; the
-server makes the copies. Uploading one copy per recipient, as the first version
-did, makes a group of a hundred unusable on a phone.
+**The mailbox does not fan out, and this section used to say it did.** A
+request that named every recipient so the server could make the copies was
+built, described here as the price of large groups, and removed: it handed the
+operator the whole recipient set in one frame, and an audit found that no client
+had ever sent one. Both this page and the phone seal per recipient and deposit
+each envelope separately, which is what the removed request existed to avoid.
 
-That trade is real and worth stating. Before, the operator saw a burst of
-deposits and had to correlate them against who subscribes to what. Now the
-recipient set arrives written down in one request. The operator could already
-reach the same conclusion, since it sees which connection listens on which tag,
-so this makes an existing inference cheap rather than creating a new one. It is
-still a reduction, and it is the price of groups beyond a few dozen.
+The trade that was claimed for it was real and it was not being paid for
+anything: the operator could already reach the same conclusion by watching which
+connection listens on which tag, so the request made an existing inference cheap
+without buying a group size that anybody was using. What remains of it is
+`maxFanout` in a granted tier, which is a width limit and not a request.
 
 **The padding stays on the client.** The server refuses a payload that is not
 already a bucket size. A server that padded on the sender's behalf would be
@@ -212,9 +243,9 @@ None of these raises an error anywhere. Each is pinned by a test.
 3. **Applying a commit means re-subscribing.** The epoch moved, so the tags
    moved. A client that does not re-subscribe goes quiet while everyone else
    addresses it at the new epoch.
-4. **The host stays at the meeting place, guests leave it.** Collection removes,
-   so a guest still listening there swallows knocks meant for the host, and the
-   newcomer waits forever with nothing on screen.
+4. **The host stays at the meeting place, guests leave it.** A guest still
+   listening there reads knocks meant for the host, and acknowledging one takes
+   it away entirely, so the newcomer waits forever with nothing on screen.
 
 ### The post-quantum secret has to be chosen, not derived
 

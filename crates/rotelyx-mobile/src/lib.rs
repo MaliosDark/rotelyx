@@ -235,6 +235,19 @@ fn dispatch(req: &Value) -> Res {
             return Ok(json!(engine(rotelyx_wasm::open_blob(key, &blob))?));
         }
 
+        // Needs no session: the digest is over the envelope's own bytes.
+        //
+        // Delivery peeks and removal waits for this receipt, so an envelope
+        // nobody acknowledges sits until its TTL and the tag fills, after which
+        // the server refuses deposits and messages are lost with nothing said.
+        // Send it after the envelope is opened and written down, never on
+        // arrival: not acknowledging costs re-delivery, acknowledging something
+        // unstored loses it.
+        "mailbox.receiptFor" => {
+            let envelope = str_arg(req, "envelope")?;
+            return Ok(json!(engine(rotelyx_wasm::receipt_for(&envelope))?));
+        }
+
         "rendezvous.tag" => {
             let passphrase = str_arg(req, "passphrase")?;
             return Ok(json!(engine(rotelyx_wasm::rendezvous_tag(&passphrase))?));
@@ -390,6 +403,30 @@ fn dispatch(req: &Value) -> Res {
             s.polling_tags(u64_arg(req, "timeBucket")?, opt_u64(req, "lookback", 0))
         )?),
 
+        // Revoking a member, or a device of your own that is gone.
+        //
+        // A removal is a commit, not a local setting: a leaf that is not in the
+        // group can still decrypt everything the current epoch can, and
+        // forgetting it on this device changes nothing about that. So this
+        // hands back a commit, and the caller has to deliver it the way it
+        // delivers the one from an invitation, through `sealCommitForGroup`,
+        // addressed at the epoch the others are still on.
+        //
+        // Absent from this ABI until 29 August 2026, so the browser and the
+        // desktop could revoke and the phone could not. That is the wrong way
+        // round: a phone is the device that gets lost.
+        "session.removeMember" => {
+            let key = str_arg(req, "signatureKey")?;
+            json!(engine(s.remove_member(&key))?)
+        }
+
+        // The roster with the key that identifies each member.
+        //
+        // Exposed together with `removeMember`, because either without the
+        // other is useless: `roster` gives labels, a label is a claim two
+        // members can both make, and removal takes a signature key.
+        "session.rosterDetail" => json!(engine(s.roster_detail())?),
+
         "session.roster" => json!(engine(s.roster())?),
         "session.epoch" => json!(s.epoch()),
         "session.memberCount" => json!(s.member_count()),
@@ -496,9 +533,15 @@ pub unsafe extern "C" fn rotelyx_string_free(s: *mut c_char) {
 /// context is turned into a global reference and deliberately leaked: it has to
 /// outlive this call and every audio stream opened afterwards, and the process
 /// ending is the only thing that ends it.
+///
+/// The name is the binding. JNI resolves by symbol, so this spells out the
+/// application's package, and renaming the package without renaming this
+/// compiles perfectly and then fails at the first call, on a device, with
+/// `UnsatisfiedLinkError`. It must stay in step with `Native.kt`, which is
+/// `com.rotelyx.app`.
 #[cfg(target_os = "android")]
 #[no_mangle]
-pub extern "system" fn Java_com_ideoalabs_rotelyx_Native_initAndroidContext(
+pub extern "system" fn Java_com_rotelyx_app_Native_initAndroidContext(
     env: jni::JNIEnv,
     _class: jni::objects::JClass,
     context: jni::objects::JObject,

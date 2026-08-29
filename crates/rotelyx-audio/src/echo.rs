@@ -68,9 +68,11 @@ const FLOOR: f32 = 1e-6;
 /// The filter removes what a linear model of the room can remove. What is left
 /// is the part no linear model can: the reverberant tail past the 128 ms the
 /// filter covers, and whatever the speaker added that a speaker is not supposed
-/// to add. Measured against a real room the linear stage alone removed 1 dB and
-/// the two together remove about 7, so this is not a refinement, it is most of
-/// the answer. See `docs/ACOUSTIC.md`.
+/// to add. Measured against a real room the linear stage alone removed -0.0 dB
+/// and the two together remove 1.3 running continuously, which is how a call
+/// runs, or 6.1 when something keeps the filter aligned. So this stage is not a
+/// refinement, it is nearly all of what is removed there, and what is removed
+/// there is still small. See `docs/ACOUSTIC.md`.
 ///
 /// The estimate is `leak · far energy`, where `leak` is learned from what
 /// actually came through while only the far end was talking, rather than
@@ -437,10 +439,13 @@ impl EchoCanceller {
     /// the signal, so no filter of any length can predict them from it.
     ///
     /// Measured against a real speaker and a real microphone, the linear stage
-    /// alone removed **1 dB**, against 38 on a path this project generated. With
-    /// this stage the same room gives about **7 dB** and the synthetic path 58.
-    /// That is the gap it closes, and it is why every canceller that ships has a
-    /// stage like this one. `docs/ACOUSTIC.md` has the measurements.
+    /// alone removed **-0.0 dB**, against 38 on a path this project generated.
+    /// With this stage the same room gives **1.3 dB** run continuously, 6.1 when
+    /// something keeps the filter aligned, and the synthetic path 58. Quote the
+    /// continuous figure: a call does not realign. That is the gap this stage
+    /// closes and it is why every canceller that ships has one, and it is also
+    /// why a desktop call still wants headphones. `docs/ACOUSTIC.md` has the
+    /// measurements.
     ///
     /// # Why one gain and not a spectrum
     ///

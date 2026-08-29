@@ -44,7 +44,8 @@ binary or ships to a browser.
 
 ## What is not a finding
 
-- **That the project is unaudited.** It says so on the front page and in
+- **That the project has only been audited internally.** It says so on the
+  front page and in
   [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md). It is a stated condition, not a
   discovery.
 - **Anything listed as unsolved in the threat model**, section by section. A

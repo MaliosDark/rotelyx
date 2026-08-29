@@ -15,10 +15,10 @@ the server does not control.
 
 | Artifact | SHA-256 | Bytes |
 |---|---|---|
-| `rotelyx_wasm_bg.wasm` | `9a71d8877f3db90df24de2018c83ad9e2fb3518ccc9b9723d5b9344d606a34c0` | 1515508 |
-| `rotelyx_wasm.js` | `66994f4e8f30ff8590a0936e1c22ca4190c498f4408aa58e055969f63995b3af` | 75850 |
-| `rotelyx-relay` | `3210ec97ba09e00394155b877d34036a9f6ef1efb977fbec49da7f509d9ad4cb` | 8958312 |
-| `rotelyx-mailbox-server` | `92c48481a0b8821de909b9b169482704d230052901a8cb00644ee866c314b6cb` | 9939208 |
+| `rotelyx_wasm_bg.wasm` | `2b67f4b6e74999c276c5c24268d9158f5de7ca99ca722728e46f2b7ef23a1986` | 1588741 |
+| `rotelyx_wasm.js` | `d2841379a5ca06723aa0befa6f013f32654a5a16a0e938777022f422d513e6bd` | 90101 |
+| `rotelyx-relay` | `cac1489b7df63f538d96b55c4b65de94cd47d1d5744725671161178bf92f03b7` | 13088256 |
+| `rotelyx-mailbox-server` | `0f36c95c985cc0dee1b6166255fb1ba8c9998aa594da08440bf2cba359a1ef5d` | 10150048 |
 
 To check a running deployment, in one command:
 
@@ -26,10 +26,11 @@ To check a running deployment, in one command:
 scripts/verify-deployment https://rotelyx.com
 ```
 
-It fetches what the server is serving and compares. It exits non-zero when they
-differ, which is either an older build or somebody having changed it, and it
-says nothing about what a browser was handed: a page can only run what the
-server sent it, so the check has to come from outside.
+It fetches what the server is serving and compares against the table
+above. It exits non-zero when they differ, which is either an older
+build or somebody having changed it. It says nothing about what a
+browser was handed: a page can only run what the server sent it, so
+the check has to come from outside.
 
 By hand:
 

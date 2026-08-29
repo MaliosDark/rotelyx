@@ -359,9 +359,15 @@ No public security claim is made before all of these are met.
    ratchets, and which MLS does not automatically solve for us:
    nonce reuse under concurrency, state rollback after backup restore,
    unbounded skipped-key retention, replay across device re-registration.
-   *Measured and written down in §7. All four hold, three of them because of
+   *Measured and written down in §5b. All four hold, three of them because of
    library behaviour this crate never chose, which is why each now has a test.*
 5. **Constant-time review** of every comparison touching secret material.
+   *Done, in §6, and enforced: `crates/rotelyx-crypto/tests/secret_comparisons.rs`
+   fails the build on a comparison the table there does not mention, or on a row
+   describing code that is gone. Measured as well as reviewed, in
+   `constant_time.rs` and in `security/ct/`. Still unmeasured, and said there
+   rather than implied: `ed25519-dalek`, `ml-kem`, and the RSA blind signature
+   path.*
 
 ---
 

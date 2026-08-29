@@ -13,7 +13,7 @@ No accounts, no phone numbers, and no servers belonging to anybody else.
 [![tests](https://img.shields.io/badge/tests-597%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-6a31ee?style=flat-square)](#try-it)
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-8b8b8b?style=flat-square)](#licence)
-[![status](https://img.shields.io/badge/status-unaudited-E0808C?style=flat-square)](#security-status)
+[![status](https://img.shields.io/badge/internally%20audited-5%20rounds-C8A76B?style=flat-square)](#security-status)
 
 
 </div>
@@ -21,9 +21,9 @@ No accounts, no phone numbers, and no servers belonging to anybody else.
 ---
 
 > [!CAUTION]
-> **Rotelyx is unaudited and pre release. Do not use it to protect anything.**
-> It makes no security claims until the review gates in
-> [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) section 5 are met.
+> **Rotelyx is internally audited and pre release.** Five rounds closed every
+> finding raised against code written here. No outside review yet, so the gates
+> in [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) section 5 are not all met.
 
 ---
 
@@ -88,7 +88,10 @@ devices from the moment the other person reads them. A read tick that is never
 inferred from anything. Encrypted history on the device, or a mode that writes
 nothing down at all and asks again next time. A conversation list that survives
 a restart, on the phone and in the desktop window. Removing somebody from a
-group. Calls, between two desktops and between a phone and a desktop.
+group, in the desktop window and the browser but **not yet on the phone**: the
+engine does it and the C ABI does not expose it, so the client most likely to be
+lost or stolen is the one that cannot revoke a device. Calls, between two
+desktops and between a phone and a desktop.
 
 What is not here is in [`TODO.md`](TODO.md), which is the ledger rather than the
 plan: an item moves to done when a test proves it, not when the code exists.
@@ -199,7 +202,10 @@ Measured between two processes through a relay: 991 frames sent and 944
 received in twenty seconds, 79 ms of audio queued, nothing dropped. Two desktop
 windows calling each other over the production relay is a test rather than a
 story, `two_desktops_calling`, and it asserts on what arrives rather than on
-what was sent, because sending proves nothing.
+what was sent, because sending proves nothing. It is not one of the 597: it
+needs the live relay and mailbox, so it is marked `#[ignore]` and run
+deliberately, and a test that needs the network is one people learn to re-run
+when it is slow rather than believe when it fails.
 
 Two people have also listened to the codec, and what that found is written down
 in [`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) and
@@ -365,10 +371,10 @@ remain are argued unreachable one by one, and `scripts/audit-dependencies`
 fails the build if any of them is ever ignored without that argument written
 down.
 
-**Internal is not independent.** Five rounds by the people who built something is
-five more than most projects publish and is still not an outside audit. The
-third-party primitives underneath, ML-KEM, OpenMLS and libcrux, were never in
-scope. Both are open invitations rather than gaps we are hiding.
+Nobody outside the project has reviewed it, and there is no budget to commission
+that. So it is an open invitation: the models are in [`formal/`](formal/), the
+harness in [`security/ct/`](security/ct/), the advisory arguments in
+[`docs/UPSTREAM.md`](docs/UPSTREAM.md). Whatever you find is yours to publish.
 
 **Found something? Email <contact@ideoa.co.uk>, and please do not open a public
 issue.** A public issue is a working exploit handed to everybody reading this

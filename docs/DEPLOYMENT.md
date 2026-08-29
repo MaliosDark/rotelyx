@@ -104,7 +104,11 @@ CWP generates the server blocks. Only one addition is needed, in **both** the
 ```
 
 The full block, including rate limiting, is in
-[`nginx-relay.conf`](nginx-relay.conf).
+[`nginx-relay.conf`](nginx-relay.conf), and the site's own block, which serves
+the WebAssembly engine with the right type and no cache, is in
+[`nginx-site.conf`](nginx-site.conf). That one is here because it was written by
+hand on the machine with `root` where it needed `alias`, and took the browser
+client down for six days that nothing in this repository could see.
 
 ### Rate limiting, and why not a challenge
 
@@ -319,17 +323,24 @@ nothing for a client to get wrong and nothing for the server to cross check.
 
 ### Three behaviours worth knowing before operating it
 
-**Delivery is exactly once.** Collection removes. Two devices polling the same
-tag race, and one loses the message. That is a real limit on multi device use,
-and it is preferred over a mailbox that keeps copies of what it has delivered.
+**Delivery peeks, and the client acknowledges.** Reading a tag used to remove
+what was under it, so two devices polling one tag raced and one lost the
+message, and anybody who could derive a tag could drain it silently. Delivery
+and removal are separate now: an envelope goes out on subscribe and stays until
+a `Collected` receipt names it, and a receipt only counts for tags that
+connection is listening on. Two devices on one tag both receive. The cost is
+that an envelope nobody acknowledges sits until its TTL.
 
 **A client never receives its own deposit.** Both sides of a conversation share
-one tag. Without this rule a sender races its own recipient and, because
-collection removes, sometimes wins and the message is simply gone.
+one tag, so without this rule a sender would be handed back what it just sent.
 
-**Nothing is persisted.** A restart drops every uncollected envelope. Envelopes
-have a TTL of seven days by default, which the store enforces both on a timer
-and on collection, so a missed sweep can never serve an expired envelope.
+**Persistence is optional and off unless asked for.** Without `--mailbox-state`
+a restart drops every uncollected envelope, which is the seizure-resistant
+choice: a stopped server with no state file hands over nothing. With it, a
+seized disk plus the passphrase yields tags and ciphertext, and contents stay
+unreadable either way. Envelopes have a TTL of seven days by default, which the
+store enforces both on a timer and on collection, so a missed sweep can never
+serve an expired envelope.
 
 ### What the operator can see
 

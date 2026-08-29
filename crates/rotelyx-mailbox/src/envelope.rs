@@ -75,7 +75,7 @@ pub enum EnvelopeError {
 /// which bucket a message fell into rather than its length. The steps are wide
 /// on purpose: fine-grained buckets would leak nearly as much as no padding.
 ///
-/// ### Why `Small` is 1 KiB and not 256 bytes
+/// ### Why `SMALL` is 1 KiB and not 256 bytes
 ///
 /// The first version used 256, which looked generous for a chat message and was
 /// not. MLS adds a constant 145 bytes of overhead, so a 256-byte bucket holds
@@ -187,10 +187,10 @@ impl TagKey {
     ///
     /// # Why a group cannot share one tag
     ///
-    /// Collection removes. With two members that is exactly right: the sender
-    /// cannot collect its own deposit, so the other side gets it. With three it
-    /// breaks: a message deposited under one shared tag is collected by
-    /// whichever member reaches it first, and the rest never see it.
+    /// A shared tag works for two, because the sender is never handed its own
+    /// deposit and the other side is therefore the only reader. It breaks at
+    /// three: every member would read every other member's mail, and whichever
+    /// acknowledged a message first would remove it from under the rest.
     ///
     /// So a sender addresses each recipient separately, deriving their tag key
     /// from the group's pinned key and that recipient's signature key. The cost

@@ -49,9 +49,17 @@ enum Request<'a> {
 
 /// What the server says back.
 ///
-/// `Other` catches everything this client does not act on: tiers, quotas and
-/// wake registrations belong to a phone rather than to a desktop, and a client
-/// that failed on a reply it merely does not need would be brittle for no gain.
+/// `Other` catches everything this client does not act on. A wake registration
+/// belongs to a phone rather than to a desktop, and a client that failed on a
+/// reply it merely does not need would be brittle for no gain.
+///
+/// `overQuota` used to be in that set and does not belong there. An
+/// unauthenticated caller is issued a free capability and metered like any
+/// other, so the allowance is a desktop's concern too. Falling into `Other`
+/// was worse than losing the message quietly: `deposit` went back to waiting
+/// for a `Stored` that was never coming, so a deposit at the quota blocked
+/// until something else arrived or the socket died. It is named now and
+/// carries the numbers, so a caller can tell a refusal from a slow network.
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 enum Reply {
@@ -59,6 +67,7 @@ enum Reply {
     Envelope { envelope: String },
     Stored,
     Error { message: String },
+    OverQuota { limit: u64, used: u64, tier: String },
     #[serde(other)]
     Other,
 }
@@ -195,6 +204,19 @@ impl Mailbox {
             match self.next_reply().await? {
                 Reply::Stored => return Ok(()),
                 Reply::Error { message } => bail!("mailbox refused the envelope: {message}"),
+                // The allowance is spent and the envelope was not stored.
+                //
+                // This used to fall into `Other` and be skipped, which did not
+                // return success: it went back to waiting for a `Stored` that
+                // was never coming, so a deposit at the quota **blocked** until
+                // something else arrived or the socket died. Said plainly here
+                // because a caller has to be able to tell a refusal from a slow
+                // network, and because the numbers are what make the refusal
+                // actionable.
+                Reply::OverQuota { limit, used, tier } => bail!(
+                    "the {tier} allowance is spent: {used} of {limit} bytes used \
+                     this period. The envelope was not stored."
+                ),
                 // Somebody else's envelope, in front of this deposit's answer.
                 // Kept rather than skipped: see `pending`.
                 Reply::Envelope { envelope } => self.pending.push_back(envelope),
@@ -294,16 +316,50 @@ mod tests {
         assert!(matches!(dropped, Reply::Other));
     }
 
+    /// A spent allowance has to be a reply this client can see.
+    ///
+    /// It parsed as `Other` once, which sent `deposit` back to waiting for a
+    /// `Stored` that the server had already decided not to send. The failure
+    /// was a hang rather than an error, and the envelope was not stored either
+    /// way. The exact field names come from the server's `Reply::OverQuota`.
+    #[test]
+    fn a_spent_allowance_is_not_mistaken_for_a_reply_to_ignore() {
+        let spent: Reply = serde_json::from_str(
+            r#"{"op":"overQuota","limit":67108864,"used":67108900,"tier":"free"}"#,
+        )
+        .expect("overQuota");
+
+        assert!(
+            matches!(spent, Reply::OverQuota { .. }),
+            "a refused deposit must not fall into the set this client ignores: \
+             ignoring it is what made `deposit` wait for an answer that was \
+             never coming"
+        );
+
+        let Reply::OverQuota { limit, used, tier } = spent else {
+            unreachable!()
+        };
+        assert_eq!((limit, used, tier.as_str()), (67_108_864, 67_108_900, "free"));
+    }
+
     /// A reply this client does not act on must not be an error.
     ///
-    /// Tiers, quotas and wake registrations belong to a phone. A desktop that
+    /// A tier grant and a wake registration belong to a phone. A desktop that
     /// fell over on one of them would be brittle for nothing, and the server is
     /// free to add more.
+    ///
+    /// **`overQuota` was in this list and that was the defect.** The test
+    /// asserted the belief rather than checking it, so the belief could not be
+    /// contradicted by anything: a refused deposit was classified as a reply
+    /// worth ignoring, and `deposit` waited for an answer the server had
+    /// decided not to send. A quota is not a phone's concern, because an
+    /// unauthenticated caller is metered too. It is checked by the test above
+    /// this one now, and this list is for replies that say nothing about
+    /// whether a request succeeded.
     #[test]
     fn replies_this_client_does_not_need_are_ignored_rather_than_fatal() {
         for text in [
             r#"{"op":"tier","name":"free"}"#,
-            r#"{"op":"overQuota","limit":1,"used":2,"tier":"free"}"#,
             r#"{"op":"wakeRegistered","secret":"aa"}"#,
             r#"{"op":"somethingFromAFutureServer"}"#,
         ] {

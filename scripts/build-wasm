@@ -47,6 +47,12 @@ export RUSTFLAGS="${RUSTFLAGS:-} \
     --remap-path-prefix=$HOME/.rustup=/rustup \
     --remap-path-prefix=$PWD=/src"
 
+# The engine lived in `site/assets` for one evening in August 2026, because the
+# production server's `location /rotelyx/` block used `root` where it needed
+# `alias`. `root` appends the whole URI, so `/rotelyx/x.js` was looked for under
+# `public_html/rotelyx/rotelyx/`, which does not exist: uploads went nowhere and
+# the site served a stale module and then 404ed. Fixed on the server, so this is
+# back where the paths say it is.
 OUT="site/rotelyx"
 BEFORE=0
 [ -f "$OUT/rotelyx_wasm_bg.wasm" ] && BEFORE=$(stat -c%s "$OUT/rotelyx_wasm_bg.wasm")

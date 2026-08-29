@@ -765,8 +765,9 @@ impl Conversation {
     ///
     /// Clients need this to address a message: with more than two members a
     /// sender deposits one copy per recipient, each under that recipient's own
-    /// tag, because mailbox collection removes and a single shared tag would
-    /// hand each message to whichever member collected first.
+    /// tag. A single shared tag would hand every member every other member's
+    /// mail, and whichever one acknowledged a message first would remove it
+    /// from under the rest.
     pub fn roster(&self) -> Vec<Participant> {
         self.group
             .members()

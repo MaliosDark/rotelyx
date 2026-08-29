@@ -21,12 +21,14 @@
 //! direct path over any relayed one, and the reason this server exists only for
 //! peers that have no direct path or are not online at the same time.
 //!
-//! # Delivery is exactly once
+//! # Delivery peeks, and the client acknowledges
 //!
-//! Collection removes. Two devices polling the same tag race, and one of them
-//! loses the message. That is a real limitation of multi-device use and is
-//! preferred over the alternative, which is a mailbox that keeps copies of
-//! everything it has already delivered.
+//! An envelope goes out on subscribe and is removed only when the recipient
+//! says by digest that it arrived, across tags that connection is listening on.
+//! Removing on delivery lost a message to a client that crashed mid-collection
+//! and let anybody able to derive a tag drain it silently, so the two are
+//! separate. Two devices on one tag both receive. What it costs is that an
+//! envelope nobody acknowledges sits until its TTL.
 
 mod limits;
 mod vault;
@@ -164,7 +166,7 @@ struct Args {
     apns_team_id: Option<String>,
 
     /// The application's bundle identifier, which Apple calls the topic.
-    #[arg(long, value_name = "BUNDLE", default_value = "com.ideoalabs.rotelyx")]
+    #[arg(long, value_name = "BUNDLE", default_value = "com.rotelyx.app")]
     apns_topic: String,
 
     /// Use Apple's sandbox rather than production.
@@ -305,8 +307,8 @@ struct Server {
     ///
     /// The connection that deposited travels with it so it can skip its own
     /// wake. Without that, a client subscribed to a tag it also deposits under
-    /// races to collect its own message, and because collection removes, it
-    /// wins sometimes and the real recipient never sees it. Both sides of a
+    /// would otherwise be handed its own message straight back, and could
+    /// acknowledge it out from under the real recipient. Both sides of a
     /// conversation share one tag, so this is the normal case, not an edge one.
     wake: broadcast::Sender<Wake>,
 
@@ -2513,8 +2515,9 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     /// `site/chat.html` performs it.
     ///
     /// The two party test cannot catch what breaks here. A group needs one
-    /// deposit per recipient, because collection removes and a shared tag hands
-    /// each message to whoever collects first; and the commit announcing a new
+    /// deposit per recipient, because a shared tag hands every member every
+    /// other member's mail and the first acknowledgement takes it from the
+    /// rest; and the commit announcing a new
     /// member has to be addressed at the epoch the existing members are still
     /// on, since that commit is what moves them off it.
     #[tokio::test]
@@ -2831,8 +2834,8 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
     /// A client that unsubscribes must stop consuming envelopes.
     ///
-    /// Collection removes, so a client still listening on a tag it has
-    /// finished with silently eats what was meant for someone else. This is
+    /// A client still listening on a tag it has finished with reads what was
+    /// meant for someone else, and acknowledging it takes it away. This is
     /// what a third person joining an established conversation hit: their
     /// knock was swallowed by whichever existing tab collected it first, and
     /// nothing appeared anywhere.
@@ -2922,8 +2925,8 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
     /// A client subscribed to a tag it also deposits under must not receive
     /// its own envelope. Both sides of a conversation share one tag, so
-    /// without this a sender races its recipient and sometimes wins, and
-    /// because collection removes, the message is simply lost.
+    /// without this a sender is handed its own deposit straight back, and could
+    /// acknowledge it out from under the recipient.
     #[tokio::test]
     async fn a_client_never_receives_its_own_deposit() {
         let url = spawn_server().await;
@@ -3082,9 +3085,11 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert!(Envelope::from_bytes(&[]).is_err());
     }
 
-    /// Collection removes, which is what makes delivery exactly once. If this
-    /// ever became non-destructive the server would start keeping copies of
-    /// delivered messages, which is the thing it exists not to do.
+    /// `Mailbox::collect` is destructive, and stays that way: it is what the
+    /// acknowledgement path calls once a recipient says an envelope arrived.
+    /// Delivery itself peeks. If this ever stopped removing, the server would
+    /// keep copies of what it had delivered, which is the thing it exists not
+    /// to do.
     #[test]
     fn collection_is_destructive() {
         let mut mailbox = Mailbox::with_default_ttl();

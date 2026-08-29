@@ -655,8 +655,9 @@ impl Meeting {
     /// own tags.
     async fn enter(&mut self, mailbox: &mut Mailbox, peer: String) -> Result<()> {
         // A guest stops listening at the meeting place; the host does not, so
-        // somebody can arrive later. Collection removes, so a guest still
-        // listening would swallow a knock meant for the host.
+        // somebody can arrive later. A guest still listening would read a knock
+        // meant for the host, and acknowledging it would take it away from
+        // them entirely.
         //
         // The tag itself is deliberately kept either way: the host deposits the
         // welcome and the commit back to back, so the commit is already in
@@ -1706,11 +1707,12 @@ mod tests {
 
     /// Is anything still waiting at a tag?
     ///
-    /// Collection is destructive, so an envelope that comes back here is an
-    /// envelope nobody else asked for. That separates the two explanations
-    /// which look identical from the sending side: the far end is not listening
-    /// on the tag this side addressed, or it is listening and cannot read what
-    /// arrives.
+    /// Delivery peeks and removal waits for an acknowledgement, so an envelope
+    /// that comes back here is one nobody has acknowledged: either nobody is
+    /// listening on this tag, or somebody is and could not read what arrived.
+    /// It used to mean the first of those on its own, when collection removed
+    /// on delivery, and it does not any more. Reading it does not consume it,
+    /// which is what makes this safe to run against a live conversation.
     ///
     ///   ROTELYX_MAILBOX=wss://... ROTELYX_TAG=<64 hex> cargo test \
     ///     -p rotelyx-desktop --bin rotelyx-desktop is_anything_waiting \

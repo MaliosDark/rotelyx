@@ -130,6 +130,10 @@
   .kicker {
     font-family: var(--body); font-size: .82rem; letter-spacing: .06em;
     font-variant: small-caps; color: var(--ink-2); margin: 0 0 1rem;
+    /* Stated rather than inherited. `header` centres its contents, but the
+       rule on `p` above is a direct match and beats what a parent passes down,
+       so this line was arriving justified. */
+    text-align: center;
   }
   /* The \maketitle block: everything centred, nothing decorated. */
   header { text-align: center; margin: 0 auto 2.5rem; max-width: none; }
@@ -150,12 +154,16 @@
   }
   .byline b { color: var(--ink); font-weight: 600; }
 
+  /* Caution, not alarm. This was red when the first word was "unaudited",
+     which was the right colour for it. It now opens with what was done and
+     closes with what that does not cover, and red on the first three words
+     reads as though the review were the bad news. */
   .notice {
-    background: var(--risk-soft); border-left: 3px solid var(--risk);
+    background: var(--accent-soft); border-left: 3px solid var(--accent);
     padding: 1rem 1.2rem; margin: 2rem 0 0; max-width: none;
     font-size: .95rem; color: var(--ink);
   }
-  .notice b { color: var(--risk); }
+  .notice b { color: var(--ink); }
 
   /* abstract */
   /* \begin{abstract}: narrower than the body, one size down, heading centred
@@ -361,7 +369,7 @@
   </div>
 
   <div class="notice">
-    <b>Status: unaudited.</b> This report describes a working implementation
+    <b>Status: internally audited, pre-release.</b> This report describes a working implementation
     that has not undergone independent cryptographic review. No security claim
     made here should be relied upon until that review is complete. The
     limitations in section 11 are not hypothetical; several are unsolved.
@@ -970,8 +978,8 @@
         <text x="668" y="112" font-size="11">derives the same</text>
         <text x="668" y="128" font-size="11">tags independently</text>
         <text x="668" y="152" font-size="11">polls an hour window</text>
-        <text x="668" y="176" font-size="11">collection deletes</text>
-        <text x="668" y="198" font-size="10.5" fill-opacity=".6">no ack of deletion</text>
+        <text x="668" y="176" font-size="11">removed on acknowledgement</text>
+        <text x="668" y="198" font-size="10.5" fill-opacity=".6">not on delivery</text>
 
         <!-- residual -->
         <rect x="276" y="252" width="300" height="56" rx="4" fill="none" stroke="#A33B4D" stroke-dasharray="5 4" stroke-width="1.3"/>
@@ -1024,10 +1032,15 @@
       producing silent undeliverability.
     </p>
     <p>
-      <strong>Collection is destructive.</strong> A collected envelope is
-      removed. A client that crashes mid collection loses those messages. The
-      alternative is a mailbox that retains copies, which is the property being
-      designed against.
+      <strong>Delivery and removal are separate.</strong> Collection used to
+      remove on delivery, so a client that crashed mid collection lost those
+      messages, and anybody able to derive a tag could drain another member's
+      mailbox silently and permanently. An envelope is now delivered on
+      subscribe and removed only when the recipient acknowledges it by digest,
+      and only across tags that connection is listening on, so a receipt is not
+      a capability. Reading a tag you should not read became eavesdropping on
+      ciphertext you cannot open, where it had been destroying it. What it costs
+      is that an envelope nobody acknowledges sits until its TTL.
     </p>
 
     <div class="callout risk">
@@ -1055,8 +1068,8 @@
 
     <p>
       There is therefore a second admission path that carries no key at all. A
-      <b>meeting code</b> is 120 bits of randomness rendered as 29 base32
-      characters. Both parties derive a rendezvous tag from it through a domain
+      <b>meeting code</b> is 120 bits of randomness rendered as 24 base32
+      characters, behind a five character version prefix, so 29 in all. Both parties derive a rendezvous tag from it through a domain
       separated BLAKE3 derivation, deposit at that tag, and complete an ordinary
       MLS handshake there: a key package from the side that read the code, a
       welcome and the hybrid ciphertext from the side that showed it. Once the
@@ -1187,9 +1200,14 @@
 
     <p>
       The padding bought nothing there. A commit&rsquo;s size is a function of
-      the number of members, and that number is already visible to the operator,
-      because a fan out names every recipient. Twelve times the bandwidth was
-      being spent to hide a quantity in plain view.
+      the number of members, and that number is already visible to the operator:
+      a commit is deposited once per recipient, so the operator counts the
+      deposits. An earlier version of this paragraph said the count was visible
+      because a fan-out request named every recipient, which was true when it
+      was written and is not now: that request handed the whole set over in one
+      frame and was removed. Counting a burst is a weaker observation than
+      reading a list, and it is still enough to make twelve times the bandwidth
+      a payment for hiding a quantity in plain view.
     </p>
 
     <div class="tablewrap">
@@ -1433,11 +1451,12 @@
     </p>
 
     <p>
-      Mailbox collection is destructive: an envelope handed over is gone. With
-      two members that is exactly right, because a sender cannot collect its own
-      deposit and the other side therefore gets it. With three it fails
-      silently. A message deposited under one shared tag is collected by
-      whichever member reaches it first, and the rest never see it.
+      A shared tag does not work for three. Collection was destructive when
+      groups were designed, so a message deposited under one tag went to
+      whichever member reached it first and the rest never saw it, silently.
+      Removal now waits for an acknowledgement, which fixes the silent loss and
+      not the addressing: on one shared tag every member would collect every
+      other member&rsquo;s mail, including the copies meant for somebody else.
     </p>
 
     <p>
@@ -1530,7 +1549,7 @@
       both directions, which is the first time the codec, the media layer, the
       transport and two real devices have run together rather than each on its
       own. Echo cancellation is written and measured, and section 10.18 reports
-      that it removes nothing in a real room.
+      that a real room reduces it to 1.3 dB.
     </p>
 
     <h3>Why media cannot reuse the message layer</h3>
@@ -1861,12 +1880,32 @@
     </p>
 
     <p>
-      <b>Pre-echo is real and remains unfixed.</b> A plosive places noise 14.8 dB
+      <b>Pre-echo was real and is now bounded.</b> A plosive placed noise 14.8 dB
       below itself into the silence <i>preceding</i> it, because a 40 ms window
-      spreads quantisation error across its whole length. This is the known cost
-      of the long window and the remedy is block switching, which is not built.
-      It is now measured and recorded rather than left to be discovered by a
-      listener.
+      spreads quantisation error across its whole length. The obvious remedy is
+      block switching, and it is not the one taken: block switching costs two
+      more window shapes, a second band layout and a decoder that must agree
+      with the encoder about every frame&rsquo;s shape, against a codec whose
+      band tables and quantiser are built on one 20 ms hop.
+
+      Temporal noise shaping reaches the same problem from the other end. A
+      transient in time is a smooth ridge across frequency, so linear prediction
+      <i>along the coefficients</i> has something to predict, and the
+      decoder&rsquo;s synthesis filter shapes the quantisation noise by the
+      temporal envelope it is rebuilding, landing it under the burst that masks
+      it. One flag bit, three of filter order, four bits per tap, and no change
+      to the framing or the latency. The plosive goes from &minus;14.8 dB to
+      &minus;40.7 in the base codec and to &minus;30.9 in the layered one at 60
+      bytes, with two tests holding it there.
+
+      The gate is in the time domain, and that is the whole tuning. Gating on
+      prediction gain across frequency is the obvious choice and the wrong one:
+      a nasal has evenly spaced harmonics, predicts beautifully, has no
+      transient at all, and shaping it flattens the comb the band energies were
+      exploiting, at a cost of 2.1 dB. Gating on whether one eighth of the
+      window stands three times above the frame&rsquo;s average costs 0.4 dB and
+      keeps the gain. Block switching stays unbuilt on purpose, for the case
+      shaping cannot reach.
     </p>
 
     
@@ -2231,16 +2270,30 @@
     <h3>What is not built, and what it will cost</h3>
 
     <p>
-      <b>Congestion control is absent.</b> Device capture and the jitter buffer,
-      listed as missing in earlier versions of this paper, are built.
+      <b>Congestion control, device capture and the jitter buffer were all
+      listed as missing in earlier versions of this paper and are built.</b> A
+      call cannot slow down and arrive later, since audio that is late is
+      dropped rather than queued, so congestion is invisible in the ordinary
+      way: nothing backs up and what a listener hears is holes rather than a
+      slower call. The rate comes down on purpose instead, which the layered
+      codec makes possible without renegotiating anything, and it watches loss
+      and delay together because the round trip climbing above the lowest this
+      connection has managed is the same event a queue overflow reports a second
+      later. The floor is 12&nbsp;kbit/s, the lowest rate anybody has listened
+      to this codec at.
     </p>
 
     <p>
-      One measured cost is already known. Frame overhead is 25 bytes, a nine byte
-      header and a sixteen byte tag, which on an 80 byte Opus frame is 31
-      percent. SFrame permits truncating the tag to eight or four bytes for
-      exactly this reason, and that should be done before a call runs over a
-      metered connection.
+      Frame overhead is 19 bytes on a 60 byte payload, measured, after a
+      variable length frame counter took it from 25. <b>Truncating the
+      authentication tag was tried and rejected</b>, and this paper recommended
+      it before that was understood. SFrame permits eight or four byte tags and
+      it would take overhead to roughly 14 percent, but truncating a polynomial
+      MAC is not truncating an HMAC: short GCM tags leak the authentication
+      subkey across repeated forgery attempts, so security degrades faster than
+      2<sup>&minus;64</sup>. The safe route is AES-CTR with a truncated HMAC,
+      which means composing encrypt-then-MAC by hand, and this project does not
+      write its own constructions.
     </p>
 
     <p>
@@ -2407,7 +2460,7 @@
 
     <h3>Derived rather than original transport</h3>
     <p>
-      The transport comprises 123,893 lines vendored from iroh, whose socket
+      The transport comprises 124,632 lines vendored from iroh, whose socket
       layer is itself derived from Tailscale under BSD-3-Clause and whose QUIC
       layer is a fork of quinn. Rotelyx owns the policy layers, has deleted the
       identity publishing code outright, and has replaced the path selection
@@ -2446,11 +2499,12 @@
       opened on a second device.
     </p>
     <p>
-      Two limitations remain. The sealing key comes from a passphrase rather
+      One limitation remains. The sealing key comes from a passphrase rather
       than from a platform keystore, so its strength is whatever the user chose.
-      And the rekey is not reachable from every client: the C ABI the Android
-      client speaks does not expose it, so on that client a conversation read
-      back from storage cannot yet send. Both are open items.
+      The rekey used not to be reachable from every client, because the C ABI
+      the Android client speaks did not expose it, so a conversation read back
+      from storage could not send there. It is exposed now, as
+      <code>session.rekeyAfterRestore</code>.
     </p>
 
     
@@ -2541,7 +2595,7 @@
   <h2>Implementation status</h2>
   <div class="col">
     <p>
-      The implementation is written in Rust across eighteen first party crates
+      The implementation is written in Rust across nineteen first party crates
       plus a vendored transport tree, and is exercised by 597 tests. The Android
       client is a separate tree with a suite of its own, not counted here. The
       distribution of those tests is more informative than the count.
@@ -2554,16 +2608,16 @@
       <tbody>
         <tr><td>Blind mailbox, its server and its client</td><td class="num">97</td><td>Expiry enforced on collection rather than only on sweep, and a wrong passphrase rejected against a warm cache</td></tr>
         <tr><td>Voice codec</td><td class="num">95</td><td>Real speech, deliberate stressors, and the transform against a slower reference</td></tr>
-        <tr><td>Identity, framing, admission</td><td class="num">83</td><td>Admission control verified over live QUIC connections, not only in unit tests</td></tr>
-        <tr><td>Browser, phone and desktop clients</td><td class="num">73</td><td>The same engine in all three, the C ABI crossed in both directions, and two clients meeting through a code at a running mailbox</td></tr>
-        <tr><td>Media transport</td><td class="num">54</td><td>Per sender keys, the jitter buffer, and layers crossing a real wire</td></tr>
-        <tr><td>Message crypto</td><td class="num">48</td><td>Negative test proving a PSK commit fails without the staged secret</td></tr>
+        <tr><td>Identity, framing, admission</td><td class="num">80</td><td>Admission control verified over live QUIC connections, not only in unit tests</td></tr>
+        <tr><td>Browser, phone and desktop clients</td><td class="num">74</td><td>The same engine in all three, the C ABI crossed in both directions, and two clients meeting through a code at a running mailbox</td></tr>
+        <tr><td>Media transport</td><td class="num">71</td><td>Per sender keys, the jitter buffer, and layers crossing a real wire</td></tr>
+        <tr><td>Message crypto</td><td class="num">43</td><td>Negative test proving a PSK commit fails without the staged secret</td></tr>
         <tr><td>Hostile input</td><td class="num">36</td><td>Every parser reachable before authentication, under systematic mutation, in six crates</td></tr>
-        <tr><td>Access control</td><td class="num">25</td><td>What a client is permitted to ask for, checked against frozen test vectors</td></tr>
-        <tr><td>Transport and path policy</td><td class="num">23</td><td>Live connections, and a guard that fails the build on any third party hostname</td></tr>
+        <tr><td>Access control</td><td class="num">26</td><td>What a client is permitted to ask for, checked against frozen test vectors</td></tr>
+        <tr><td>Transport and path policy</td><td class="num">26</td><td>Live connections, and a guard that fails the build on any third party hostname</td></tr>
         <tr><td>Room acoustics</td><td class="num">20</td><td>The echo canceller, the noise suppressor and the dereverberator, against recorded speech</td></tr>
         <tr><td>Relay and its status page</td><td class="num">19</td><td>Refusal to start on an empty allowlist, and admission limits under load</td></tr>
-        <tr><td>Terminal client</td><td class="num">16</td><td>The operator&rsquo;s serialised view scanned byte wise for plaintext, and a relayed address carrying no IP</td></tr>
+        <tr><td>Terminal client</td><td class="num">10</td><td>The operator&rsquo;s serialised view scanned byte wise for plaintext, and a relayed address carrying no IP</td></tr>
       </tbody>
     </table>
   </div>
@@ -2737,9 +2791,9 @@
       offers it over WebRTC, which means a stack this project deliberately did
       not adopt. Rotelyx encodes with its own transform codec, keys each speaker
       from the MLS group, and refuses any network path that would disclose the
-      caller&rsquo;s address. What that costs is stated in section 10: no
-      congestion control, no group calls beyond a handful, and an echo canceller
-      that removes nothing in a real room.
+      caller&rsquo;s address. What that costs is stated in section 10: no group calls
+      beyond a handful, and an echo canceller worth 1.3 dB in a real room, which
+      on a desktop means headphones.
     </p>
   </div>
 </section>
@@ -2804,7 +2858,7 @@
         <tr><td>1</td><td>August 2026</td><td>Initial architecture: the layering, the post quantum composition, path selection, the blind mailbox</td></tr>
         <tr><td>2</td><td>20 August 2026</td><td>Padding measured and twice corrected, reachability and abuse resistance, groups, the media chapter and the codec</td></tr>
         <tr><td>3</td><td>25 August 2026</td><td>Meeting codes, a call between two implementations, echo cancellation measured against a room, the listening sessions corrected</td></tr>
-        <tr><td>4</td><td>27 August 2026</td><td>Four rounds of review. The mailbox no longer stores framing an operator can read, the post quantum wrap is bound and signed, collection is acknowledged rather than destructive, one request type removed, and the composition checked in ProVerif. Two findings are fixed and deliberately not described here yet; see section 12</td></tr>
+        <tr><td>4</td><td>27 August 2026</td><td>Five rounds of review. The mailbox no longer stores framing an operator can read, the post quantum wrap is bound and signed, collection is acknowledged rather than destructive, one request type removed, and the composition checked in ProVerif. Two findings are fixed and deliberately not described here yet; see section 12</td></tr>
       </tbody>
     </table>
   </div>

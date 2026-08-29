@@ -2,15 +2,24 @@
 
 **Version 1** &middot; 16 August 2026 &middot; Ideoa Labs
 
-This document specifies the one novel cryptographic construction in Rotelyx. It
-is written so that somebody who has never read our source can reimplement it and
-check the published vectors.
+This document specifies the two novel cryptographic constructions in Rotelyx,
+so that somebody who has never read our source can reimplement them and check
+the published vectors. Section 5 is the two-party one: an X-Wing secret turned
+into an MLS pre-shared key. Section 5b is the group one: a chosen group secret
+sealed to each member individually, which the two-party construction cannot do
+because encapsulation derives a secret rather than carrying a chosen one.
+
+Section 5b was added late, and its absence was a real gap rather than an
+oversight of formatting: an audit found a critical defect in exactly the
+construction this document did not describe, and a reviewer following the review
+checklist at the end would have had no reason to look at it.
 
 Everything else in the message layer is adopted unchanged: group and message
 encryption is MLS (RFC 9420) via OpenMLS, and the hybrid key encapsulation is
 X-Wing. This document covers only the join between them.
 
-> **Unaudited.** This construction has not undergone independent review. It is
+> **Internally reviewed only.** This construction has not been examined by
+> anybody outside the project. It is
 > published in this form precisely so that such a review is possible.
 
 ---
@@ -142,6 +151,79 @@ pub fn derive_psk(secret: &[u8; 32], binding: &[u8]) -> [u8; 32] {
     out
 }
 ```
+
+---
+
+## 5b. The group construction
+
+A group needs every member to hold the **same** pre-shared key, because MLS
+looks one up by a single id and a commit carrying different material for
+different members fails for all but one of them. Encapsulation cannot do that:
+it derives a secret rather than carrying a chosen one.
+
+So the committing member picks one group secret and seals it to each member.
+
+### 5b.1 Binding
+
+```
+aad = be64(len(LABEL))     || LABEL
+   || be64(len(group_id))  || group_id
+   || be64(epoch)
+   || be64(len(recipient)) || recipient
+   || be64(len(sender))    || sender
+
+LABEL = "rotelyx pq group secret wrap v2"      (30 bytes, ASCII)
+```
+
+`recipient` and `sender` are MLS signature public keys. Every field is
+length-prefixed for the reason section 6.1 gives about the two-party binding.
+
+The label is **v2**. Version 1 named the group, the epoch and the recipient, and
+that closed replay while leaving one thing open: nothing said who produced the
+wrap. A party able to place bytes under the group's tag could substitute a wrap
+of its own and remove a member from the conversation. Naming the sender is what
+makes a wrap impossible to relabel.
+
+### 5b.2 Sealing
+
+```
+(kem_ct, kem_ss) = XWing.Encapsulate(recipient_hybrid_public_key)
+wrapping_key     = BLAKE3_derive_key("rotelyx pq group secret wrap v1", kem_ss)[0..32]
+nonce            = 24 random bytes
+sealed           = XChaCha20Poly1305.Seal(wrapping_key, nonce, group_secret, aad)
+```
+
+Both halves of the hybrid must break for the group secret to leak: X-Wing
+protects the wrapping key and XChaCha20-Poly1305 protects the secret under it.
+1192 bytes per recipient, once per rotation.
+
+### 5b.3 Signing
+
+The wrap is signed by the member that produced it, under the MLS ciphersuite's
+signature scheme, which for the pinned suite is Ed25519.
+
+```
+body    = kem_ct || nonce || sealed
+payload = be64(len(aad)) || aad || be64(len(body)) || body
+signature = Sign(sender_signature_private_key, payload)
+```
+
+### 5b.4 Opening
+
+In this order, and the order is the specification:
+
+1. Refuse a wrap carrying no signature. An unsigned wrap is not a wrap.
+2. Take the sender's public key from the binding, and verify the signature over
+   the payload above with **`verify_strict`**, not plain verification: strict
+   verification refuses the small-order and non-canonical keys that let one
+   signature verify under more than one key, which is precisely the confusion
+   this check exists to prevent.
+3. Only then decapsulate and open the AEAD.
+
+What this cannot check, and the caller must: that the sender's key belongs to a
+**current member of the group**. A signature proves who wrote the wrap and
+nothing about whether they are still in the room. Rotelyx checks the roster at
+the call site.
 
 ---
 
@@ -290,7 +372,22 @@ For a reviewer, the questions this construction should be attacked with:
 - [ ] Is truncating BLAKE3's extendable output to 32 bytes appropriate for a PSK
       of the ciphersuite's hash length?
 
-The last two are the ones we are least able to answer ourselves.
+And on the group construction in section 5b, which is where an audit already
+found one critical defect and is therefore the half worth attacking hardest:
+
+- [ ] Does the signature cover everything an attacker would want to change? It
+      covers the binding and the wrap body; it does not cover itself.
+- [ ] Can a wrap be replayed to a different recipient, a different epoch, or a
+      different group, given all three are in the associated data?
+- [ ] Is `verify_strict` sufficient against signature malleability here, or does
+      the surrounding protocol reintroduce a case it does not cover?
+- [ ] The roster check is at the call site rather than in the construction. Can
+      a caller reach `unwrap` without it?
+- [ ] Does one member learning another member's wrap gain anything, given each
+      is sealed under a key only that recipient can derive?
+
+The last two of the first list, and the last two of this one, are the ones we
+are least able to answer ourselves.
 
 ---
 

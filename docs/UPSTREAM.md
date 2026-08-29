@@ -1,6 +1,6 @@
 # Upstream watch
 
-`crates/net` holds 124,000 lines derived from other people's projects. Vendoring
+`crates/net` holds 124,632 lines derived from other people's projects. Vendoring
 means fixes no longer arrive on their own: `cargo update` will never change a
 line in this repository, so somebody has to read what upstream did and port it
 by hand. This file is where that reading gets written down.

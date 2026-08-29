@@ -77,10 +77,22 @@ fi
         fi
     done
     echo
-    echo "To check a running deployment:"
+    echo "To check a running deployment, in one command:"
     echo
     echo '```sh'
-    echo "curl -s https://rotelyx.ideoa.co/rotelyx/rotelyx_wasm_bg.wasm | sha256sum"
+    echo "scripts/verify-deployment https://rotelyx.com"
+    echo '```'
+    echo
+    echo "It fetches what the server is serving and compares against the table"
+    echo "above. It exits non-zero when they differ, which is either an older"
+    echo "build or somebody having changed it. It says nothing about what a"
+    echo "browser was handed: a page can only run what the server sent it, so"
+    echo "the check has to come from outside."
+    echo
+    echo "By hand:"
+    echo
+    echo '```sh'
+    echo "curl -s https://rotelyx.com/rotelyx/rotelyx_wasm_bg.wasm | sha256sum"
     echo '```'
     echo
     echo "To check that this file is honest, build it yourself:"

@@ -128,7 +128,7 @@ separation is a design rule, not an accident.
 | **L3** | `rotelyx-mailbox` | Operator sees no sender, no recipient identity, no plaintext, no message length | Timing correlation between deposit and collection. Deletion is enforced by code, not by protocol |
 | **L2** | `rotelyx-crypto` | Forward secrecy, post compromise security, membership visible in commits, post quantum epoch keys | Anything once a device is compromised |
 | **L1** | `rotelyx-core` | Peer authenticated by public key, admission control before any group crypto, length capped framing | That the key belongs to the person you mean. That is what safety numbers are for |
-| **L0** | `rotelyx-net` | Direct paths preferred over relayed ones at any latency, no third party infrastructure contacted | That a direct path always exists. Roughly 10 to 20 percent of NAT pairs cannot be punched |
+| **L0** | `rotelyx-net` | Messages prefer a direct path over a relayed one at any latency; calls are relayed always, never direct; no third party infrastructure contacted | That a direct path always exists. Roughly 10 to 20 percent of NAT pairs cannot be punched |
 
 ---
 
@@ -258,6 +258,14 @@ delimiting. Writing a length field would have been the natural thing to do and
 would have handed the operator exactly the information the buckets exist to
 hide.
 
+**Calls do not take a direct path, ever.** A direct path hands your address to
+whoever is on the call, and on a call that is a stranger as often as not, so
+`PathPolicy::RelayOnly` is enforced in the transport rather than preferred:
+`MediaOut` and `MediaIn` refuse to be built on any policy that permits a direct
+path, so a call cannot silently become an address disclosure the moment hole
+punching succeeds. Messages go the other way, because there the alternative
+exposure is to an operator rather than to a stranger.
+
 **The addressing key is never transmitted.** Both sides derive the tag key from
 the MLS exporter secret, so it never travels and the mailbox never holds it.
 
@@ -269,9 +277,13 @@ described a mailbox that could not route at all and contradicted ADV-4 of the
 threat model, where the rotating pseudonymous tag is exactly what the operator
 is said to see.
 
-**Collection is destructive.** An envelope handed over is gone. A client that
-crashes mid collection loses those messages. The alternative is a mailbox that
-keeps copies, which is exactly what this is trying not to be.
+**Delivery and removal are separate.** Collection used to remove on delivery, so
+a client that crashed mid collection lost those messages and anybody able to
+derive a tag could drain another member's mailbox silently. An envelope now goes
+out on subscribe and is removed only when the recipient acknowledges it by
+digest, across tags that connection is listening on. What it costs is that an
+envelope nobody acknowledges sits until its TTL, which is the price of not being
+a mailbox that keeps copies of what it delivered.
 
 ### Meeting somebody without an address
 

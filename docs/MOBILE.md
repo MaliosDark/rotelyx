@@ -19,9 +19,9 @@ It reimplements nothing: it depends on `rotelyx-wasm` as an `rlib` and calls its
 public API. Two implementations of one handshake diverge, and the divergence is a
 security bug that presents as an interoperability bug.
 
-## The whole ABI
+## The control ABI
 
-Three symbols.
+Three symbols. The audio path adds six more, below, for a total of nine.
 
 ```c
 int32_t     rotelyx_call(const char *request_json, char **response_json);
@@ -187,19 +187,48 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `session.commitPq` | | commit |
 | `session.send` | `text` | sealed message |
 | `session.receive` | `message` | text, or null for a commit |
+| `session.rekeyAfterRestore` | | commit, to be delivered |
 | `session.seal` | `ciphertext`, `timeBucket` | envelope |
 | `session.open` | `envelope`, `timeBucket`, `lookback` | ciphertext |
 | `session.sealForGroup` | `ciphertext`, `timeBucket` | array of envelopes |
 | `session.sealCommitForGroup` | `ciphertext`, `timeBucket` | array |
 | `session.openMine` | `envelope`, `timeBucket`, `lookback` | ciphertext |
 | `session.paddedPayload` | `ciphertext` | padded |
+| `mailbox.receiptFor` | `envelope` | digest, hex. Needs no handle |
 | `session.myTag` | `timeBucket` | tag, hex |
 | `session.myPollingTags` | `timeBucket`, `lookback` | array of hex |
 | `session.recipientTags` | `timeBucket` | array of hex |
 | `session.commitRecipientTags` | `timeBucket` | array of hex |
 | `session.tagFor` | `timeBucket` | tag, hex |
+
+`session.removeMember` takes the **signature key**, which `session.rosterDetail`
+carries and `session.roster` does not. That is not an oversight of the smaller
+call: a label is a claim, two members can make the same one, and removing by
+label would eventually remove the wrong person. Removal returns a commit, and
+the caller delivers it with `session.sealCommitForGroup`, addressed at the epoch
+the others are still on, exactly as an invitation's commit is. A removal nobody
+receives is not a removal.
+
+`mailbox.receiptFor` is how an envelope is named when telling the mailbox it
+arrived. Delivery peeks and removal waits for that receipt, so an envelope
+nobody acknowledges sits until its seven-day TTL and the tag fills at 256, after
+which the server refuses deposits and messages are lost with nothing said. Send
+it after the envelope is opened and written down, never on arrival: not
+acknowledging costs re-delivery, acknowledging something unstored loses it.
+
+`session.rekeyAfterRestore` is the one an application forgets and then cannot
+explain. A conversation read back from storage believes it is at a generation
+the group has already spent, so everything it sends is refused by the far side
+and nothing tells the person holding the phone: to them, messages simply stop
+arriving. `session.send` returns `RestoredAndNotRekeyed` rather than sending,
+and this call moves the epoch and hands back a commit the caller has to
+deliver. It cannot happen inside the restore, because a restore has no way to
+send anything, and a rekey nobody receives is the same failure from the other
+side.
 | `session.pollingTags` | `timeBucket`, `lookback` | array of hex |
-| `session.roster` | | array |
+| `session.roster` | | array of labels |
+| `session.rosterDetail` | | JSON `[{"label":…,"key":…}]` |
+| `session.removeMember` | `signatureKey` | commit, to be delivered |
 | `session.epoch` | | integer |
 | `session.memberCount` | | integer |
 | `session.safetyNumber` | | digits |
