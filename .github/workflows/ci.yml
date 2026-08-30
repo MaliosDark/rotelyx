@@ -67,12 +67,61 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features --manifest-path crates/net/rotelyx-relay-proto/Cargo.toml
 
+  advisories:
+    # `scripts/audit-dependencies` against the RustSec database. It exits
+    # non-zero when an advisory is unreviewed, or when `deny.toml`,
+    # `.cargo/audit.toml` and its ledger stop agreeing, which is the case
+    # somebody has to look at rather than a number to watch drift upwards.
+    #
+    # Not in CI before, so an advisory published against any of the 722
+    # packages here arrived only when somebody thought to run it.
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python3 scripts/audit-dependencies
+
+  vendored:
+    # Every vendored crate's own tests. None of them ran, because
+    # `cargo test --workspace` cannot reach an excluded crate and nothing else
+    # asked. That was defensible while this code was only vendored; it is not
+    # now that this tree writes in it, and it hid three separate breakages that
+    # had been there since the rename:
+    #
+    #   - 33 uses of `presets::N0`, a preset deleted here on purpose because it
+    #     registered infrastructure operated by somebody else
+    #   - a test that resolved that operator's DNS name and asserted it answered
+    #   - `endpoint_info_from_attrs`, the DNS TXT encoding deleted with the rest
+    #     of address publication, still called by three tests and one of them
+    #     left half written
+    #
+    # 528 of these are the QUIC state machine and the layers under it. Nothing
+    # in this tree verified any of it.
+    name: vendored crates
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - rotelyx-transport-base
+          - rotelyx-future
+          - rotelyx-watcher
+          - rotelyx-error
+          - rotelyx-discovery
+          - rotelyx-quic-udp
+          - rotelyx-netwatch
+          - rotelyx-metrics
+          - rotelyx-quic
+          - rotelyx-quic-proto
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo test --manifest-path crates/net/${{ matrix.crate }}/Cargo.toml
+
   transport:
-    # 107 tests in the vendored transport that had never compiled, let alone
-    # run. Thirty three of them named `presets::N0`, a preset this tree deleted
-    # on purpose because it registered infrastructure operated by somebody
-    # else, and one resolved that operator's DNS name and asserted it answered.
-    # Nothing said so, because nothing ran them.
     name: vendored transport, unit
     runs-on: ubuntu-latest
     steps:

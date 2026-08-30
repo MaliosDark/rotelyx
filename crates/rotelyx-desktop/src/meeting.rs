@@ -1718,7 +1718,7 @@ mod tests {
     ///     -p rotelyx-desktop --bin rotelyx-desktop is_anything_waiting \
     ///     -- --ignored --nocapture
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore]
+    #[ignore = "needs a live mailbox: set ROTELYX_MAILBOX and ROTELYX_TAG"]
     async fn is_anything_waiting() {
         let mailbox = std::env::var("ROTELYX_MAILBOX").expect("set ROTELYX_MAILBOX");
         let tag = std::env::var("ROTELYX_TAG").expect("set ROTELYX_TAG");
@@ -1751,7 +1751,7 @@ mod tests {
     ///     -p rotelyx-desktop --bin rotelyx-desktop two_desktops_calling \
     ///     -- --ignored --nocapture
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore]
+    #[ignore = "needs a live mailbox and relay: set ROTELYX_MAILBOX and ROTELYX_RELAY"]
     async fn two_desktops_calling() {
         let mailbox = std::env::var("ROTELYX_MAILBOX").expect("set ROTELYX_MAILBOX");
         let relay = std::env::var("ROTELYX_RELAY").expect("set ROTELYX_RELAY");
@@ -1888,7 +1888,7 @@ mod tests {
     /// somebody to send one to, so a silent pairing and a working one look
     /// different from the terminal.
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore]
+    #[ignore = "needs a live mailbox and a phone: set ROTELYX_MAILBOX"]
     async fn meet_a_real_phone() {
         let mailbox = std::env::var("ROTELYX_MAILBOX").expect("set ROTELYX_MAILBOX");
 

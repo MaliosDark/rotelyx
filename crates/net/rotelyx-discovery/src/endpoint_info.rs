@@ -419,74 +419,13 @@ impl EndpointInfo {
 
 
 
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use hickory_resolver::{
-        lookup::Lookup,
-        proto::{
-            op::Query,
-            rr::{
-                Name, RData, Record, RecordType,
-                rdata::{A, TXT},
-            },
-        },
-    };
-    use rotelyx_transport_base::{EndpointId, TransportAddr};
-    use rotelyx_error::{Result, StdResultExt};
-
-    use super::{EndpointData, EndpointInfo};
-    use crate::dns::TxtRecordData;
-
-    #[test]
-    fn txt_attr_roundtrip() {
-        let endpoint_data = EndpointData::from_iter([
-            TransportAddr::Relay("https://example.com".parse().unwrap()),
-            TransportAddr::Ip("127.0.0.1:1234".parse().unwrap()),
-        ])
-        .with_user_data("foobar".parse().unwrap());
-        let endpoint_id = "vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia"
-            .parse()
-            .unwrap();
-        let expected = EndpointInfo::from_parts(endpoint_id, endpoint_data);
-        let attrs = expected.to_attrs();
-        let actual = super::endpoint_info_from_attrs(&attrs);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn signed_packet_roundtrip() {
-        let secret_key =
-            SecretKey::from_str("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia").unwrap();
-        let endpoint_data = EndpointData::from_iter([
-            TransportAddr::Relay("https://example.com".parse().unwrap()),
-            TransportAddr::Ip("127.0.0.1:1234".parse().unwrap()),
-        ])
-        .with_user_data("foobar".parse().unwrap());
-        let expected = EndpointInfo::from_parts(secret_key.public(), endpoint_data);
-        assert_eq!(expected, actual);
-    }
-
-    #[test]
-    fn txt_attr_roundtrip_with_custom_addr() {
-        use rotelyx_transport_base::CustomAddr;
-
-        let bt_addr = CustomAddr::from_parts(1, &[0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6]);
-        let tor_addr = CustomAddr::from_parts(42, &[0xab; 32]);
-
-        let endpoint_data = EndpointData::from_iter([
-            TransportAddr::Relay("https://example.com".parse().unwrap()),
-            TransportAddr::Ip("127.0.0.1:1234".parse().unwrap()),
-            TransportAddr::Custom(bt_addr),
-            TransportAddr::Custom(tor_addr),
-        ]);
-        let endpoint_id = "vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia"
-            .parse()
-            .unwrap();
-        let expected = EndpointInfo::from_parts(endpoint_id, endpoint_data);
-        let attrs = expected.to_attrs();
-        let actual = super::endpoint_info_from_attrs(&attrs);
-        assert_eq!(expected, actual);
-    }
-}
+// Rotelyx: upstream's tests for this module are deleted, not repaired.
+//
+// All three round-tripped the DNS TXT encoding through `to_attrs` and
+// `endpoint_info_from_attrs`, and both of those went with the encoding itself,
+// for the reason at the top of this file: they published `identity X is at
+// address Y` where strangers could look it up. One of them had been left half
+// written, asserting against an `actual` that no longer existed.
+//
+// They are why this crate's tests would not compile, and why none of them ran.
+// What remains here is the address types, which the transport tests exercise.

@@ -35,7 +35,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [frame_reader, envelope_parser, mls_message]
+        # `media_frame` was added with the media layer and never added here,
+        # so the one target that reads packets from anybody who can reach the
+        # port, before any key is used, was the one nothing fuzzed.
+        target: [frame_reader, envelope_parser, mls_message, media_frame]
 
     steps:
       - uses: actions/checkout@v4

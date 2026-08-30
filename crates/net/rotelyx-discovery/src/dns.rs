@@ -922,7 +922,11 @@ pub(crate) mod tests {
             let r_pos = DONE_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             async move {
                 tracing::info!(r_pos, "call");
-                CALL_RESULTS[r_pos].map_err(|_| e!(DnsError::InvalidResponse))
+                // Any error will do: what this tests is that a staggered call
+                // takes the first answer and not the first attempt. Upstream
+                // named `InvalidResponse`, which went with the DNS record
+                // parsing that produced it.
+                CALL_RESULTS[r_pos].map_err(|_| e!(DnsError::NoResponse))
             }
         };
 

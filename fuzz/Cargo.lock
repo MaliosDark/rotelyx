@@ -3152,6 +3152,7 @@ dependencies = [
  "futures-lite",
  "getrandom 0.4.3",
  "postcard",
+ "rotelyx-crypto",
  "rotelyx-net",
  "rotelyx-transport-base",
  "serde",
@@ -3313,6 +3314,7 @@ name = "rotelyx-net"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "rotelyx-path",
  "rotelyx-transport",
  "thiserror 2.0.20",

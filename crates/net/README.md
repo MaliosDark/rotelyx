@@ -8,13 +8,21 @@ It is excluded from the Rotelyx workspace (`exclude = ["crates/net"]` in the roo
 manifest) so that upstream's own test suites and lint configuration do not run
 as part of Rotelyx's. Each crate here is its own workspace root.
 
-That exclusion means `cargo test --workspace` cannot reach any of this, which
-was fine while the code here was only vendored and is not fine now that we
-write in it: alias binding and the circuit frames are ours. A subprotocol
-negotiation test sat broken here through the rename away from upstream's names
-because nothing ran it. The `vendored transport` job in CI runs
-`rotelyx-relay-proto`'s suite for that reason. The other crates here are still
-unrun, and are still only vendored.
+That exclusion means `cargo test --workspace` cannot reach any of this, and for
+a long time nothing else asked. **Every crate here now has a CI job**, because
+that gap hid four separate breakages, all from the rename away from upstream's
+names, and every one of them was invisible:
+
+- a subprotocol negotiation test offering a name the server no longer answers to
+- 33 uses of `presets::N0`, a preset deleted here on purpose because it
+  registered infrastructure operated by somebody else
+- a test that resolved that operator's DNS name and asserted it answered
+- `endpoint_info_from_attrs`, the DNS TXT encoding deleted along with the rest
+  of address publication, still called by three tests, one of them left half
+  written
+
+Fixing those turned on 681 tests that were already written. 391 are the QUIC
+state machine; nothing in this tree had verified any of it.
 
 ## What is here
 

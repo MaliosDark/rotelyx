@@ -16,6 +16,13 @@ nothing this repository produced. If ctypes can hold a whole conversation and a
 whole call through the ABI, Kotlin through JNA and Swift through its C interop
 can too, because both are strictly better at this than ctypes is.
 
+# Why this is not a CI job
+
+It opens a call, and opening a call needs an audio device. A CI runner has none,
+so this returns -5 there for the same reason it does on a machine with no
+microphone: the check is right and the environment cannot answer it. Run it on a
+machine with sound, after `scripts/build-mobile`.
+
 # What it does not settle
 
 Whether the API is *pleasant* in Kotlin. A binding generator buys named types
