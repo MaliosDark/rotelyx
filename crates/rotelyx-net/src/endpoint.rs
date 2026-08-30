@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use rotelyx_transport::endpoint::{presets, Connection, RecvStream, SendStream};
-use rotelyx_transport::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, SecretKey};
+use rotelyx_transport::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
 
 use crate::config::{NetConfig, RelayPolicy};
 use crate::path::MetadataResistantSelector;
@@ -82,6 +82,36 @@ impl NetEndpoint {
     #[must_use]
     pub fn also_answer_as(&self, key: &SecretKey) -> bool {
         self.inner.also_answer_as(key)
+    }
+
+    /// Carry traffic to `peer` through a circuit on the relay at `url`.
+    ///
+    /// One relay learns who is talking to whom, which is ADV-3 in the threat
+    /// model and inherent to relayed transport. A circuit through two splits
+    /// that: the first learns the caller and that a circuit was opened through
+    /// the second; the second learns the destination and that traffic arrives
+    /// from the first.
+    ///
+    /// # Why this takes bytes and does not seal them
+    ///
+    /// Sealing a descriptor is the message layer's hybrid construction, and
+    /// this crate is L0/L1. It carries what it is given and reads none of it,
+    /// which is the same rule the relay itself follows. `rotelyx-core` builds
+    /// them from an invitation's `ExitRelay`.
+    ///
+    /// Returns whether the request was taken, not whether the circuit opened.
+    /// **A relay that refuses one leaves traffic addressed to the peer**, so a
+    /// caller whose whole reason for asking was the property has to check
+    /// rather than assume.
+    #[must_use]
+    pub fn route_through_circuit(
+        &self,
+        url: RelayUrl,
+        peer: EndpointId,
+        sealed: bytes::Bytes,
+        inner: bytes::Bytes,
+    ) -> bool {
+        self.inner.route_through_circuit(url, peer, sealed, inner)
     }
 
     /// Which of this endpoint's addresses answered `session`.

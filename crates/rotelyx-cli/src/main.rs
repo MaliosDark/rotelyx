@@ -113,6 +113,46 @@ enum Command {
         #[arg(long, value_name = "URL")]
         relay: Option<String>,
     },
+
+    /// Dial a peer and report whether a direct path is ever established.
+    ///
+    /// # What this is for
+    ///
+    /// The reason a relay exists is that two NATs sometimes cannot be punched
+    /// through, and **that has never been measured here**. Every test so far
+    /// runs on loopback, which needs no hole punching at all, so the failure
+    /// rate this whole design is built around is a number nobody has.
+    ///
+    /// This is the instrument, not the measurement. The measurement needs two
+    /// machines on **different** networks: run `listen` on one, this on the
+    /// other, and collect the last line from many runs. One run says nothing.
+    ///
+    /// The last line is one record, so a shell loop can append them to a file:
+    ///
+    /// ```text
+    /// direct=yes after=1.42s relayed_first=yes peer=a1b2c3d4e5f6a7b8
+    /// direct=no  after=-     relayed_first=yes peer=a1b2c3d4e5f6a7b8
+    /// ```
+    Probe {
+        /// The address printed by the listening side.
+        #[arg(allow_hyphen_values = true)]
+        addr: String,
+
+        /// The invitation code the peer issued.
+        #[arg(long, allow_hyphen_values = true)]
+        invite: Option<String>,
+
+        /// Relays to use while hole punching is attempted.
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
+
+        /// How long to wait for a direct path before calling it relayed.
+        ///
+        /// Thirty seconds because hole punching is not instant and a probe that
+        /// gave up in two would report failures that were not failures.
+        #[arg(long, value_name = "SECONDS", default_value_t = 30)]
+        wait: u64,
+    },
 }
 
 /// A member's identity, short enough to read aloud and long enough to mean
@@ -688,6 +728,103 @@ async fn main() -> Result<()> {
             endpoint.close().await;
         }
 
+        Command::Probe {
+            addr,
+            invite,
+            relay,
+            wait,
+        } => {
+            let epoch = now_epoch()?;
+            let transport = RotelyxEndpoint::ephemeral_transport_key();
+            let calling_as: RotelyxId = transport.public().into();
+            let config = probing_config(relay.as_deref())?;
+
+            let (evidence, to) = match invite.as_deref().or(Some(addr.as_str())) {
+                Some(text) => {
+                    let bytes = data_encoding::BASE64URL_NOPAD
+                        .decode(text.trim().as_bytes())
+                        .unwrap_or_default();
+                    match Invitation::read_code(&bytes) {
+                        Ok((secret, host)) => {
+                            let invitation =
+                                Invitation::from_parts(secret, [0u8; 32], u64::MAX);
+                            let mut to = EndpointAddr::from(host.endpoint_id());
+                            for url in config.relays().urls() {
+                                to.addrs
+                                    .insert(rotelyx_net::TransportAddr::Relay(url.clone()));
+                            }
+                            if to.addrs.is_empty() {
+                                bail!(
+                                    "an invitation address is reachable only through a relay.                                      Pass --relay <url>, the same one the other side is on"
+                                );
+                            }
+                            (
+                                Admission::Invitation {
+                                    proof: invitation.prove(&calling_as, epoch),
+                                    epoch,
+                                },
+                                to,
+                            )
+                        }
+                        Err(_) => (Admission::None, decode_addr(&addr)?),
+                    }
+                }
+                None => (Admission::None, decode_addr(&addr)?),
+            };
+
+            let peer = RotelyxId::from(to.id);
+            let endpoint = RotelyxEndpoint::bind_as(&identity, transport, config).await?;
+            let started = std::time::Instant::now();
+            let _session = endpoint
+                .connect_with(to, &evidence)
+                .await
+                .context("connecting")?;
+
+            // Whether the session began relayed, which is the interesting case:
+            // a direct path that was there from the start needed no punching.
+            let relayed_first = endpoint
+                .is_direct(peer)
+                .await
+                .map(|direct| !direct)
+                .unwrap_or(true);
+
+            println!("  connected in {:.2}s, waiting up to {wait}s for a direct path", 
+                started.elapsed().as_secs_f32());
+
+            // Polled rather than notified: `is_direct` is what the interface
+            // shows a user, so measuring the same thing they would see keeps
+            // the number honest.
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_secs(wait);
+            let mut became_direct = None;
+            while std::time::Instant::now() < deadline {
+                if endpoint.is_direct(peer).await == Some(true) {
+                    became_direct = Some(started.elapsed());
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+
+            match became_direct {
+                Some(at) => println!("  a direct path came up after {:.2}s", at.as_secs_f32()),
+                None => println!("  no direct path in {wait}s: this session stays relayed"),
+            }
+
+            // One line, one record. A shell loop appends these and the file is
+            // the measurement; a single run is an anecdote.
+            println!(
+                "direct={} after={} relayed_first={} peer={}",
+                if became_direct.is_some() { "yes" } else { "no" },
+                became_direct
+                    .map(|d| format!("{:.2}s", d.as_secs_f32()))
+                    .unwrap_or_else(|| "-".into()),
+                if relayed_first { "yes" } else { "no" },
+                peer,
+            );
+
+            endpoint.close().await;
+        }
+
         Command::Connect { addr, invite, relay } => {
             let epoch = now_epoch()?;
 
@@ -834,6 +971,27 @@ fn net_config(relay: Option<&str>) -> Result<NetConfig> {
     Ok(NetConfig::new(
         RelayPolicy::SelfHosted(vec![url]),
         PathPolicy::RelayOnly,
+    ))
+}
+
+/// A relay to fall back on, and a direct path preferred over it.
+///
+/// # Why the probe cannot use `net_config`
+///
+/// That one gives `RelayOnly` whenever a relay is named, which is right for a
+/// call and is the one policy that can never answer the question the probe
+/// asks. A session that refuses direct paths establishes no direct path, and
+/// measuring hole punching with it would measure nothing and report zero.
+fn probing_config(relay: Option<&str>) -> Result<NetConfig> {
+    let Some(url) = relay else {
+        return Ok(NetConfig::direct_only());
+    };
+    let url: RelayUrl = url
+        .parse()
+        .with_context(|| format!("{url} is not a relay URL"))?;
+    Ok(NetConfig::new(
+        RelayPolicy::SelfHosted(vec![url]),
+        PathPolicy::PreferDirect,
     ))
 }
 

@@ -395,6 +395,26 @@ impl Socket {
         self.alias_binder.bind(key)
     }
 
+    /// Asks the relay at `url` to carry traffic to `peer` through a circuit.
+    ///
+    /// The two descriptors arrive sealed: this crate is the transport and does
+    /// not do message-layer cryptography, so the caller seals and this carries.
+    /// See `docs/RELAY-CHAINING.md`.
+    ///
+    /// Returns whether the request was taken. It says nothing about whether the
+    /// circuit opened: the relay answers that later, and a relay that refuses
+    /// leaves traffic addressed. A caller that needs the guarantee has to watch
+    /// for that rather than trust this.
+    pub(crate) fn open_relay_circuit(
+        &self,
+        url: RelayUrl,
+        peer: EndpointId,
+        sealed: bytes::Bytes,
+        inner: bytes::Bytes,
+    ) -> bool {
+        self.alias_binder.open_circuit(url, peer, sealed, inner)
+    }
+
     /// Returns the relay endpoint we are connected to, that has the best latency.
     ///
     /// If `None`, then we are not connected to any relay endpoints.

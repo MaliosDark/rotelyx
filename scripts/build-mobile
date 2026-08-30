@@ -87,8 +87,9 @@ ios)
         echo "  $OUT/RotelyxMobile.xcframework"
     else
         echo
-        echo "  lipo and xcodebuild are macOS only, so the slices are built and"
-        echo "  the xcframework is not. Run this part on a Mac."
+        echo "  lipo and xcodebuild are macOS only, so the xcframework is not"
+        echo "  built. If the slices above built at all you are on a Mac, since"
+        echo "  ring's C code needs xcrun for the Apple SDK. See docs/MOBILE.md."
     fi
     ;;
 

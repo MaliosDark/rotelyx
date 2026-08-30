@@ -1209,6 +1209,29 @@ impl Endpoint {
         self.inner.bind_relay_alias(secret_key.clone())
     }
 
+    /// Carry traffic to `peer` through a circuit on the relay at `url`.
+    ///
+    /// After this, datagrams for `peer` that go through that relay carry a
+    /// circuit number and no endpoint id, so the relay forwards without knowing
+    /// who they are for. Traffic to every other peer is unchanged.
+    ///
+    /// The descriptors arrive sealed. Building them is the message layer's
+    /// work, and this crate is the transport: see `docs/RELAY-CHAINING.md` for
+    /// what goes in each of the two.
+    ///
+    /// Returns whether the request was taken, not whether the circuit opened.
+    /// A relay that refuses one leaves traffic addressed to the peer, so a
+    /// caller who needs the guarantee has to check rather than assume.
+    pub fn route_through_circuit(
+        &self,
+        url: RelayUrl,
+        peer: EndpointId,
+        sealed: bytes::Bytes,
+        inner: bytes::Bytes,
+    ) -> bool {
+        self.inner.open_relay_circuit(url, peer, sealed, inner)
+    }
+
     /// Which of this endpoint's addresses answered a caller that asked for
     /// `wanted`, where `wanted` is what the caller put in the TLS server name.
     ///

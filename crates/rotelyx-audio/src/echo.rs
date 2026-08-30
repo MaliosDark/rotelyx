@@ -36,6 +36,21 @@
 //! predict it. Suppressing the residue needs a different mechanism and is not
 //! here. This is honest about what it removes and leaves the rest audible
 //! rather than damaging speech to hide it.
+//!
+//! **Bulk delay.** The filter covers about a hundred milliseconds and assumes
+//! the echo starts inside that window. It does not search for where the echo
+//! begins, so something above it has to hand over a reference already aligned.
+//! `scripts/measure-echo` does that, and the first time it did it wrong the
+//! canceller made the echo 7 dB worse rather than 7 dB better, with nothing in
+//! this file at fault.
+//!
+//! # What it measures
+//!
+//! 38.3 dB against the synthetic path in the tests below, and **about 7 dB
+//! against a real room**, on short realigned windows. The gap is a real
+//! speaker, a real microphone and a path nobody chose. Whether the remainder is
+//! non-linearity, drift in the delay, or the filter being too short is not yet
+//! separated; `scripts/measure-echo` says which experiment comes next.
 
 use std::f32::consts::PI;
 

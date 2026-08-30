@@ -39,6 +39,11 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 blind-rsa-signatures = "0.17"
 
+# Signing the assertion a Google service account exchanges for an access token,
+# which is RS256 where Apple's is ES256. Already in this binary through the TLS
+# stack, so naming it here adds no code, only a name for what is there.
+ring = "0.17"
+
 # Waking an iPhone, and only that. See src/wake.rs.
 #
 # `p256` signs the ES256 token Apple asks for. Not `ed25519-dalek`, which is

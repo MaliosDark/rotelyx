@@ -18,6 +18,10 @@ rotelyx-path = { path = "../rotelyx-path" }
 rotelyx-transport = { path = "../net/rotelyx-transport", default-features = false, features = ["tls-ring", "unstable-custom-transports"] }
 
 anyhow.workspace = true
+
+# Circuit descriptors pass through this crate without being read, so they are
+# bytes here and nothing more. See `route_through_circuit`.
+bytes = "1"
 thiserror.workspace = true
 tracing.workspace = true
 

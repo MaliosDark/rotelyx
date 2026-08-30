@@ -27,7 +27,7 @@
 #[cfg(test)]
 use std::net::SocketAddr;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     future::Future,
     net::IpAddr,
     pin::{Pin, pin},
@@ -38,6 +38,7 @@ use std::{
 };
 
 use backon::{Backoff, BackoffBuilder, ExponentialBuilder};
+use bytes::Bytes;
 use rotelyx_transport_base::{EndpointId, RelayUrl, SecretKey};
 use rotelyx_relay_proto::{
     self as relay, PingTracker, RelayMap,
@@ -161,6 +162,23 @@ struct ActiveRelayActor {
     /// on reconnect, a dropped link would leave every address except the
     /// primary quietly unreachable, and nothing would report it.
     aliases: Vec<SecretKey>,
+    /// Peers whose traffic goes through a circuit, and the descriptors that
+    /// open one.
+    ///
+    /// Kept for the same reason the aliases are: a relay forgets a connection's
+    /// circuits when the connection goes, and a circuit that was asked for and
+    /// not re-opened would leave traffic going out addressed to the peer. That
+    /// is the one outcome somebody who asked for a circuit must not silently
+    /// get, so it is re-opened rather than remembered as having once existed.
+    circuits: Vec<PendingCircuit>,
+}
+
+/// A circuit somebody asked for, and the sealed layers that open it.
+#[derive(Debug, Clone)]
+struct PendingCircuit {
+    peer: EndpointId,
+    sealed: Bytes,
+    inner: Bytes,
 }
 
 #[derive(Debug)]
@@ -170,6 +188,27 @@ enum ActiveRelayMessage {
     /// The relay verifies possession before it agrees, so this carries the
     /// secret: the proof is built here, next to the connection it is bound to.
     BindAlias(SecretKey),
+    /// Carry traffic to `peer` through a circuit rather than addressed to them.
+    ///
+    /// # Why the descriptors arrive already sealed
+    ///
+    /// Sealing one is the message layer's hybrid construction, and this crate
+    /// is the vendored transport. A dependency from here onto that would invert
+    /// the layering the whole design rests on, so the caller seals and this
+    /// carries two opaque blobs. See `docs/RELAY-CHAINING.md`.
+    ///
+    /// Remembered rather than acted on immediately when there is no connection,
+    /// the same as an alias: a circuit that was asked for and silently dropped
+    /// leaves traffic going out addressed, which is the one outcome somebody
+    /// who asked for a circuit must not get.
+    OpenCircuit {
+        /// Who this circuit reaches. Traffic for them goes through it.
+        peer: EndpointId,
+        /// The descriptor this relay opens.
+        sealed: Bytes,
+        /// The descriptor it carries to the next relay and cannot read.
+        inner: Bytes,
+    },
     /// Triggers a connection check to the relay server.
     ///
     /// Sometimes it is known the local network interfaces have changed in which case it
@@ -293,6 +332,10 @@ impl ActiveRelayActor {
         ActiveRelayActor {
             primary,
             aliases,
+            // Nothing until somebody asks. A relay connection with no circuits
+            // behaves exactly as it did before circuits existed, which is the
+            // property that keeps this change off the path everybody uses.
+            circuits: Vec::new(),
             prio_inbox,
             inbox,
             relay_datagrams_recv,
@@ -403,6 +446,20 @@ impl ActiveRelayActor {
             .reset(Instant::now() + RELAY_INACTIVE_CLEANUP_TIME);
     }
 
+    /// Records a circuit to open, and forgets an older one for the same peer.
+    ///
+    /// One circuit per peer: a second would leave the first holding a name at
+    /// the exit relay that nothing sends on, and the tables below map a peer to
+    /// one id rather than to a set.
+    fn remember_circuit(&mut self, peer: EndpointId, sealed: Bytes, inner: Bytes) {
+        self.circuits.retain(|c| c.peer != peer);
+        self.circuits.push(PendingCircuit {
+            peer,
+            sealed,
+            inner,
+        });
+    }
+
     fn set_home_relay(&mut self, is_home: bool) {
         let prev = std::mem::replace(&mut self.is_home_relay, is_home);
         if self.is_home_relay != prev {
@@ -481,6 +538,13 @@ impl ActiveRelayActor {
                                 self.aliases.push(key);
                             }
                         }
+                        ActiveRelayMessage::OpenCircuit {
+                            peer,
+                            sealed,
+                            inner,
+                        } => {
+                            self.remember_circuit(peer, sealed, inner);
+                        }
                         #[cfg(test)]
                         ActiveRelayMessage::GetLocalAddr(sender) => {
                             sender.send(None).ok();
@@ -553,6 +617,8 @@ impl ActiveRelayActor {
             last_packet_src: None,
             pong_pending: None,
             established: false,
+            circuits: HashMap::new(),
+            by_circuit: HashMap::new(),
             #[cfg(test)]
             test_pong: None,
         };
@@ -567,6 +633,29 @@ impl ActiveRelayActor {
         for key in self.aliases.clone() {
             let fut = client_sink.send(ClientToRelayMsg::bind_alias(&key, &self.primary));
             self.run_sending(fut, &mut state, &mut client_stream).await?;
+        }
+
+        // And re-open every circuit, for the same reason and with the same
+        // consequence if it is skipped: a relay forgets its side when the
+        // connection goes, and traffic for a peer whose circuit was not rebuilt
+        // would go out addressed to them. Somebody who asked for a circuit
+        // getting an addressed datagram instead is the failure this whole
+        // design is against, so the request is answered here and the answer is
+        // recorded before anything is sent.
+        //
+        // The id is chosen here because the side that uses a name chooses it,
+        // which is what `OpenCircuit` says. Sequential from one: the only party
+        // that sees these is the relay this connection is talking to.
+        for (n, circuit) in self.circuits.clone().into_iter().enumerate() {
+            let id = n as u32 + 1;
+            let fut = client_sink.send(ClientToRelayMsg::OpenCircuit {
+                circuit: id,
+                sealed: circuit.sealed.clone(),
+                inner: circuit.inner.clone(),
+            });
+            self.run_sending(fut, &mut state, &mut client_stream).await?;
+            state.circuits.insert(circuit.peer, id);
+            state.by_circuit.insert(id, circuit.peer);
         }
 
         // A buffer to pass through multiple datagrams at once as an optimisation.
@@ -626,6 +715,38 @@ impl ActiveRelayActor {
                                     .set_status(&self.url, RelayConnectionState::Connected);
                             }
                         }
+                        ActiveRelayMessage::OpenCircuit {
+                            peer,
+                            sealed,
+                            inner,
+                        } => {
+                            // An id this connection is not already using. The
+                            // relay refuses a repeat rather than taking one
+                            // over, so a collision here would be a circuit
+                            // silently not opened.
+                            let id = (1u32..).find(|n| !state.by_circuit.contains_key(n));
+                            if let Some(id) = id {
+                                let fut = client_sink.send(ClientToRelayMsg::OpenCircuit {
+                                    circuit: id,
+                                    sealed: sealed.clone(),
+                                    inner: inner.clone(),
+                                });
+                                self.run_sending(fut, &mut state, &mut client_stream).await?;
+                                // Recorded before the relay has answered. A
+                                // datagram sent in between goes on the circuit
+                                // and the relay drops it if the circuit never
+                                // opened, which loses a datagram; recording it
+                                // afterwards would send that same datagram
+                                // addressed to the peer, which loses the
+                                // property somebody asked for. Losing a
+                                // datagram is the better failure.
+                                if let Some(old) = state.circuits.insert(peer, id) {
+                                    state.by_circuit.remove(&old);
+                                }
+                                state.by_circuit.insert(id, peer);
+                            }
+                            self.remember_circuit(peer, sealed, inner);
+                        }
                         ActiveRelayMessage::BindAlias(key) => {
                             let fut = client_sink.send(ClientToRelayMsg::bind_alias(
                                 &key,
@@ -672,11 +793,27 @@ impl ActiveRelayActor {
                     self.reset_inactive_timeout();
                     // TODO(frando): can we avoid the clone here?
                     let metrics = self.metrics.clone();
-                    let packet_iter = send_datagrams_buf.drain(..).map(|item| {
+                    // A peer with a circuit is reached by its number and not
+                    // by their name. That is the whole of what chaining buys on
+                    // this side: after setup, nothing on the wire says who this
+                    // is for.
+                    //
+                    // A peer with no circuit is sent exactly as before. That is
+                    // deliberate and is why this is a lookup rather than a
+                    // mode: a connection with no circuits produces byte for
+                    // byte what it did before circuits existed.
+                    let circuits = state.circuits.clone();
+                    let packet_iter = send_datagrams_buf.drain(..).map(move |item| {
                         metrics.send_relay.inc_by(item.datagrams.contents.len() as _);
-                        Ok(ClientToRelayMsg::Datagrams {
-                            dst_endpoint_id: item.remote_endpoint,
-                            datagrams: item.datagrams,
+                        Ok(match circuits.get(&item.remote_endpoint) {
+                            Some(circuit) => ClientToRelayMsg::CircuitDatagrams {
+                                circuit: *circuit,
+                                datagrams: item.datagrams,
+                            },
+                            None => ClientToRelayMsg::Datagrams {
+                                dst_endpoint_id: item.remote_endpoint,
+                                datagrams: item.datagrams,
+                            },
                         })
                     });
                     let mut packet_stream = rotelyx_future::stream::iter(packet_iter);
@@ -738,6 +875,46 @@ impl ActiveRelayActor {
                 }) {
                     warn!("Dropping received relay packet: {err:#}");
                 }
+            }
+            RelayToClientMsg::CircuitDatagrams { circuit, datagrams } => {
+                // A circuit datagram carries a number and no endpoint id, which
+                // is what it is for. The peer it came from is whoever this
+                // connection opened that circuit to, and if this table does not
+                // know the number then nothing does: dropped, because guessing
+                // a sender here would attribute somebody's traffic to a peer
+                // who did not send it.
+                let Some(peer) = state.by_circuit.get(&circuit).copied() else {
+                    warn!(circuit, "dropping a datagram for an unknown circuit");
+                    return;
+                };
+                trace!(len = datagrams.contents.len(), "received on a circuit");
+                if let Err(err) = self.relay_datagrams_recv.try_send(RelayRecvDatagram {
+                    url: self.url.clone(),
+                    src: peer,
+                    datagrams,
+                }) {
+                    warn!("Dropping received relay packet: {err:#}");
+                }
+            }
+            RelayToClientMsg::CircuitOpened { circuit } => {
+                trace!(circuit, "the relay opened a circuit");
+            }
+            RelayToClientMsg::CircuitClosed { circuit, reason } => {
+                // The circuit is gone at the relay, so the entry has to go here
+                // too. Left in place, every datagram for that peer would be
+                // sent on a number the relay no longer knows and would vanish.
+                // Removed, they go out addressed to the peer instead, which is
+                // worse for the property and better for the connection, and is
+                // a decision the layer above should be making rather than this
+                // one. That is the next piece of work.
+                if let Some(peer) = state.by_circuit.remove(&circuit) {
+                    state.circuits.remove(&peer);
+                    warn!(circuit, reason, "a circuit closed, traffic is addressed again");
+                }
+            }
+            RelayToClientMsg::RelayKey { .. } => {
+                // Nothing here asks for one. The key fetch belongs to whoever
+                // is building an invitation into a circuit, above this.
             }
             RelayToClientMsg::EndpointGone(endpoint_id) => {
                 state.endpoints_present.remove(&endpoint_id);
@@ -867,6 +1044,16 @@ struct ConnectedRelayState {
     ///
     /// This is set to `true` once a pong was received from the server.
     established: bool,
+    /// Peers reached through a circuit, and the id this connection knows it by.
+    ///
+    /// Only what this connection has open right now. It goes with the
+    /// connection, because the relay forgets its side at the same moment.
+    circuits: HashMap<EndpointId, u32>,
+    /// The same, the other way, for traffic arriving on a circuit.
+    ///
+    /// A circuit datagram carries a number and no endpoint id, which is the
+    /// whole point of it, so the only way back to a peer is this table.
+    by_circuit: HashMap<u32, EndpointId>,
     #[cfg(test)]
     test_pong: Option<([u8; 8], oneshot::Sender<()>)>,
 }
@@ -893,6 +1080,17 @@ pub(crate) enum RelayActorMessage {
     CheckConnectionAfterNetworkChange,
     /// Ask every relay to also route this key to this endpoint.
     BindAlias(SecretKey),
+    /// Carry traffic to `peer` through a circuit on the relay at `url`.
+    ///
+    /// Addressed to one relay, unlike an alias: a circuit descriptor is sealed
+    /// to a particular relay's key and means nothing to any other. An actor
+    /// that does not have that relay open ignores this.
+    OpenCircuit {
+        url: RelayUrl,
+        peer: EndpointId,
+        sealed: Bytes,
+        inner: Bytes,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1146,6 +1344,34 @@ impl RelayActor {
             }
             RelayActorMessage::CheckConnectionAfterNetworkChange => {
                 self.check_connection_after_network_change().await;
+            }
+            RelayActorMessage::OpenCircuit {
+                url,
+                peer,
+                sealed,
+                inner,
+            } => {
+                // Only the relay this is sealed to. Sending it to the others
+                // would ask them to open a descriptor they cannot read, and
+                // they would refuse it, which is a refusal per relay for a
+                // request that was never for them.
+                match self.active_relays.get(&url) {
+                    Some(handle) => {
+                        if let Err(err) =
+                            handle.inbox_addr.try_send(ActiveRelayMessage::OpenCircuit {
+                                peer,
+                                sealed,
+                                inner,
+                            })
+                        {
+                            warn!("could not ask {url} to open a circuit: {err:#}");
+                        }
+                    }
+                    // Not connected to that relay. Said rather than swallowed:
+                    // a caller who asked for a circuit and got silence would go
+                    // on sending addressed datagrams believing otherwise.
+                    None => warn!(%url, "no connection to that relay, so no circuit"),
+                }
             }
             RelayActorMessage::BindAlias(key) => {
                 self.bind_alias_everywhere(key).await;

@@ -25,6 +25,29 @@
 # The output volume, and it puts it back. A canceller measured at a volume
 # nobody uses is measured at the wrong operating point, and the interesting
 # failure is at a loud one.
+#
+# # What it has measured, on this machine, in this room
+#
+# 38.3 dB against the synthetic path. **About 7 dB against the room**, on short
+# windows each realigned. That gap is the honest cost of a real speaker, a real
+# microphone and a path nobody chose, and it is the number to argue with.
+#
+# Two things had to be fixed before that number meant anything:
+#
+# 1. The delay search was unbounded and found a false peak 3295 ms out with a
+#    correlation of 0.29, on a recording whose real offset is about 650 ms.
+#    Everything was then aligned to a delay that does not exist, and the
+#    canceller, handed a reference unrelated to what the microphone heard,
+#    **added** 7 dB of echo. Bounded to two seconds it finds 650 ms at 0.58, and
+#    the same canceller removes 7 dB instead of adding it. Nothing in the
+#    canceller changed.
+#
+# 2. One alignment for the whole recording gives about -3 dB while realigned
+#    windows give +7. **The delay drifts.** Whether that is the room or this
+#    harness is not yet known and matters: `paplay` and `parecord` are two
+#    streams with independent clocks, and production takes both sides from one
+#    audio path. Measuring that is the next thing, and it decides whether the
+#    canceller needs to track delay or whether only this script does.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

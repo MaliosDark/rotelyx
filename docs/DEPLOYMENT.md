@@ -597,8 +597,8 @@ substitute for loading the page and completing a handshake.
 |---|---|
 | Mailbox server | **Built and tested, not deployed.** `rotelyx-mailbox-server`, port 3341 |
 | Browser client | **Built and tested, not uploaded.** `site/`, 2.6 MB |
-| Mailbox persistence | Not implemented. A restart drops every uncollected envelope |
-| Push notifications | Not implemented |
+| Mailbox persistence | **Implemented, not switched on here.** `--mailbox-state <path>` with `ROTELYX_MAILBOX_PASSPHRASE`, sealed with the same vault as the wake registry. Without both, the mailbox is memory only and a restart drops every uncollected envelope |
+| Push notifications | **Implemented for both, configured for neither.** iOS: `--apns-key`, `--apns-key-id`, `--apns-team-id`. Android: `--fcm-service-account <path>`, the JSON the Firebase console hands out. Either, both or neither. **Neither has ever called Apple or Google**: what is tested is the token, the claims and the request this server builds, not their acceptance |
 | Multi region relays | One region. Add more when there are users to justify them |
 | Relay chaining | **Protocol built and tested between two running relays. No client opens a circuit yet**, so turning the flags on changes nothing a user sees. See `docs/RELAY-CHAINING-PLAN.md` |
 
@@ -612,11 +612,53 @@ exercised.
 
 Needed:
 
-- [ ] Relay running on a public address
+- [x] Relay running on a public address
+- [x] **An instrument.** `rotelyx-cli probe` dials a peer and reports whether a
+      direct path ever comes up
 - [ ] Two devices behind **different** NATs
-- [ ] Measure how often a direct path is established
+- [ ] Enough runs for the rate to mean something
 - [ ] Measure how often `PreferDirect` costs a connection that `Fastest` would
       have kept
 
-That last measurement is the honest cost of the path policy, and we currently
-have no number for it.
+### Running it
+
+One machine listens, the other probes. They must be on **different** networks:
+on one LAN there is no NAT to punch through and the answer is always yes, which
+is what it says here and is worth nothing.
+
+```sh
+# The listening side, on network A
+rotelyx-cli --identity a.key listen --open --relay https://relay.example
+
+# The probing side, on network B, once per run
+rotelyx-cli --identity b.key probe '<the address it printed>' \
+    --relay https://relay.example >> runs.txt
+```
+
+The probe uses `PreferDirect` and not `RelayOnly`, deliberately: `RelayOnly`
+refuses direct paths, so measuring hole punching with it would measure nothing
+and report zero. That is why it does not share `net_config` with the other
+commands.
+
+The last line of each run is one record:
+
+```text
+direct=yes after=1.42s relayed_first=yes peer=…
+direct=no  after=-     relayed_first=yes peer=…
+```
+
+`relayed_first=yes` is the interesting case: the session began on a relay and
+then punched through, or did not. A run that was direct from the start needed no
+punching and says nothing about whether punching works.
+
+**One run is an anecdote.** The rate is what matters, and it needs enough runs,
+from enough networks, that a symmetric NAT on one side shows up as a rate and
+not as a bad day.
+
+### What the probe does not answer
+
+The second question, what `PreferDirect` costs against `Fastest`, needs the
+latency of both paths at the moment the choice is made, and the probe does not
+collect it. Answering it means recording the relayed and direct round trip on
+the same connection and comparing. That is a second instrument, and the first
+one has to produce numbers before it is worth building.

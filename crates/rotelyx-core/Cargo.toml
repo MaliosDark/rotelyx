@@ -23,6 +23,10 @@ rotelyx-transport-base = { path = "../net/rotelyx-transport-base", features = ["
 rotelyx-net = { workspace = true, optional = true }
 
 blake3.workspace = true
+
+# Sealing a circuit descriptor, which is the same hybrid construction the
+# message layer uses. See `ExitRelay::seal_circuit`.
+rotelyx-crypto.workspace = true
 data-encoding.workspace = true
 zeroize.workspace = true
 subtle.workspace = true

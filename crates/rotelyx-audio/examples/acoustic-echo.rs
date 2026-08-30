@@ -115,6 +115,15 @@ fn main() {
     if correlation < 0.05 {
         println!("  and barely: below about 0.05 this is a room that is not coupling,");
         println!("  so what follows measures noise rather than an echo path.");
+    } else if correlation < 0.5 {
+        // Said out loud because the number below is meaningless without it. A
+        // direct acoustic path correlates strongly with what was played; a weak
+        // peak means the alignment is a guess, and a canceller aligned to a
+        // guess adapts to noise and makes the echo worse rather than better.
+        println!("  that correlation is weak. A direct path from a speaker to a");
+        println!("  microphone in the same room correlates far more strongly, so");
+        println!("  this alignment is probably wrong and the figures below are");
+        println!("  measuring a canceller that was handed the wrong reference.");
     }
 
     // Aligned, so the canceller spends its filter on the room rather than on a

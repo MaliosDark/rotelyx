@@ -426,6 +426,46 @@ than answered with frames it could not decode.
 
 ---
 
+## Phase 6: an ordinary session through a circuit
+
+Not in the original plan, which stopped at the protocol. Without this, every
+flag can be on and nothing a user sees changes.
+
+**Done.** The path from an application to the wire:
+
+```
+ExitRelay::seal_circuit          two layers, one per relay
+  -> NetEndpoint::route_through_circuit(url, peer, sealed, inner)
+    -> the relay actor opens it and records peer -> circuit
+      -> datagrams for that peer go out as CircuitDatagrams
+      -> datagrams arriving on it are delivered as if from that peer
+```
+
+- **A peer with no circuit is sent exactly as before.** The send path is a map
+  lookup, not a mode, so a connection holding no circuits produces byte for byte
+  what it produced before circuits existed. That is what keeps this off the path
+  everybody uses.
+- **Circuits are re-opened on reconnect**, like aliases and for the same reason:
+  a relay forgets its side when the connection goes, and a circuit that was not
+  rebuilt would leave traffic going out addressed to the peer. Somebody who
+  asked for a circuit silently getting an addressed datagram is the one outcome
+  this must not produce.
+- **The entry is recorded before the relay answers.** A datagram sent in the gap
+  goes on the circuit and is dropped if it never opened. Recording afterwards
+  would send that same datagram addressed instead. Losing a datagram is the
+  better failure.
+- **The descriptors arrive sealed.** The transport reads neither, which is the
+  same rule the relay follows, and `rotelyx-core` seals them because that is
+  where an invitation's `ExitRelay` lives.
+
+**What is still not decided:** what to do when a relay closes a circuit
+mid-session. It currently falls back to addressed traffic and logs a warning,
+which keeps the connection and drops the property. Somebody who chose
+`PathPolicy::Chained` asked for the opposite. That decision belongs above the
+transport, and the code says so where it happens.
+
+---
+
 ## What would make me stop
 
 - **If phase 3's link design does not survive review.** It is the part with no

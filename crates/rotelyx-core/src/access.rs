@@ -246,6 +246,65 @@ impl ExitRelay {
         blake3::derive_key(CIRCUIT_KEY_FINGERPRINT_CONTEXT, key)
     }
 
+    /// The two sealed layers that open a circuit to this relay.
+    ///
+    /// # What goes in each
+    ///
+    /// The outer one is sealed to the **first** relay, the caller's own, and
+    /// says only where to carry this and under what name to answer. The inner
+    /// one is sealed to the exit relay and says where the circuit ends. Neither
+    /// relay can read the other's, which is the whole arrangement.
+    ///
+    /// `return_key` is the name the destination sees as the sender, and it is
+    /// the caller's own per-call transport key. The destination replies to it
+    /// and the reply comes back along the circuit.
+    ///
+    /// `exit_key` must be checked with [`Self::accepts`] first. It was fetched
+    /// through the first relay and that relay could have substituted one of its
+    /// own; sealing to an unchecked key hands it every circuit.
+    pub fn seal_circuit(
+        &self,
+        first_relay: &RotelyxId,
+        first_relay_key: &rotelyx_crypto::hybrid::HybridPublicKey,
+        exit_key: &rotelyx_crypto::hybrid::HybridPublicKey,
+        destination: &RotelyxId,
+        return_key: &RotelyxId,
+        hour: u64,
+    ) -> Result<(Vec<u8>, Vec<u8>), AccessError> {
+        use rotelyx_crypto::circuit::{Hop, SealedHop};
+
+        let inner = SealedHop::seal(
+            exit_key,
+            self.relay.as_bytes(),
+            &Hop {
+                destination: *destination.as_bytes(),
+                return_key: *return_key.as_bytes(),
+                // Ends at a person, so there is nowhere further to carry it.
+                next_relay: None,
+                hour,
+            },
+        )
+        .map_err(|_| AccessError::Malformed)?;
+
+        let outer = SealedHop::seal(
+            first_relay_key,
+            first_relay.as_bytes(),
+            &Hop {
+                // The first relay's circuit ends at the second one.
+                destination: *self.relay.as_bytes(),
+                // What the exit relay sees as the sender on the link. Not the
+                // caller's own key: this hop's return name is between these two
+                // relays and says nothing about anybody.
+                return_key: *return_key.as_bytes(),
+                next_relay: Some(self.url.clone()),
+                hour,
+            },
+        )
+        .map_err(|_| AccessError::Malformed)?;
+
+        Ok((outer.to_bytes(), inner.to_bytes()))
+    }
+
     /// Whether this is the key the invitation named.
     ///
     /// # Why this is the whole safety of fetching a key
@@ -667,6 +726,88 @@ mod tests {
             *blake3::hash(&key).as_bytes(),
             "the fingerprint is a plain hash of the key"
         );
+    }
+
+    /// Each relay opens its own layer and neither opens the other's.
+    ///
+    /// This is the property the whole chain rests on, so it is asserted rather
+    /// than described: the first relay learns where to carry this and not where
+    /// it ends, and the exit relay learns where it ends and nothing about the
+    /// caller beyond a key made for one call.
+    #[test]
+    fn each_relay_opens_its_own_layer_and_not_the_other() {
+        use rotelyx_crypto::circuit::SealedHop;
+        use rotelyx_crypto::hybrid::HybridKem;
+
+        let (first_secret, first_public) = HybridKem::generate();
+        let (exit_secret, exit_public) = HybridKem::generate();
+
+        let first_relay = address_of(&[1u8; 32]);
+        let exit = ExitRelay {
+            relay: address_of(&[2u8; 32]),
+            key_hash: ExitRelay::fingerprint(&exit_public.to_bytes()),
+            url: "https://exit.example.invalid".to_owned(),
+        };
+        let destination = address_of(&[3u8; 32]);
+        let return_key = address_of(&[4u8; 32]);
+        let hour = 400_000;
+
+        let (outer, inner) = exit
+            .seal_circuit(
+                &first_relay,
+                &first_public,
+                &exit_public,
+                &destination,
+                &return_key,
+                hour,
+            )
+            .expect("sealing");
+
+        // The first relay reads where to carry it, and where that relay is.
+        let hop = SealedHop::from_bytes(&outer)
+            .expect("the outer layer is a descriptor")
+            .open(&first_secret, first_relay.as_bytes(), hour)
+            .expect("the first relay opens its own layer");
+        assert_eq!(hop.destination, *exit.relay.as_bytes());
+        assert_eq!(hop.next_relay.as_deref(), Some(exit.url.as_str()));
+
+        // And cannot read the other one.
+        assert!(
+            SealedHop::from_bytes(&inner)
+                .expect("a descriptor")
+                .open(&first_secret, first_relay.as_bytes(), hour)
+                .is_err(),
+            "the first relay opened the layer meant for the exit relay"
+        );
+
+        // The exit relay reads where it ends, and what name to wear.
+        let hop = SealedHop::from_bytes(&inner)
+            .expect("the inner layer is a descriptor")
+            .open(&exit_secret, exit.relay.as_bytes(), hour)
+            .expect("the exit relay opens its own layer");
+        assert_eq!(hop.destination, *destination.as_bytes());
+        assert_eq!(hop.return_key, *return_key.as_bytes());
+        assert!(hop.next_relay.is_none(), "the circuit was told to go further");
+
+        // And cannot read the first relay's, so it never learns which relay
+        // carried this to it from the descriptor.
+        assert!(
+            SealedHop::from_bytes(&outer)
+                .expect("a descriptor")
+                .open(&exit_secret, exit.relay.as_bytes(), hour)
+                .is_err(),
+            "the exit relay opened the layer meant for the first relay"
+        );
+
+        // Neither address is readable in what travels.
+        for wire in [&outer, &inner] {
+            assert!(
+                !wire
+                    .windows(32)
+                    .any(|w| w == destination.as_bytes()),
+                "the destination is readable in a descriptor"
+            );
+        }
     }
 
     /// A code between the two forms is refused rather than half read.

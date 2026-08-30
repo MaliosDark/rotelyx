@@ -147,6 +147,15 @@ struct Args {
     #[arg(long)]
     mailbox_state: Option<PathBuf>,
 
+    /// The Firebase service account, a `.json` downloaded once from the
+    /// Firebase console.
+    ///
+    /// Without it, Android devices receive when the application is opened, the
+    /// same as iPhones without an APNs key. A deployment may configure either,
+    /// both, or neither.
+    #[arg(long, value_name = "PATH")]
+    fcm_service_account: Option<PathBuf>,
+
     /// The APNs authentication key, a `.p8` downloaded once from the Apple
     /// Developer account.
     ///
@@ -328,7 +337,7 @@ struct Server {
     /// `.p8` key, in which case `registerWake` is refused with a reason rather
     /// than accepted and silently never acted on. A device that believes it
     /// will be woken and is not is worse than one that knows it will not be.
-    apns: Option<Arc<wake::Apns>>,
+    pushers: Arc<wake::Pushers>,
 
     /// How often a registered device is woken.
     wake_every: Duration,
@@ -778,13 +787,13 @@ async fn handle_request(
         }
 
         Request::RegisterWake { token, kind, secret } => {
-            let Some(_) = server.apns.as_ref() else {
+            if !server.pushers.any() {
                 return Some(Reply::Error {
-                    message: "this server cannot wake anyone: it was started without an \
-                              APNs key"
+                    message: "this server cannot wake anyone: it was started with neither \
+                              an APNs key nor a Firebase service account"
                         .into(),
                 });
-            };
+            }
 
             if !wake::secret_is_long_enough(&secret) {
                 // Depends only on what the caller sent, so it is safe to say
@@ -1231,17 +1240,18 @@ fn router_full(
 /// order.
 struct Waking {
     registry: wake::Registry,
-    apns: Option<Arc<wake::Apns>>,
+    pushers: Arc<wake::Pushers>,
     every: Duration,
     state: Option<(PathBuf, Zeroizing<String>)>,
 }
 
 impl Default for Waking {
-    /// No Apple key, so nothing is woken and `registerWake` says so.
+    /// No push service configured, so nothing is woken and `registerWake` says
+    /// so.
     fn default() -> Self {
         Self {
             registry: wake::Registry::new(),
-            apns: None,
+            pushers: Arc::new(wake::Pushers::default()),
             every: Duration::from_secs(wake::WAKE_EVERY_DEFAULT),
             state: None,
         }
@@ -1269,7 +1279,7 @@ fn router_stateful(
         next_connection: AtomicU64::new(0),
         keepalive,
         wake_registry: Mutex::new(waking.registry),
-        apns: waking.apns,
+        pushers: waking.pushers,
         wake_every: waking.every,
         wake_state: waking.state,
         tokens,
@@ -1312,7 +1322,7 @@ fn router_stateful(
     // arrival would mean this server knows which device to wake for which tag,
     // and would mean Apple learns the timing of every conversation. A fixed
     // rhythm identical for every device carries neither. See `wake.rs`.
-    if let Some(apns) = server.apns.clone() {
+    if server.pushers.any() {
         let waker = Arc::clone(&server);
         let every = server.wake_every;
         tokio::spawn(async move {
@@ -1329,7 +1339,7 @@ fn router_stateful(
                     continue;
                 }
 
-                let dead = wake::sweep(&apns, &devices).await;
+                let dead = wake::sweep(&waker.pushers, &devices).await;
                 if dead.is_empty() {
                     continue;
                 }
@@ -1545,6 +1555,31 @@ async fn main() -> Result<()> {
         ),
     };
 
+    let fcm = match args.fcm_service_account.as_ref() {
+        Some(path) => {
+            let json = Zeroizing::new(
+                std::fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?,
+            );
+            // Parsed at startup rather than at the first push, for the reason
+            // the APNs key is: a service account that is missing a field
+            // produces a token Google refuses, and the first sign of that is a
+            // phone that quietly stops receiving.
+            let fcm = wake::Fcm::new(&json)?;
+            info!(
+                every_seconds = args.wake_every,
+                "waking Android devices on a schedule, through Google and nobody else"
+            );
+            Some(Arc::new(fcm))
+        }
+        None => {
+            info!("no Firebase service account: Android receives when the application is opened");
+            None
+        }
+    };
+
+    let pushers = Arc::new(wake::Pushers { apns, fcm });
+
     // The registry rides on the mailbox passphrase. A separate one would be a
     // second secret to hold for a file that lives beside the first.
     let wake_state = match (args.wake_state.as_ref(), mailbox_state.as_ref()) {
@@ -1555,7 +1590,7 @@ async fn main() -> Result<()> {
              and it is not written in the clear"
         ),
         (None, _) => {
-            if apns.is_some() {
+            if pushers.any() {
                 warn!(
                     "no --wake-state: after a restart no device is woken until it next \
                      connects, and a sleeping device cannot connect"
@@ -1578,7 +1613,7 @@ async fn main() -> Result<()> {
 
     let waking = Waking {
         registry,
-        apns,
+        pushers,
         every: Duration::from_secs(args.wake_every.max(60)),
         state: wake_state,
     };
@@ -1737,10 +1772,13 @@ mod tests {
                 registry: wake::Registry::new(),
                 // A key that is not Apple's. Enough to make the server say yes
                 // to a registration, which is what is under test.
-                apns: Some(Arc::new(
-                    wake::Apns::new(TEST_P8, "K".repeat(10), "T".repeat(10), "x".into(), true)
-                        .expect("a test key"),
-                )),
+                pushers: Arc::new(wake::Pushers {
+                    apns: Some(Arc::new(
+                        wake::Apns::new(TEST_P8, "K".repeat(10), "T".repeat(10), "x".into(), true)
+                            .expect("a test key"),
+                    )),
+                    fcm: None,
+                }),
                 every: Duration::from_secs(300),
                 state: None,
             },

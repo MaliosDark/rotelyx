@@ -244,8 +244,44 @@ scripts/build-mobile android      # arm64-v8a, armeabi-v7a, x86_64
 scripts/build-mobile ios          # device and simulator slices
 ```
 
-Android needs `cargo install cargo-ndk` and `ANDROID_NDK_HOME`. iOS needs a Mac
-for the `xcframework` step; the slices build anywhere.
+Android needs `cargo install cargo-ndk` and `ANDROID_NDK_HOME`.
+
+### iOS needs a Mac for all of it, not just the last step
+
+This said the slices build anywhere and the Mac was only needed for
+`xcframework`. That is wrong, and the first thing anybody tries proves it:
+
+```
+$ cargo check -p rotelyx-mobile --target aarch64-apple-ios
+error: failed to run custom build command for `ring v0.17.14`
+  Compiler family detection failed: failed to find tool "clang"
+  error occurred in cc-rs: failed to find tool "xcrun"
+```
+
+`ring` compiles C, and for an Apple target `cc-rs` asks `xcrun` for the SDK.
+`xcrun` is macOS only. Nothing gets as far as compiling our own code.
+
+**What has been checked from Linux**, so the Mac session is not a discovery
+exercise:
+
+- The three iOS targets install with `rustup` and are present.
+- The Android-only dependencies, `jni` and `ndk-context`, are behind
+  `[target.'cfg(target_os = "android")'.dependencies]` and will not be built for
+  iOS.
+- The one Android-only function, `Java_com_rotelyx_app_Native_initAndroidContext`,
+  is behind `#[cfg(target_os = "android")]`.
+- Nothing in the mobile, media, audio or wasm crates enumerates operating
+  systems in a way that omits iOS. `cpal` reaches CoreAudio on iOS the same way
+  it reaches oboe on Android.
+
+**What is unknown until it runs on a Mac:** whether the engine itself compiles
+for `aarch64-apple-ios`. It never has. Expect the first attempt to find things,
+and expect them to be in the dependency graph rather than in this crate, because
+this crate is the part that has been checked.
+
+On the Mac, `scripts/build-mobile ios` builds all three slices and the
+`xcframework` in one go. Xcode command line tools are enough; a full Xcode
+install is not needed for `lipo`, though `xcodebuild -create-xcframework` is.
 
 The script **refuses to finish** if a build path from the machine reaches the
 binary, for the reason in `THREAT-MODEL.md` section 7: an artifact users install
@@ -253,6 +289,48 @@ must not carry the build machine's username.
 
 Copy `target/mobile/jniLibs` into the app's
 `android/app/src/main/jniLibs`, and Flutter packages it.
+
+## Waking a phone that is not running
+
+A device that is asleep collects nothing, so the mailbox wakes it. What the
+application has to do is register its push token once, and the one field that
+matters is **which service**, because getting it wrong on Android means no
+notifications and no error.
+
+```json
+{"op": "registerWake", "token": "<the platform token>",
+ "kind": "apns" | "fcm", "secret": "<64 hex characters>"}
+```
+
+| Platform | `kind` | Why |
+|---|---|---|
+| iOS | `apns` | Apple directly |
+| Android | `fcm` | Firebase, the only path there is |
+
+**An iPhone must not send `fcm`.** Firebase on iOS relays to APNs, so it puts
+Google on a path Apple already serves and removes nothing. The server cannot
+enforce this: a Firebase token does not say which platform it came from, so this
+is the application's to get right.
+
+`secret` is what a later `revokeWake` presents to take the registration back. A
+token is an address, not a credential: without it, anybody who learned a token
+could silence that phone. Sixty four hex characters, or omit it and accept that
+the registration cannot be revoked.
+
+### What the server does with it, and what it refuses to do
+
+It wakes **every registered device on a fixed schedule**, not the one device a
+message is for. That is the privacy property and not a simplification: waking on
+arrival would mean this server knows which device belongs to which mailbox tag,
+and would tell Apple and Google the timing of every conversation. A rhythm that
+is identical for every device carries neither. See `wake.rs`.
+
+So the push carries nothing. The message is in the mailbox and the device goes
+to look; the server could not read it if it tried.
+
+A server started with neither an APNs key nor a Firebase service account refuses
+`registerWake` with a reason, rather than accepting a registration it will never
+act on.
 
 ## Voice
 

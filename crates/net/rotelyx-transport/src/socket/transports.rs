@@ -63,6 +63,37 @@ pub(crate) struct RelayAliasBinder {
 impl RelayAliasBinder {
     /// Asks every relay to route `key`'s address to this endpoint.
     ///
+    /// Asks one relay to carry traffic to `peer` through a circuit.
+    ///
+    /// Sent to every relay actor and addressed to one `url` inside, because
+    /// this holds senders and not a map: the actor that owns the relays routes
+    /// it, and one that does not have that relay ignores it.
+    ///
+    /// **Not sent to every relay the way an alias is.** An alias is a name this
+    /// endpoint answers to and every relay should know it; a circuit is sealed
+    /// to one relay's key and means nothing to any other.
+    pub(crate) fn open_circuit(
+        &self,
+        url: rotelyx_transport_base::RelayUrl,
+        peer: rotelyx_transport_base::EndpointId,
+        sealed: bytes::Bytes,
+        inner: bytes::Bytes,
+    ) -> bool {
+        let mut delivered = true;
+        for relay in &self.relays {
+            if let Err(err) = relay.try_send(RelayActorMessage::OpenCircuit {
+                url: url.clone(),
+                peer,
+                sealed: sealed.clone(),
+                inner: inner.clone(),
+            }) {
+                warn!("could not ask a relay to open a circuit: {err:#}");
+                delivered = false;
+            }
+        }
+        delivered
+    }
+
     /// Returns whether every relay took the request. A dropped one leaves the
     /// endpoint answering at an address nothing can reach, which looks exactly
     /// like a working setup until somebody tries to call, so it is reported
