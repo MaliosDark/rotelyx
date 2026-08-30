@@ -67,6 +67,19 @@ pub enum Error {
     TooSmall {},
 }
 
+/// Bytes in a sealed circuit descriptor.
+///
+/// Owned by `rotelyx_crypto::circuit::SEALED_HOP_LEN` and repeated here rather
+/// than imported: this is the vendored transport, and a dependency from it onto
+/// the message-layer crypto would invert the layering the whole design rests
+/// on. L0 must not know what L2 is.
+///
+/// Two constants that must agree is the shape of defect this project has spent
+/// a day removing, so they are not left to agree by hope:
+/// `rotelyx-relay/tests/circuit_frame.rs` fails the build if they drift, using
+/// a dev-dependency that never reaches the shipped relay.
+pub const SEALED_HOP_LEN: usize = 1328;
+
 /// The messages that a relay sends to clients or the clients receive from the relay.
 #[derive(Debug, Clone, PartialEq, Eq, strum::Display)]
 #[non_exhaustive]
@@ -78,6 +91,46 @@ pub enum RelayToClientMsg {
         /// The datagrams and related metadata.
         datagrams: Datagrams,
     },
+    /// A circuit asked for is open, under this id.
+    CircuitOpened {
+        /// Valid on this connection only.
+        circuit: u32,
+    },
+
+    /// A circuit is finished.
+    ///
+    /// The reason is carried rather than left to be inferred: a circuit that
+    /// stops without saying so is indistinguishable from a network gone quiet,
+    /// and a failure shaped like an ordinary condition is the shape of defect
+    /// this project has already spent a week finding once.
+    CircuitClosed {
+        /// The circuit that is over.
+        circuit: u32,
+        /// 0 expired, 1 the far end went, 2 refused, 3 the relay is going away.
+        reason: u8,
+    },
+
+    /// Another relay's circuit key, or nothing if it could not be had.
+    ///
+    /// Carries the address it is about, so a caller with two asks in flight
+    /// knows which is which without a second number to keep in step.
+    RelayKey {
+        /// The address this is about, at most 255 bytes.
+        url: Bytes,
+        /// The key, base64url as that relay publishes it. Empty means it could
+        /// not be fetched, which covers a relay that does not chain, one that
+        /// is unreachable, and one this relay will not dial.
+        key: Bytes,
+    },
+
+    /// Datagrams arriving along a circuit. Carries no endpoint id.
+    CircuitDatagrams {
+        /// The circuit they arrived on.
+        circuit: u32,
+        /// The datagrams and related metadata.
+        datagrams: Datagrams,
+    },
+
     /// Indicates that the client identified by the underlying public key had previously sent you a
     /// packet but has now disconnected from the relay.
     EndpointGone(EndpointId),
@@ -177,6 +230,83 @@ pub enum ClientToRelayMsg {
         /// The datagrams and related metadata to relay.
         datagrams: Datagrams,
     },
+    /// Ask this connection to also answer to `alias`.
+    ///
+    /// # What the signature covers, and why it is that
+    ///
+    /// The key this connection authenticated with, then the alias. Both, in
+    /// that order, under a domain separator.
+    ///
+    /// Covering the alias alone would let anybody who saw the frame replay it
+    /// on their own connection and be handed that key's traffic. Covering the
+    /// connection's key as well ties the request to one connection: replaying
+    /// it elsewhere is verified against a different first half and fails.
+    ///
+    /// No challenge is needed for the same reason. Binding an alias requires
+    /// the alias's private key **and** control of a connection authenticated as
+    /// that primary, and the second of those is not something a captured frame
+    /// confers.
+    /// Open a circuit through this relay.
+    ///
+    /// Two layers, because a chain is two hops and each relay may read only its
+    /// own. See `rotelyx_crypto::circuit`.
+    OpenCircuit {
+        /// The id this connection will use for the circuit, chosen by the
+        /// connection that will use it.
+        ///
+        /// # Why the requester picks it and not the relay
+        ///
+        /// An id is a handle on one connection and means nothing anywhere else,
+        /// so the party that will name it is the party that may as well choose
+        /// it. Letting the relay choose looks natural and costs a correlation
+        /// problem: `CircuitOpened` says which circuit opened but not which
+        /// request it answers, so two opens in flight on one connection could
+        /// not be told apart. The alternatives were serialising opens, which
+        /// puts a network round trip between every circuit a busy relay pair
+        /// builds, or adding a request id, which is a second number meaning
+        /// almost the same as the first. Choosing here removes the problem
+        /// instead of numbering it.
+        ///
+        /// A relay refuses an id this connection is already using.
+        circuit: u32,
+        /// A `SealedHop` for **this** relay, exactly `SEALED_HOP_LEN` bytes.
+        ///
+        /// Says where this hop ends and, when it ends at another relay, where
+        /// that relay is.
+        sealed: Bytes,
+        /// The descriptor for the next relay, which this one carries and cannot
+        /// read. Empty when the circuit ends here.
+        ///
+        /// Carried as its own field rather than riding as the circuit's first
+        /// datagram: that would make the first relay work out that its
+        /// destination is a relay and treat one payload unlike every other. A
+        /// field says it outright.
+        inner: Bytes,
+    },
+
+    /// Ask this relay to fetch another relay's circuit key.
+    ///
+    /// One byte of length, then the address. A relay that does not chain
+    /// answers with an empty key rather than refusing, because whether a relay
+    /// chains is not a secret and a refusal and a failure would look alike.
+    AskRelayKey {
+        /// The relay to ask about, at most 255 bytes.
+        url: Bytes,
+    },
+
+    /// Datagrams along a circuit that is already open.
+    ///
+    /// Carries no endpoint id. That is what chaining buys: after setup, a
+    /// relay holds a number and a direction, and the identities are in a table
+    /// that only the relay which built the circuit can read.
+    CircuitDatagrams {
+        /// Valid on this connection only. A circuit id is a handle, never a
+        /// capability: naming somebody else's does nothing.
+        circuit: u32,
+        /// The datagrams and related metadata.
+        datagrams: Datagrams,
+    },
+
     /// Ask this connection to also answer to `alias`.
     ///
     /// # What the signature covers, and why it is that
@@ -339,6 +469,16 @@ impl RelayToClientMsg {
                     FrameType::RelayToClientDatagram
                 }
             }
+            Self::RelayKey { .. } => FrameType::RelayAnswersRelayKey,
+            Self::CircuitOpened { .. } => FrameType::RelayOpenedCircuit,
+            Self::CircuitClosed { .. } => FrameType::RelayClosedCircuit,
+            Self::CircuitDatagrams { datagrams, .. } => {
+                if datagrams.segment_size.is_some() {
+                    FrameType::RelayToClientCircuitDatagramBatch
+                } else {
+                    FrameType::RelayToClientCircuitDatagram
+                }
+            }
             Self::EndpointGone { .. } => FrameType::EndpointGone,
             Self::Ping { .. } => FrameType::Ping,
             Self::Pong { .. } => FrameType::Pong,
@@ -369,6 +509,26 @@ impl RelayToClientMsg {
             }
             Self::EndpointGone(endpoint_id) => {
                 dst.put(endpoint_id.as_ref());
+            }
+            Self::RelayKey { url, key } => {
+                // One byte of length rather than a fixed field: an address is
+                // short and this frame is sent once per contact, so padding
+                // every one of them to the longest allowed costs more than the
+                // byte that says how long this one is.
+                dst.put_u8(url.len() as u8);
+                dst.put(&url[..]);
+                dst.put(&key[..]);
+            }
+            Self::CircuitOpened { circuit } => {
+                dst.put(&circuit.to_be_bytes()[..]);
+            }
+            Self::CircuitClosed { circuit, reason } => {
+                dst.put(&circuit.to_be_bytes()[..]);
+                dst.put_u8(*reason);
+            }
+            Self::CircuitDatagrams { circuit, datagrams } => {
+                dst.put(&circuit.to_be_bytes()[..]);
+                dst = datagrams.write_to(dst);
             }
             Self::Ping(data) => {
                 dst.put(&data[..]);
@@ -401,6 +561,10 @@ impl RelayToClientMsg {
                 + datagrams.encoded_len()
             }
             Self::EndpointGone(_) => 32,
+            Self::RelayKey { url, key } => 1 + url.len() + key.len(),
+            Self::CircuitOpened { .. } => 4,
+            Self::CircuitClosed { .. } => 4 + 1,
+            Self::CircuitDatagrams { datagrams, .. } => 4 + datagrams.encoded_len(),
             Self::Ping(_) | Self::Pong(_) => 8,
             Self::Status(status) => status.encoded_len(),
             Self::Restarting { .. } => {
@@ -448,6 +612,56 @@ impl RelayToClientMsg {
                 ensure!(content.len() == EndpointId::LENGTH, Error::InvalidFrame);
                 let endpoint_id = cache.key_from_slice(content.as_ref())?;
                 Self::EndpointGone(endpoint_id)
+            }
+            FrameType::RelayAnswersRelayKey => {
+                ensure!(
+                    protocol_version >= ProtocolVersion::V3,
+                    Error::FrameNotAllowedInVersion
+                );
+                ensure!(!content.is_empty(), Error::InvalidFrame);
+                let url_len = content[0] as usize;
+                ensure!(content.len() >= 1 + url_len, Error::InvalidFrame);
+                let mut rest = content.split_off(1);
+                let key = rest.split_off(url_len);
+                Self::RelayKey { url: rest, key }
+            }
+            FrameType::RelayOpenedCircuit => {
+                ensure!(
+                    protocol_version >= ProtocolVersion::V3,
+                    Error::FrameNotAllowedInVersion
+                );
+                // Exactly, not at least. A frame with room for more is a frame
+                // somebody built by hand, and this is the shape the alias frame
+                // already refuses for the same reason.
+                ensure!(content.len() == 4, Error::InvalidFrame);
+                Self::CircuitOpened {
+                    circuit: u32::from_be_bytes(content[..4].try_into().expect("checked")),
+                }
+            }
+            FrameType::RelayClosedCircuit => {
+                ensure!(
+                    protocol_version >= ProtocolVersion::V3,
+                    Error::FrameNotAllowedInVersion
+                );
+                ensure!(content.len() == 5, Error::InvalidFrame);
+                Self::CircuitClosed {
+                    circuit: u32::from_be_bytes(content[..4].try_into().expect("checked")),
+                    reason: content[4],
+                }
+            }
+            FrameType::RelayToClientCircuitDatagram
+            | FrameType::RelayToClientCircuitDatagramBatch => {
+                ensure!(
+                    protocol_version >= ProtocolVersion::V3,
+                    Error::FrameNotAllowedInVersion
+                );
+                ensure!(content.len() >= 4, Error::InvalidFrame);
+                let circuit = u32::from_be_bytes(content[..4].try_into().expect("checked"));
+                let datagrams = Datagrams::from_bytes(
+                    content.slice(4..),
+                    frame_type == FrameType::RelayToClientCircuitDatagramBatch,
+                )?;
+                Self::CircuitDatagrams { circuit, datagrams }
             }
             FrameType::Ping => {
                 ensure!(content.len() == 8, Error::InvalidFrame);
@@ -522,6 +736,15 @@ impl ClientToRelayMsg {
     pub(crate) fn typ(&self) -> FrameType {
         match self {
             Self::BindAlias { .. } => FrameType::ClientBindsAlias,
+            Self::AskRelayKey { .. } => FrameType::ClientAsksRelayKey,
+            Self::OpenCircuit { .. } => FrameType::ClientOpensCircuit,
+            Self::CircuitDatagrams { datagrams, .. } => {
+                if datagrams.segment_size.is_some() {
+                    FrameType::ClientToRelayCircuitDatagramBatch
+                } else {
+                    FrameType::ClientToRelayCircuitDatagram
+                }
+            }
             Self::Datagrams { datagrams, .. } => {
                 if datagrams.segment_size.is_some() {
                     FrameType::ClientToRelayDatagramBatch
@@ -561,6 +784,23 @@ impl ClientToRelayMsg {
                 dst.put(alias.as_ref());
                 dst.put(&signature[..]);
             }
+            Self::AskRelayKey { url } => {
+                dst.put_u8(url.len() as u8);
+                dst.put(&url[..]);
+            }
+            Self::OpenCircuit {
+                circuit,
+                sealed,
+                inner,
+            } => {
+                dst.put(&circuit.to_be_bytes()[..]);
+                dst.put(&sealed[..]);
+                dst.put(&inner[..]);
+            }
+            Self::CircuitDatagrams { circuit, datagrams } => {
+                dst.put(&circuit.to_be_bytes()[..]);
+                dst = datagrams.write_to(dst);
+            }
         }
         dst
     }
@@ -569,6 +809,9 @@ impl ClientToRelayMsg {
         let payload_len = match self {
             Self::Ping(_) | Self::Pong(_) => 8,
             Self::BindAlias { .. } => 32 + 64,
+            Self::AskRelayKey { url } => 1 + url.len(),
+            Self::OpenCircuit { sealed, inner, .. } => 4 + sealed.len() + inner.len(),
+            Self::CircuitDatagrams { datagrams, .. } => 4 + datagrams.encoded_len(),
             Self::Datagrams { datagrams, .. } => {
                 32 // endpoint id
                 + datagrams.encoded_len()
@@ -615,6 +858,45 @@ impl ClientToRelayMsg {
                 let mut data = [0u8; 8];
                 data.copy_from_slice(&content[..8]);
                 Self::Pong(data)
+            }
+            FrameType::ClientAsksRelayKey => {
+                ensure!(!content.is_empty(), Error::InvalidFrame);
+                let url_len = content[0] as usize;
+                // Exactly, not at least: a frame with room for more after the
+                // address is a frame somebody built by hand.
+                ensure!(content.len() == 1 + url_len, Error::InvalidFrame);
+                Self::AskRelayKey {
+                    url: content.split_off(1),
+                }
+            }
+            FrameType::ClientOpensCircuit => {
+                // One descriptor, or two. Both lengths are fixed by the
+                // construction: anything else was not produced by
+                // `SealedHop::seal`, and reading it would mean deciding what a
+                // malformed one means.
+                ensure!(
+                    content.len() == 4 + SEALED_HOP_LEN
+                        || content.len() == 4 + 2 * SEALED_HOP_LEN,
+                    Error::InvalidFrame
+                );
+                let circuit = u32::from_be_bytes(content[..4].try_into().expect("checked"));
+                let mut sealed = content.split_off(4);
+                let inner = sealed.split_off(SEALED_HOP_LEN);
+                Self::OpenCircuit {
+                    circuit,
+                    sealed,
+                    inner,
+                }
+            }
+            FrameType::ClientToRelayCircuitDatagram
+            | FrameType::ClientToRelayCircuitDatagramBatch => {
+                ensure!(content.len() >= 4, Error::InvalidFrame);
+                let circuit = u32::from_be_bytes(content[..4].try_into().expect("checked"));
+                let datagrams = Datagrams::from_bytes(
+                    content.slice(4..),
+                    frame_type == FrameType::ClientToRelayCircuitDatagramBatch,
+                )?;
+                Self::CircuitDatagrams { circuit, datagrams }
             }
             FrameType::ClientBindsAlias => {
                 // Exactly, not at least: a frame with room for more is a frame
@@ -903,6 +1185,293 @@ mod tests {
         ]);
 
         Ok(())
+    }
+
+    /// The circuit frames survive a trip through the wire and back.
+    ///
+    /// These are the only frames whose payload the relay never inspects, so a
+    /// codec that quietly loses a field would not show up as a decode error.
+    /// It would show up as a circuit that opens and carries nothing.
+    #[test]
+    fn the_circuit_frames_round_trip() {
+        let sealed = Bytes::from(vec![0xABu8; SEALED_HOP_LEN]);
+
+        let open = ClientToRelayMsg::OpenCircuit {
+            circuit: 77,
+            sealed: sealed.clone(),
+            inner: Bytes::new(),
+        };
+        let encoded = open.write_to(Vec::new());
+        assert_eq!(encoded.len(), open.encoded_len(), "OpenCircuit misreports its length");
+        let ClientToRelayMsg::OpenCircuit {
+            circuit: back_circuit,
+            sealed: back,
+            inner: back_inner,
+        } =
+            ClientToRelayMsg::from_bytes(Bytes::from(encoded), &KeyCache::test())
+                .expect("OpenCircuit should decode")
+        else {
+            panic!("decoded as the wrong frame");
+        };
+        assert_eq!(back_circuit, 77, "the requested circuit id did not survive");
+        assert_eq!(back, sealed, "the descriptor did not survive the trip");
+        assert!(back_inner.is_empty(), "an inner layer appeared from nowhere");
+
+        // And the two layer form, which is what a chain sends.
+        let chained = ClientToRelayMsg::OpenCircuit {
+            circuit: 5,
+            sealed: sealed.clone(),
+            inner: Bytes::from(vec![0xCDu8; SEALED_HOP_LEN]),
+        };
+        let encoded = chained.write_to(Vec::new());
+        assert_eq!(
+            encoded.len(),
+            chained.encoded_len(),
+            "a chained OpenCircuit misreports its length"
+        );
+        let ClientToRelayMsg::OpenCircuit {
+            circuit: _,
+            sealed,
+            inner,
+        } =
+            ClientToRelayMsg::from_bytes(Bytes::from(encoded), &KeyCache::test())
+                .expect("a chained OpenCircuit should decode")
+        else {
+            panic!("decoded as the wrong frame");
+        };
+        assert_eq!(sealed.len(), SEALED_HOP_LEN, "the outer layer changed size");
+        assert_eq!(
+            inner,
+            Bytes::from(vec![0xCDu8; SEALED_HOP_LEN]),
+            "the inner layer did not survive the trip"
+        );
+
+        // One and a half descriptors is not a request anybody built.
+        let mut ragged = FrameType::ClientOpensCircuit.write_to(BytesMut::new());
+        ragged.put_bytes(0xEE, 4 + SEALED_HOP_LEN + SEALED_HOP_LEN / 2);
+        assert!(
+            ClientToRelayMsg::from_bytes(ragged.freeze(), &KeyCache::test()).is_err(),
+            "a descriptor and a half was accepted"
+        );
+
+        let carry = ClientToRelayMsg::CircuitDatagrams {
+            circuit: 0xDEAD_BEEF,
+            datagrams: Datagrams {
+                ecn: Some(rotelyx_quic::EcnCodepoint::Ce),
+                segment_size: NonZeroU16::new(6),
+                contents: "Hello World!".into(),
+            },
+        };
+        let encoded = carry.write_to(Vec::new());
+        assert_eq!(encoded.len(), carry.encoded_len(), "CircuitDatagrams misreports its length");
+        let ClientToRelayMsg::CircuitDatagrams { circuit, datagrams } =
+            ClientToRelayMsg::from_bytes(Bytes::from(encoded), &KeyCache::test())
+                .expect("CircuitDatagrams should decode")
+        else {
+            panic!("decoded as the wrong frame");
+        };
+        assert_eq!(circuit, 0xDEAD_BEEF, "the circuit number was lost");
+        assert_eq!(datagrams.contents, "Hello World!", "the payload was lost");
+        assert_eq!(datagrams.segment_size, NonZeroU16::new(6), "the segment size was lost");
+
+        for msg in [
+            RelayToClientMsg::CircuitOpened { circuit: 7 },
+            RelayToClientMsg::CircuitClosed { circuit: 7, reason: 2 },
+            RelayToClientMsg::CircuitDatagrams {
+                circuit: 7,
+                datagrams: Datagrams {
+                    ecn: None,
+                    segment_size: None,
+                    contents: "back".into(),
+                },
+            },
+        ] {
+            let encoded = msg.write_to(Vec::new());
+            assert_eq!(encoded.len(), msg.encoded_len(), "{msg:?} misreports its length");
+            let back = RelayToClientMsg::from_bytes(
+                Bytes::from(encoded),
+                &KeyCache::test(),
+                ProtocolVersion::V3,
+            )
+            .expect("should decode");
+            assert_eq!(back.typ(), msg.typ(), "{msg:?} came back as a different frame");
+        }
+    }
+
+    /// The key frames survive a trip through the wire and back.
+    #[test]
+    fn the_relay_key_frames_round_trip() {
+        for url in ["", "h", "https://relay.example.invalid", &"h".repeat(255)] {
+            let ask = ClientToRelayMsg::AskRelayKey {
+                url: Bytes::from(url.to_owned()),
+            };
+            let encoded = ask.write_to(Vec::new());
+            assert_eq!(encoded.len(), ask.encoded_len(), "AskRelayKey misreports its length");
+            let ClientToRelayMsg::AskRelayKey { url: back } =
+                ClientToRelayMsg::from_bytes(Bytes::from(encoded), &KeyCache::test())
+                    .expect("AskRelayKey should decode")
+            else {
+                panic!("decoded as the wrong frame");
+            };
+            assert_eq!(back, Bytes::from(url.to_owned()), "the address was lost");
+
+            for key in ["", "AAAA"] {
+                let answer = RelayToClientMsg::RelayKey {
+                    url: Bytes::from(url.to_owned()),
+                    key: Bytes::from(key.to_owned()),
+                };
+                let encoded = answer.write_to(Vec::new());
+                assert_eq!(
+                    encoded.len(),
+                    answer.encoded_len(),
+                    "RelayKey misreports its length"
+                );
+                let back = RelayToClientMsg::from_bytes(
+                    Bytes::from(encoded),
+                    &KeyCache::test(),
+                    ProtocolVersion::V3,
+                )
+                .expect("RelayKey should decode");
+                assert_eq!(back, answer, "the answer did not survive the trip");
+            }
+        }
+    }
+
+    /// An address longer than the frame says is refused, not read past.
+    ///
+    /// The length byte comes from the network. A decoder that trusted it and
+    /// sliced would panic on a frame somebody built by hand.
+    #[test]
+    fn a_key_frame_that_lies_about_its_length_is_refused() {
+        for (len, extra) in [(200u8, 3usize), (255, 0), (1, 0), (5, 2)] {
+            let mut wire = FrameType::ClientAsksRelayKey.write_to(BytesMut::new());
+            wire.put_u8(len);
+            wire.put_bytes(b'h', extra);
+            assert!(
+                ClientToRelayMsg::from_bytes(wire.freeze(), &KeyCache::test()).is_err(),
+                "a frame claiming {len} bytes of address with {extra} was accepted"
+            );
+
+            let mut wire = FrameType::RelayAnswersRelayKey.write_to(BytesMut::new());
+            wire.put_u8(len);
+            wire.put_bytes(b'h', extra);
+            let decoded =
+                RelayToClientMsg::from_bytes(wire.freeze(), &KeyCache::test(), ProtocolVersion::V3);
+            assert!(
+                decoded.is_err(),
+                "an answer claiming {len} bytes of address with {extra} was accepted"
+            );
+        }
+    }
+
+    /// A client that agreed version two refuses every circuit frame.
+    ///
+    /// This is what the version is for. A relay must never send these to a
+    /// connection that did not agree to speak them, and the check is here so
+    /// that a relay which does is caught by a decode failure rather than by a
+    /// client that quietly stops working.
+    #[test]
+    fn a_connection_that_agreed_version_two_refuses_the_circuit_frames() {
+        let frames = [
+            RelayToClientMsg::CircuitOpened { circuit: 1 },
+            RelayToClientMsg::CircuitClosed {
+                circuit: 1,
+                reason: 2,
+            },
+            RelayToClientMsg::CircuitDatagrams {
+                circuit: 1,
+                datagrams: Datagrams::from(&b"x"[..]),
+            },
+            RelayToClientMsg::RelayKey {
+                url: Bytes::from_static(b"h"),
+                key: Bytes::from_static(b"k"),
+            },
+        ];
+
+        for frame in frames {
+            let encoded = Bytes::from(frame.write_to(Vec::new()));
+
+            let old = RelayToClientMsg::from_bytes(
+                encoded.clone(),
+                &KeyCache::test(),
+                ProtocolVersion::V2,
+            );
+            assert!(
+                matches!(old, Err(Error::FrameNotAllowedInVersion { .. })),
+                "{frame:?} was accepted by a connection that agreed version two: {old:?}"
+            );
+
+            // And version three takes it, so what is being tested is the
+            // version and not a frame that never decoded.
+            assert!(
+                RelayToClientMsg::from_bytes(encoded, &KeyCache::test(), ProtocolVersion::V3)
+                    .is_ok(),
+                "{frame:?} did not decode at version three either"
+            );
+        }
+    }
+
+    /// Version three is offered, and it is the newest.
+    #[test]
+    fn version_three_is_what_a_handshake_prefers() {
+        assert_eq!(
+            ProtocolVersion::ALL.first(),
+            Some(&ProtocolVersion::V3),
+            "the newest version is not offered first"
+        );
+        assert_eq!(
+            ProtocolVersion::default(),
+            ProtocolVersion::V3,
+            "the default is not the newest version"
+        );
+        assert!(
+            ProtocolVersion::V3 > ProtocolVersion::V2,
+            "the ordering the version checks rely on is wrong"
+        );
+    }
+
+    /// A relay that predates circuits refuses the frames by name.
+    ///
+    /// This is the property the whole staged rollout rests on. An unknown frame
+    /// type must be an error, not something read as the nearest known frame: a
+    /// `CircuitDatagrams` misread as `Datagrams` would send the payload to
+    /// whatever endpoint id its first 32 bytes happened to spell.
+    #[test]
+    fn an_older_relay_refuses_the_circuit_frames_rather_than_misreading_them() {
+        // This relay does know them, so they decode. The point of saying so
+        // here is that the refusal below is about the frame type and not about
+        // a frame that was malformed anyway.
+        for (typ, body) in [
+            (FrameType::ClientOpensCircuit, vec![0u8; 4 + SEALED_HOP_LEN]),
+            (FrameType::ClientToRelayCircuitDatagram, vec![0u8; 4 + 8]),
+        ] {
+            let mut wire = typ.write_to(BytesMut::new());
+            wire.extend_from_slice(&body);
+
+            let decoded = ClientToRelayMsg::from_bytes(wire.freeze(), &KeyCache::test());
+            assert!(
+                decoded.is_ok(),
+                "this relay knows {typ:?}, so it must decode it: {decoded:?}"
+            );
+        }
+
+        // And the number that stands for "not a frame I know" is still refused,
+        // which is what an older relay does with the numbers above.
+        let mut unknown = BytesMut::new();
+        unknown.put_u8(200);
+        unknown.extend_from_slice(&[0u8; 64]);
+        // Refused while reading the type, before any of it is interpreted:
+        // `FrameTypeError`, not a decode of the nearest known frame. That is
+        // what a relay built before circuits does with frames 15 through 21.
+        let refused = ClientToRelayMsg::from_bytes(unknown.freeze(), &KeyCache::test());
+        assert!(
+            matches!(
+                refused,
+                Err(Error::FrameTypeError { .. }) | Err(Error::InvalidFrameType { .. })
+            ),
+            "a frame type this relay does not know must be refused by name, not \
+             read as the nearest frame it does know: {refused:?}"
+        );
     }
 
     /// A datagram frame must contain at least an EndpointId (32 bytes) after

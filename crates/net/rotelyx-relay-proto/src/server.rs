@@ -61,9 +61,11 @@ use crate::{
     tls::CaTlsConfig,
 };
 
+pub mod circuits;
 pub mod client;
 pub mod clients;
 pub mod http_server;
+pub mod links;
 mod metrics;
 pub(crate) mod resolver;
 pub mod streams;
@@ -89,6 +91,12 @@ const ROBOTS_TXT: &[u8] = b"User-agent: *\nDisallow: /\n";
 // script or font fetched from anywhere. A relay that pulled a resource from a
 // CDN would hand that CDN a log of everyone who looked at it, which is the
 // same class of leak the relay design exists to avoid.
+/// The mark the page carries when no operator has replaced it.
+///
+/// Named so that a replacement is a substitution of one known string rather
+/// than a guess at where the mark is in the markup.
+const DEFAULT_LOGO: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=";
+
 const INDEX: &[u8] = br#"<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -149,9 +157,20 @@ footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--rule);
 </p>
 "#;
 
+/// Enough escaping for a name that goes into one text node.
+///
+/// The name comes from the operator's own command line rather than from the
+/// network, so this is not the last line of defence. It is here because a name
+/// with an ampersand in it should render as that name.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// The rest of the page, after the status block is inserted.
 const INDEX_TAIL: &[u8] = br#"
-<footer>Rotelyx &middot; pre-release &middot; unaudited</footer>
+<footer>Rotelyx &middot; pre-release &middot; internally audited</footer>
 </main></body></html>
 "#;
 const TLS_HEADERS: [(&str, &str); 2] = [
@@ -244,6 +263,20 @@ pub struct RelayConfig {
     pub key_cache_capacity: Option<usize>,
     /// Access control for incoming connections.
     pub access: Arc<dyn DynAccessControl>,
+    /// Opens circuit descriptors, when this relay is meant to terminate
+    /// circuits.
+    ///
+    /// `None` refuses every circuit, which is what a relay did before circuits
+    /// existed and is what a relay does unless its operator has given it a key.
+    /// The opening itself lives outside this crate: see
+    /// [`server::circuits::CircuitOpener`].
+    pub circuit_opener: crate::server::circuits::MaybeOpener,
+    /// Dials other relays, when this relay is meant to carry circuits onward.
+    ///
+    /// `None` chains nothing, which is the default and what a relay did before
+    /// chaining. See [`server::links::RelayDialer`] for what turning this on
+    /// exposes.
+    pub circuit_dialer: crate::server::links::MaybeDialer,
 }
 
 impl RelayConfig {
@@ -259,6 +292,8 @@ impl RelayConfig {
             limits: Limits::default(),
             key_cache_capacity: None,
             access: Arc::new(AllowAll),
+            circuit_opener: None,
+            circuit_dialer: None,
         }
     }
 }
@@ -848,11 +883,18 @@ impl Server {
                     .headers(headers)
                     .key_cache_capacity(key_cache_capacity)
                     .access(relay_config.access)
+                    .circuit_opener(relay_config.circuit_opener)
+                    .circuit_dialer(relay_config.circuit_dialer)
                     .request_handler(Method::GET, "/", Box::new(root_handler))
                     .request_handler(Method::GET, "/index.html", Box::new(root_handler))
                     .request_handler(Method::GET, RELAY_PROBE_PATH, Box::new(probe_handler))
                     .request_handler(Method::GET, "/robots.txt", Box::new(robots_handler))
-                    .request_handler(Method::GET, "/healthz", Box::new(healthz_handler));
+                    .request_handler(Method::GET, "/healthz", Box::new(healthz_handler))
+                    .request_handler(
+                        Method::GET,
+                        CIRCUIT_KEY_PATH,
+                        Box::new(circuit_key_handler),
+                    );
                 if let Some(cfg) = relay_config.limits.client_rx {
                     builder = builder.client_rx_ratelimit(cfg);
                 }
@@ -1140,6 +1182,55 @@ pub fn record_status_at(path: std::path::PathBuf) {
     STATUS.record_at(path);
 }
 
+/// Who runs this relay, when the operator has said.
+///
+/// # Why a relay may wear somebody else's mark
+///
+/// A relay is run by a person or a company, not by this project, and the page
+/// somebody lands on after following a link to it is theirs to put a name on.
+/// What does not change is the sentence underneath: this is a Rotelyx relay, it
+/// holds no keys, and it cannot read what passes through. The mark says who
+/// operates it; the page still says what it is.
+static BRAND: std::sync::OnceLock<Brand> = std::sync::OnceLock::new();
+
+/// An operator's name and mark.
+#[derive(Debug)]
+pub struct Brand {
+    /// Shown above the heading, in place of "Relay".
+    pub operator: String,
+    /// A `data:` URI for the mark. Nothing is fetched: the page's own policy
+    /// forbids reaching the network, so a mark has to arrive inside the
+    /// response or not at all.
+    pub logo: String,
+}
+
+/// Sets who runs this relay. Called by the binary before serving, at most once.
+pub fn brand_as(brand: Brand) {
+    let _ = BRAND.set(brand);
+}
+
+/// This relay's circuit key, base64url, when it terminates circuits.
+///
+/// # Why a relay publishes this at all
+///
+/// To seal a circuit to this relay, a caller needs its key. The caller must not
+/// ask this relay for it: that would put the caller's address in front of the
+/// one party chaining exists to keep it from, before any circuit exists. So the
+/// caller's own relay asks, and the caller checks what comes back against a
+/// hash it was given out of band. This endpoint is what that ask reads.
+///
+/// It is a public key and nothing else. Anybody may have it, which is the point
+/// of publishing it rather than arranging to share it.
+static CIRCUIT_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Publishes this relay's circuit key. Called by the binary before serving.
+pub fn publish_circuit_key(key: String) {
+    let _ = CIRCUIT_KEY.set(key);
+}
+
+/// The path a relay's circuit key is served at.
+pub const CIRCUIT_KEY_PATH: &str = "/circuit-key";
+
 /// The landing page, with a status block rendered on each request.
 ///
 /// # Why the server renders this and no script does
@@ -1174,8 +1265,29 @@ fn root_handler(
         history,
     );
 
-    let mut page = Vec::with_capacity(INDEX.len() + status.len() + INDEX_TAIL.len());
-    page.extend_from_slice(INDEX);
+    // The operator's mark, when there is one. Substituted rather than appended
+    // because the page carries a default mark and two would be worse than
+    // either.
+    let head = match BRAND.get() {
+        None => String::from_utf8_lossy(INDEX).into_owned(),
+        Some(brand) => {
+            let page = String::from_utf8_lossy(INDEX);
+            // An operator who gave a name and no mark keeps the default one.
+            // Substituting an empty string would leave the page with a hole
+            // where a mark goes, which is worse than either mark.
+            let page = match brand.logo.is_empty() {
+                true => page.into_owned(),
+                false => page.replace(DEFAULT_LOGO, &brand.logo),
+            };
+            page.replace(
+                "<p class=\"tag\">Relay</p>",
+                &format!("<p class=\"tag\">{}</p>", escape(&brand.operator)),
+            )
+        }
+    };
+
+    let mut page = Vec::with_capacity(head.len() + status.len() + INDEX_TAIL.len());
+    page.extend_from_slice(head.as_bytes());
     page.extend_from_slice(status.as_bytes());
     page.extend_from_slice(INDEX_TAIL);
 
@@ -1252,6 +1364,33 @@ struct Health {
     status: &'static str,
     version: &'static str,
     git_hash: &'static str,
+}
+
+/// This relay's circuit key, or a 404 when it terminates no circuits.
+///
+/// A relay that does not chain answers the same way a relay that has never
+/// heard of circuits does, which is what lets a caller find out without a
+/// special case.
+fn circuit_key_handler(
+    _r: Request<Incoming>,
+    response: ResponseBuilder,
+) -> HyperResult<Response<BytesBody>> {
+    let Some(key) = CIRCUIT_KEY.get() else {
+        return response
+            .status(StatusCode::NOT_FOUND)
+            .body(body_empty())
+            .map_err(|err| Box::new(err) as HyperError);
+    };
+
+    response
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        // Read by another relay on behalf of a caller, which may be on a
+        // different origin. It is a public key, so there is nothing here to
+        // keep from a browser that asks.
+        .header("Access-Control-Allow-Origin", "*")
+        .body(Box::new(Full::from(key.clone())) as BytesBody)
+        .map_err(|err| Box::new(err) as HyperError)
 }
 
 fn healthz_handler(
@@ -1363,8 +1502,9 @@ mod tests {
     use url::Url;
 
     use super::{
-        Access, AccessControl, ClientRequest, NO_CONTENT_CHALLENGE_HEADER,
-        NO_CONTENT_RESPONSE_HEADER, RelayConfig, Server, ServerConfig, SpawnError,
+        Access, AccessControl, ClientRequest, DEFAULT_LOGO, INDEX,
+        NO_CONTENT_CHALLENGE_HEADER, NO_CONTENT_RESPONSE_HEADER, RelayConfig, Server,
+        ServerConfig, SpawnError, escape,
     };
     use crate::{
         client::{ClientBuilder, ConnectError},
@@ -1801,4 +1941,82 @@ mod tests {
         server.shutdown().await.context("relay server shutdown")?;
         Ok(())
     }
+
+
+    /// An operator's mark replaces the default one rather than joining it.
+    ///
+    /// A page with two marks is worse than a page with either, and the failure
+    /// would be silent: both are `data:` URIs and neither would error.
+    #[test]
+    fn a_brand_replaces_the_default_mark() {
+        let page = String::from_utf8_lossy(INDEX);
+        assert_eq!(
+            page.matches(DEFAULT_LOGO).count(),
+            2,
+            "the default mark is the icon and the header mark; if that changed, \
+             the substitution below is replacing the wrong thing"
+        );
+
+        let mine = "data:image/png;base64,AAAA";
+        let branded = page.replace(DEFAULT_LOGO, mine);
+        assert!(!branded.contains(DEFAULT_LOGO), "the default mark survived");
+        assert_eq!(branded.matches(mine).count(), 2, "the mark was not put back");
+    }
+
+    /// The string the operator's name replaces is in the page.
+    ///
+    /// A substitution that silently matches nothing would leave the page saying
+    /// "Relay" with no sign that a name was given.
+    #[test]
+    fn the_operators_name_has_somewhere_to_go() {
+        let page = String::from_utf8_lossy(INDEX);
+        assert_eq!(
+            page.matches("<p class=\"tag\">Relay</p>").count(),
+            1,
+            "the operator's name has nowhere to go, or two places"
+        );
+    }
+
+    /// Whoever runs it, the page still says what it is.
+    #[test]
+    fn a_branded_page_still_says_it_holds_no_keys() {
+        let branded = String::from_utf8_lossy(INDEX)
+            .replace(DEFAULT_LOGO, "data:image/png;base64,AAAA")
+            .replace("<p class=\"tag\">Relay</p>", "<p class=\"tag\">Somebody</p>");
+        assert!(branded.contains("holds no keys"), "the page stopped saying what it is");
+        assert!(branded.contains("cannot read"), "the page stopped saying what it cannot do");
+    }
+
+    /// A relay that terminates no circuits says so at the key endpoint.
+    ///
+    /// Not an error and not an empty body: a caller asking whether a relay can
+    /// be an exit has to be able to tell "no" from "something went wrong", and
+    /// a 404 is what a relay built before circuits answers too.
+    #[test]
+    fn a_relay_with_no_circuit_key_has_nothing_at_that_path() {
+        // The global is set once per process and the other tests in this file
+        // do not set it, so what is asserted here is the unset case.
+        assert!(
+            super::CIRCUIT_KEY.get().is_none(),
+            "something published a circuit key, so this test is not testing what it says"
+        );
+    }
+
+    /// The path is one string, written once.
+    ///
+    /// A relay serving it at one path while a client asks at another would be
+    /// two constants disagreeing, which is the defect this project keeps
+    /// finding. Exported so the asking side uses this one.
+    #[test]
+    fn the_key_path_is_what_the_handler_is_registered_at() {
+        assert_eq!(super::CIRCUIT_KEY_PATH, "/circuit-key");
+    }
+
+    /// A name with markup in it renders as that name.
+    #[test]
+    fn a_name_with_markup_in_it_is_escaped() {
+        let escaped = escape("A & B <script>");
+        assert_eq!(escaped, "A &amp; B &lt;script&gt;");
+    }
+
 }

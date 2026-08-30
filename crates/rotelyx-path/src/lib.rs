@@ -62,17 +62,57 @@ pub enum PathPolicy {
     /// outcome for a policy whose entire promise is that a direct path is never
     /// taken.
     RelayOnly,
+
+    /// Relay only, and through two relays rather than one.
+    ///
+    /// # What it buys
+    ///
+    /// One relay learns who is talking to whom, and that is ADV-3 in the threat
+    /// model: inherent to relayed transport, not a defect. Two relays split it.
+    /// The first learns the caller and that a circuit was opened through the
+    /// second; the second learns the destination and that traffic arrives from
+    /// the first. Neither alone holds the pair.
+    ///
+    /// # What it does not buy, which the interface has to say out loud
+    ///
+    /// **Two relays run by one operator buy nothing.** Colluding operators hold
+    /// exactly what one operator holds today, and no software here can check
+    /// whether two relays are run by the same person: they are two addresses
+    /// and two keys, and that is all a client can see. Whoever chooses this has
+    /// to know that the property depends on a fact about the world rather than
+    /// about the protocol.
+    ///
+    /// It is also not a mixnet. Somebody watching both relays learns from
+    /// volume and timing what the circuit does not hide, and the threat model
+    /// says resisting a global passive adversary is a non-goal.
+    ///
+    /// # What it costs
+    ///
+    /// A round trip to set up, a second relay's latency on every packet after
+    /// that, and a fetch of the exit relay's key the first time. If no chain
+    /// can be built the connection fails, for the reason `RelayOnly` fails:
+    /// a policy whose promise is that something never happens has to keep it.
+    Chained,
 }
 
 impl PathPolicy {
     /// Whether a relayed path is acceptable when a direct one exists.
     pub fn tolerates_relay_alongside_direct(&self) -> bool {
-        matches!(self, Self::Fastest | Self::RelayOnly)
+        matches!(self, Self::Fastest | Self::RelayOnly | Self::Chained)
     }
 
     /// Whether a direct path may ever be used.
     pub fn permits_direct(&self) -> bool {
-        !matches!(self, Self::RelayOnly)
+        !matches!(self, Self::RelayOnly | Self::Chained)
+    }
+
+    /// Whether one relay is enough, or a chain of two is required.
+    ///
+    /// Required rather than preferred: a policy that quietly fell back to one
+    /// relay would be a policy somebody chose for a property it then did not
+    /// have, and they would have no way to tell.
+    pub fn requires_chain(&self) -> bool {
+        matches!(self, Self::Chained)
     }
 }
 
@@ -80,12 +120,48 @@ impl PathPolicy {
 mod tests {
     use super::*;
 
+    /// Chaining forbids a direct path, like the policy it extends.
+    ///
+    /// A chained policy that took a direct path would be one somebody chose for
+    /// a property it then did not have.
     #[test]
-    fn only_relay_only_forbids_a_direct_path() {
+    fn chaining_forbids_a_direct_path_too() {
+        assert!(!PathPolicy::Chained.permits_direct());
+        assert!(PathPolicy::Chained.tolerates_relay_alongside_direct());
+    }
+
+    /// Only the chained policy requires a chain.
+    ///
+    /// The others must not quietly gain a second relay, and this one must not
+    /// quietly lose it: a fallback to one relay would leave somebody believing
+    /// in a split that is not there, with no way to tell.
+    #[test]
+    fn only_the_chained_policy_requires_a_chain() {
+        assert!(PathPolicy::Chained.requires_chain());
+        for single in [
+            PathPolicy::Fastest,
+            PathPolicy::PreferDirect,
+            PathPolicy::DirectOnceAvailable,
+            PathPolicy::RelayOnly,
+        ] {
+            assert!(
+                !single.requires_chain(),
+                "{single:?} would have required a chain"
+            );
+        }
+    }
+
+    #[test]
+    fn the_relayed_policies_forbid_a_direct_path_and_the_others_permit_it() {
         // The property the media layer depends on. `MediaOut` refuses to be
         // constructed on a connection whose policy permits a direct path, and
         // this is the answer it asks for.
-        assert!(!PathPolicy::RelayOnly.permits_direct());
+        for relayed in [PathPolicy::RelayOnly, PathPolicy::Chained] {
+            assert!(
+                !relayed.permits_direct(),
+                "{relayed:?} would have taken a direct path"
+            );
+        }
 
         for permissive in [
             PathPolicy::Fastest,

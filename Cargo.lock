@@ -1379,7 +1379,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -5854,10 +5854,17 @@ name = "rotelyx-relay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
+ "data-encoding",
  "http",
+ "reqwest",
+ "rotelyx-crypto",
+ "rotelyx-discovery",
+ "rotelyx-future",
  "rotelyx-net",
  "rotelyx-relay-proto",
+ "rustls",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -6975,7 +6982,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237"
 dependencies = [
  "proc-macro2",
- "quote",
  "unicode-ident",
 ]
 

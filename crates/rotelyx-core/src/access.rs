@@ -202,6 +202,79 @@ fn address_of(transport: &[u8; 32]) -> RotelyxId {
     RotelyxId::from(SecretKey::from_bytes(transport).public())
 }
 
+/// Where a circuit through two relays should come out.
+///
+/// Carried in an invitation because the recipient picks their own relay, and
+/// the sender has to learn which one without asking a directory. See
+/// `docs/RELAY-CHAINING.md` section 3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExitRelay {
+    /// The relay's endpoint id, which is what a circuit descriptor is sealed
+    /// to.
+    pub relay: RotelyxId,
+    /// BLAKE3 of that relay's circuit key.
+    ///
+    /// # Why a hash and not the key
+    ///
+    /// The key is 1216 bytes and an invitation is scanned. Measured rather than
+    /// guessed: at the error correction level the mark needs, a QR holds 1292
+    /// raw bytes, and an invitation carrying the key outright would be 1312.
+    /// `crates/rotelyx-desktop/tests/qr_ceiling.rs` holds the measurement.
+    ///
+    /// So the key is fetched, and **through the sender's own relay**, never
+    /// from the exit relay: asking it directly would hand it the sender's
+    /// address before any circuit exists. This hash is what makes that safe.
+    /// The relay doing the fetching cannot substitute a key of its own.
+    pub key_hash: [u8; 32],
+    /// Where that relay is, because a relay is reached by address and not by
+    /// endpoint id.
+    pub url: String,
+}
+
+/// The context a circuit key's fingerprint is derived under.
+///
+/// Domain separated so that this hash cannot be mistaken for, or replayed as,
+/// any other hash of the same bytes in this system.
+const CIRCUIT_KEY_FINGERPRINT_CONTEXT: &str = "rotelyx relay circuit key fingerprint v1";
+
+impl ExitRelay {
+    /// The fingerprint of a relay's circuit key, as an invitation carries it.
+    ///
+    /// Over the key's raw bytes rather than its base64, so that two spellings
+    /// of the same key give the same answer.
+    pub fn fingerprint(key: &[u8]) -> [u8; 32] {
+        blake3::derive_key(CIRCUIT_KEY_FINGERPRINT_CONTEXT, key)
+    }
+
+    /// Whether this is the key the invitation named.
+    ///
+    /// # Why this is the whole safety of fetching a key
+    ///
+    /// The key does not travel in the invitation, so it is fetched, and it is
+    /// fetched **through the sender's own relay** rather than from the exit
+    /// relay. That relay could answer with a key of its own and read every
+    /// circuit sealed to it. It cannot, because the invitation carried this
+    /// hash, and the person who issued the invitation is the person whose relay
+    /// it names.
+    ///
+    /// A caller that skips this check has a chain that protects nothing.
+    pub fn accepts(&self, key: &[u8]) -> bool {
+        use subtle::ConstantTimeEq;
+        Self::fingerprint(key).ct_eq(&self.key_hash).into()
+    }
+}
+
+/// What a code says, once read.
+#[derive(Debug, Clone)]
+pub struct ReadCode {
+    /// The secret that authorises.
+    pub secret: [u8; 32],
+    /// The address to call.
+    pub address: RotelyxId,
+    /// The exit relay, when the code carries one.
+    pub exit: Option<ExitRelay>,
+}
+
 /// A capability issued by one identity so another can reach it.
 ///
 /// Shared out of band: a QR code, a link, a spoken string. Possession is the
@@ -331,16 +404,74 @@ impl Invitation {
     /// holds neither the transport secret nor the expiry and must not be able
     /// to pretend it does.
     pub fn read_code(code: &[u8]) -> Result<([u8; 32], RotelyxId), AccessError> {
-        if code.len() != 64 {
+        let read = Self::read_code_full(code)?;
+        Ok((read.secret, read.address))
+    }
+
+    /// The same code, including the exit relay when one travels with it.
+    ///
+    /// # Why length says which form this is, and not a version byte
+    ///
+    /// A code is 64 bytes or it is longer. Sixty four is the form that has been
+    /// handed out since before chaining and it keeps working untouched; longer
+    /// carries an exit relay after it. Nothing has to be decided about a
+    /// version number nobody has written yet, and an old code stays valid
+    /// rather than becoming version zero of something.
+    pub fn read_code_full(code: &[u8]) -> Result<ReadCode, AccessError> {
+        if code.len() < 64 {
             return Err(AccessError::Malformed);
         }
         let mut secret = [0u8; 32];
         secret.copy_from_slice(&code[..32]);
         let mut addr = [0u8; 32];
-        addr.copy_from_slice(&code[32..]);
+        addr.copy_from_slice(&code[32..64]);
         let id = rotelyx_transport_base::EndpointId::from_bytes(&addr)
             .map_err(|_| AccessError::Malformed)?;
-        Ok((secret, RotelyxId::from(id)))
+
+        let exit = match code.len() {
+            64 => None,
+            // An exit relay is its endpoint id, a hash of its circuit key, and
+            // the address to reach it at. The address is what is left, so it
+            // needs no length of its own.
+            len if len > 128 => {
+                let mut relay = [0u8; 32];
+                relay.copy_from_slice(&code[64..96]);
+                let relay = rotelyx_transport_base::EndpointId::from_bytes(&relay)
+                    .map_err(|_| AccessError::Malformed)?;
+                let mut key_hash = [0u8; 32];
+                key_hash.copy_from_slice(&code[96..128]);
+                let url = core::str::from_utf8(&code[128..])
+                    .map_err(|_| AccessError::Malformed)?
+                    .to_owned();
+                Some(ExitRelay {
+                    relay: RotelyxId::from(relay),
+                    key_hash,
+                    url,
+                })
+            }
+            // Between the two: an exit relay with something missing. Refused
+            // rather than half read.
+            _ => return Err(AccessError::Malformed),
+        };
+
+        Ok(ReadCode {
+            secret,
+            address: RotelyxId::from(id),
+            exit,
+        })
+    }
+
+    /// The code with an exit relay named after it.
+    ///
+    /// The recipient chooses their own relay, so the invitation is where they
+    /// say which one. See `docs/RELAY-CHAINING.md`.
+    pub fn code_with_exit(&self, exit: &ExitRelay) -> Zeroizing<Vec<u8>> {
+        let mut out = Vec::with_capacity(128 + exit.url.len());
+        out.extend_from_slice(&self.code()[..]);
+        out.extend_from_slice(exit.relay.as_bytes());
+        out.extend_from_slice(&exit.key_hash);
+        out.extend_from_slice(exit.url.as_bytes());
+        Zeroizing::new(out)
     }
 
     /// The bytes to encode into a QR code or link. Treat as a password.
@@ -465,6 +596,119 @@ mod tests {
         let (secret, addr) = Invitation::read_code(&code[..]).expect("a code we just made");
         assert_eq!(secret, *inv.secret_bytes(), "the secret did not survive");
         assert_eq!(addr, inv.address(), "the address did not survive");
+    }
+
+    /// A code with an exit relay carries it, and the short form still reads.
+    #[test]
+    fn a_code_can_carry_an_exit_relay_and_the_old_form_still_reads() {
+        let inv = Invitation::issue(100);
+        let exit = ExitRelay {
+            relay: address_of(&[7u8; 32]),
+            key_hash: [9u8; 32],
+            url: "https://relay.example.invalid".to_owned(),
+        };
+
+        let long = inv.code_with_exit(&exit);
+        let read = Invitation::read_code_full(&long[..]).expect("a code we just made");
+        assert_eq!(read.secret, *inv.secret_bytes(), "the secret did not survive");
+        assert_eq!(read.address, inv.address(), "the address did not survive");
+        assert_eq!(read.exit.as_ref(), Some(&exit), "the exit relay did not survive");
+
+        // The form handed out before chaining is still a code, and says it
+        // carries no exit relay rather than failing.
+        let short = inv.code();
+        let read = Invitation::read_code_full(&short[..]).expect("the old form should still read");
+        assert_eq!(read.secret, *inv.secret_bytes());
+        assert!(read.exit.is_none(), "an exit relay appeared from nowhere");
+
+        // And the reader everything else uses is unchanged by any of it.
+        let (secret, addr) = Invitation::read_code(&long[..]).expect("the long form");
+        assert_eq!(secret, *inv.secret_bytes());
+        assert_eq!(addr, inv.address());
+    }
+
+    /// The fingerprint accepts the key it was made from and nothing else.
+    #[test]
+    fn a_fingerprint_accepts_only_the_key_it_names() {
+        let key = vec![0x41u8; 1216];
+        let exit = ExitRelay {
+            relay: address_of(&[7u8; 32]),
+            key_hash: ExitRelay::fingerprint(&key),
+            url: "https://relay.example.invalid".to_owned(),
+        };
+
+        assert!(exit.accepts(&key), "the key it names was refused");
+
+        // One bit, anywhere.
+        for at in [0usize, 7, 600, 1215] {
+            let mut other = key.clone();
+            other[at] ^= 1;
+            assert!(
+                !exit.accepts(&other),
+                "a key differing at byte {at} was accepted"
+            );
+        }
+
+        // And a key of a different length, which is what a relay answering
+        // with something else would most likely be.
+        assert!(!exit.accepts(&[]), "an empty key was accepted");
+        assert!(!exit.accepts(&vec![0x41u8; 1215]), "a short key was accepted");
+    }
+
+    /// The fingerprint is not a bare hash of the key.
+    ///
+    /// Domain separation, so this value cannot be replayed as some other hash
+    /// of the same bytes elsewhere in the system.
+    #[test]
+    fn the_fingerprint_is_domain_separated() {
+        let key = vec![0x41u8; 1216];
+        assert_ne!(
+            ExitRelay::fingerprint(&key),
+            *blake3::hash(&key).as_bytes(),
+            "the fingerprint is a plain hash of the key"
+        );
+    }
+
+    /// A code between the two forms is refused rather than half read.
+    ///
+    /// Sixty five bytes through a hundred and twenty eight is an exit relay
+    /// with something missing. Reading what is there and inventing the rest
+    /// would produce a relay nobody named.
+    #[test]
+    fn a_code_that_is_neither_form_is_refused() {
+        let inv = Invitation::issue(100);
+        let full = inv.code_with_exit(&ExitRelay {
+            relay: address_of(&[7u8; 32]),
+            key_hash: [9u8; 32],
+            url: "https://relay.example.invalid".to_owned(),
+        });
+
+        for len in [0usize, 1, 63, 65, 96, 127, 128] {
+            let truncated = &full[..len.min(full.len())];
+            assert!(
+                Invitation::read_code_full(truncated).is_err(),
+                "a code of {len} bytes was accepted"
+            );
+        }
+    }
+
+    /// An address that is not text is refused.
+    #[test]
+    fn an_exit_relay_address_that_is_not_text_is_refused() {
+        let inv = Invitation::issue(100);
+        let mut code = inv.code_with_exit(&ExitRelay {
+            relay: address_of(&[7u8; 32]),
+            key_hash: [9u8; 32],
+            url: "https://relay.example.invalid".to_owned(),
+        })
+        .to_vec();
+        // A byte no UTF-8 sequence may begin with.
+        code.truncate(128);
+        code.push(0xFF);
+        assert!(
+            Invitation::read_code_full(&code).is_err(),
+            "an address that is not text was accepted"
+        );
     }
 
     /// The address in a code is the public half, never the private one.

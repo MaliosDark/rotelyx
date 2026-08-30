@@ -61,6 +61,10 @@ async fn serve_hyper() -> Result<(SocketAddr, AbortOnDropHandle<()>)> {
         KeyCache::new(1024),
         Arc::new(AllowAll),
         Arc::new(Metrics::default()),
+        // Refuses circuits and chains none, like a relay whose operator asked
+        // for neither.
+        None,
+        None,
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;

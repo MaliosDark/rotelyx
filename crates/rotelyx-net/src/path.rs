@@ -115,6 +115,20 @@ pub fn decide(
             None => Choice::KeepCurrent,
         },
 
+        // Never direct, and the relayed path has to be a chain of two.
+        //
+        // Decided the same way as `RelayOnly` here, because this function
+        // chooses between a direct path and a relayed one and knows nothing
+        // about how many relays the relayed one runs through. Whether a chain
+        // could actually be built is settled where the circuit is opened, and a
+        // failure there fails the connection rather than falling back to one
+        // relay: somebody who chose this and silently got a single relay would
+        // believe in a split that is not there.
+        PathPolicy::Chained => match best_relayed {
+            Some(_) => Choice::Relayed,
+            None => Choice::KeepCurrent,
+        },
+
         // As above, but never move back onto a relay once direct.
         PathPolicy::DirectOnceAvailable => match (best_direct, best_relayed) {
             (Some(_), _) => Choice::Direct,
@@ -218,14 +232,37 @@ mod tests {
 
     /// The single question media asks of a policy.
     #[test]
-    fn only_relay_only_forbids_a_direct_path() {
-        assert!(!PathPolicy::RelayOnly.permits_direct());
+    fn the_relayed_policies_forbid_a_direct_path_and_the_others_permit_it() {
+        for relayed in [PathPolicy::RelayOnly, PathPolicy::Chained] {
+            assert!(
+                !relayed.permits_direct(),
+                "{relayed:?} would have taken a direct path"
+            );
+        }
         for policy in [
             PathPolicy::Fastest,
             PathPolicy::PreferDirect,
             PathPolicy::DirectOnceAvailable,
         ] {
             assert!(policy.permits_direct(), "{policy:?} must allow a direct path");
+        }
+    }
+
+    /// Chaining never chooses a direct path, whatever is on offer.
+    #[test]
+    fn chaining_never_goes_direct() {
+        for (direct, relayed, currently, expected, why) in [
+            (Some(FAST), Some(SLOW), false, Choice::Relayed, "a fast direct path is still refused"),
+            (Some(FAST), None, false, Choice::KeepCurrent, "no relay means no path, not a direct one"),
+            (None, Some(SLOW), false, Choice::Relayed, "a relay is the only thing it will take"),
+            (None, None, false, Choice::KeepCurrent, "nothing on offer"),
+            (Some(FAST), Some(SLOW), true, Choice::Relayed, "already direct is not a reason to stay"),
+        ] {
+            assert_eq!(
+                decide(PathPolicy::Chained, direct, relayed, currently),
+                expected,
+                "{why}"
+            );
         }
     }
 

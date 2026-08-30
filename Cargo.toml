@@ -131,6 +131,22 @@ opt-level = 2
 inherits = "release"
 panic = "unwind"
 
+# Running the suite at release speed.
+#
+# `cargo test --workspace --release` cannot work here and never could: the
+# release profile aborts on panic, a test harness needs to unwind to report a
+# failure, and a dependency built one way does not link against a target built
+# the other. It appeared to work for as long as the build directory held
+# artifacts from an earlier unwinding build, and stopped the moment those were
+# cleaned. CI did not notice because CI tests in debug.
+#
+# The crypto tests are slow enough in debug to be worth a profile, so:
+#
+#   cargo test --workspace --profile release-test
+[profile.release-test]
+inherits = "release"
+panic = "unwind"
+
 [profile.wasm]
 inherits = "release"
 opt-level = "z"

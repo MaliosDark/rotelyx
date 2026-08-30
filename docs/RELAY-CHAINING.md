@@ -54,14 +54,45 @@ the sender needs its public key and a reason to believe it. A directory of
 relays is exactly the mechanism this project has deleted twice, and adding one
 back to gain a privacy property would be a poor trade.
 
-**It is not needed.** An invitation already carries reachability: an address and
-a transport key, handed over out of band by the person being invited. The
-recipient chooses their own relay, so the invitation is the natural place to say
-which one and to carry its key:
+**It is not needed.** An invitation already carries reachability: a secret and
+the address it is answered at, handed over out of band by the person being
+invited. The recipient chooses their own relay, so the invitation is the natural
+place to say which one:
 
 ```
-invitation  =  secret ‖ transport_key ‖ exit_relay_id ‖ exit_relay_key
+invitation  =  secret ‖ address ‖ exit_relay_id ‖ hash(exit_relay_key)
 ```
+
+**A hash, not the key.** The key itself is 1216 bytes and an invitation is
+scanned, and the QR ceiling was measured rather than guessed: at the error
+correction level the logo needs, a code holds 1292 raw bytes or 1029 encoded,
+and an invitation carrying the key outright would be 1312. It misses by twenty.
+`crates/rotelyx-desktop/tests/qr_ceiling.rs` holds the measurement and fails if
+the ceiling ever moves.
+
+So the key is fetched, and **through the first relay, never from the exit relay
+itself**. Asking the exit relay directly would put the caller's address in front
+of the one party this whole design exists to keep it from, at the first step and
+before any circuit exists. The first relay learns which relay is being chained
+through, which it learns anyway the moment it forwards, and it cannot substitute
+a key of its own because the hash in the invitation pins it.
+
+```
+A                         R1                        R2
+|-- AskRelayKey{url} ----->|                         |
+|                          |-- GET /circuit-key ---->|
+|                          |<---------- the key -----|
+|<-- RelayKey{url, key} ---|                         |
+```
+
+`ExitRelay::accepts` is the step that makes this safe, and it is not optional:
+R1 could answer with a key of its own and read every circuit sealed to it. It
+cannot, because the fingerprint came from the person who issued the invitation,
+and that is the person whose relay it names.
+
+Every failure is one answer, an empty key: a relay that terminates no circuits,
+one that cannot be reached, one R1 will not talk to, and something that is not
+an address. Telling them apart would say which relays R1 is willing to reach.
 
 The sender picks its own first relay, freely and independently. Nobody consults
 a list, and the trust in the exit relay is exactly the trust already placed in
@@ -74,7 +105,7 @@ design: reachability is something a person hands you, not something you look up.
 
 Onion routing of one hop. A circuit is established once and then carries
 datagrams cheaply, which is what makes the cost bearable: the sealed layer is
-1192 bytes and no per-packet budget could pay that fifty times a second.
+1328 bytes and no per-packet budget could pay that fifty times a second.
 
 ### 4.1 Setup
 
@@ -87,7 +118,9 @@ A                    R1                      R2                    B
 ```
 
 `sealed` is opaque to R1 and names R2. R1 learns only that A wants a circuit
-through R2. `inner` is what R2 opens: it names B and nothing about A.
+through R2. `inner` is what R2 opens: it names B, and it names the key A wants
+presented to B, which is a key A generated for this call and which belongs to no
+identity. R2 learns nothing about A that outlives the call.
 
 ### 4.2 What is sealed, and how
 
@@ -106,7 +139,7 @@ key              = BLAKE3_derive_key("rotelyx relay circuit v1", kem_ss)[0..32]
 nonce            = 24 random bytes
 sealed           = XChaCha20Poly1305.Seal(key, nonce, inner, aad)
 
-inner            = dst_endpoint_id ‖ be64(expiry_hour)
+inner            = dst_endpoint_id ‖ return_key ‖ be64(expiry_hour)
 ```
 
 Hybrid rather than classical, and the reason is specific to this payload: a
@@ -130,11 +163,29 @@ ClientToRelayMsg::CircuitDatagrams { circuit: CircuitId, datagrams }
 The id is per-hop and different on each: A↔R1 and R1↔R2 do not share one, or R1
 and R2 could correlate their tables by comparing ids alone.
 
+There are two frame types behind that one line, a plain one and a batch one,
+because the segment size is only on the wire when a batch has one and the frame
+type is what says which. The addressed datagrams have been split that way since
+before this design, and a circuit datagram that was not split decoded a batch
+without complaining and put the segment size at the front of the payload.
+
 ### 4.4 The return path
 
-B replies along the same circuit. R2 maps the reply onto its link to R1, R1 onto
-its connection to A. Neither learns anything new, because the mapping was
-established at setup and no reply names a destination.
+B does not know it is on a circuit and does not need to. It sees traffic from
+the return key and replies to it as it would to any peer. R2 answers on that key
+and maps the reply onto its link to R1; R1 maps it onto its connection to A.
+Neither learns anything new, because the mapping was established at setup and no
+reply names a destination.
+
+**Why a return key rather than the caller's own.** B's transport matches
+arriving packets to a peer by the sender's key, so the exit relay has to present
+one. The first relay's own key would make every circuit through it look the same
+to B, and a reply addressed to it could not be matched back to one circuit. The
+caller's per-call key is the natural choice and costs nothing: this transport
+already dials under a key generated for one call, so there is no long-lived name
+to give up. Sealing it into `inner` rather than passing it beside the descriptor
+keeps the choice with the caller, since the first relay carries it and cannot
+read it.
 
 ---
 
@@ -143,7 +194,7 @@ established at setup and no reply names a destination.
 | | Today, one relay | Chained |
 |---|---|---|
 | First relay | A, B, and that they are talking | A, and that A opened a circuit through R2 |
-| Second relay | | B, and that traffic arrives from R1 |
+| Second relay | | B, a key that exists for one call, and that traffic arrives from R1 |
 | Either alone | the pair | one end |
 | Both, colluding | the pair | the pair |
 | A network observer at one relay | volume and timing | volume and timing |
@@ -184,6 +235,9 @@ code; it is a protocol extension inside the largest piece of software in this
 repository that nobody here wrote.
 
 ---
+
+*The order to build it in, and where it can safely be abandoned, is in
+[`RELAY-CHAINING-PLAN.md`](RELAY-CHAINING-PLAN.md).*
 
 ## 8. What can be built before touching any of that
 

@@ -50,6 +50,8 @@ pub fn tls_config() -> TlsConfig {
 /// - Binds http to an OS assigned port on ipv4.
 /// - Uses [`tls_config`] to enable TLS.
 /// - Uses default limits.
+/// - Refuses circuits and chains none, like a relay whose operator asked
+///   for neither.
 pub fn relay_config() -> RelayConfig {
     RelayConfig {
         http_bind_addr: (Ipv4Addr::LOCALHOST, 0).into(),
@@ -57,6 +59,10 @@ pub fn relay_config() -> RelayConfig {
         limits: Default::default(),
         key_cache_capacity: Some(1024),
         access: Arc::new(AllowAll),
+        // No opener, so this relay refuses circuits. A test that wants them
+        // sets its own: the opening lives outside this crate.
+        circuit_opener: None,
+        circuit_dialer: None,
     }
 }
 

@@ -11,6 +11,8 @@ use tracing::{debug, trace};
 
 use super::{
     ConnectionId, OnDisconnectGuard,
+    circuits::{CircuitOpener, MAX_CIRCUITS_TOTAL, MaybeOpener, Return},
+    links::{Links, MaybeDialer},
     client::{Client, Config, ForwardPacketError},
 };
 use crate::{
@@ -54,6 +56,29 @@ struct Inner {
     /// Aliases are removed with the connection that registered them, so a name
     /// never outlives the thing it points at.
     aliases: DashMap<EndpointId, EndpointId>,
+    /// Return keys, each pointing at the connection and circuit to answer on.
+    ///
+    /// The forward half of a circuit lives in the connection that opened it,
+    /// where an id is a handle on that connection and can never be a name
+    /// somebody else guesses. This half cannot: the destination replies to a
+    /// key, and the key has to be findable from any connection, the way an
+    /// alias is.
+    ///
+    /// It is resolved last, after real connections and after aliases, so a
+    /// circuit can never shadow somebody who is actually here.
+    returns: DashMap<EndpointId, Return>,
+    /// Opens descriptors, when this relay has been given something that can.
+    ///
+    /// `None` refuses every circuit, which is what this relay did before
+    /// circuits existed.
+    opener: MaybeOpener,
+    /// Links to other relays, for circuits that continue past this one.
+    ///
+    /// Held here because this is what every connection already reaches. It is
+    /// safe to hold: a link keeps alive only the queues of the connections
+    /// waiting on it, never this table, so nothing here keeps anything else
+    /// alive in a circle.
+    links: Links,
 }
 
 #[derive(Debug)]
@@ -139,6 +164,8 @@ impl Clients {
         // Before the connection goes, so nothing can resolve through it in the
         // window between removal and cleanup.
         self.forget_aliases_of(endpoint_id);
+        self.forget_circuits_of(endpoint_id);
+        self.close_circuits_ending_at(endpoint_id);
 
         self.0.clients.remove_if_mut(&endpoint_id, |_id, state| {
             if state.active.connection_id() == connection_id {
@@ -255,6 +282,110 @@ impl Clients {
         self.0.aliases.retain(|_alias, target| *target != primary);
     }
 
+    /// Drops every return key answered by this connection.
+    ///
+    /// The forward half needs no cleanup: it lives in the connection's own
+    /// actor and goes when that does. This half is a global name, and a name
+    /// that outlived the connection answering it would route replies into
+    /// nothing while stopping anybody else from claiming it.
+    fn forget_circuits_of(&self, owner: EndpointId) {
+        self.0.returns.retain(|_key, entry| entry.owner != owner);
+    }
+
+    /// The links this relay holds, for circuits that continue past it.
+    pub(super) fn links(&self) -> Links {
+        self.0.links.clone()
+    }
+
+    /// The opener this relay was built with, if any.
+    pub(super) fn circuit_opener(&self) -> Option<&Arc<dyn CircuitOpener>> {
+        self.0.opener.as_ref()
+    }
+
+    /// Claims a return key for a circuit.
+    ///
+    /// Refuses a key that is already answered, and a key that belongs to a
+    /// connected client or an alias: a circuit must never be able to take a
+    /// name off somebody who is really here. Refuses once the relay is holding
+    /// as many circuits as it will.
+    pub(super) fn claim_return_key(
+        &self,
+        key: EndpointId,
+        owner: EndpointId,
+        circuit: u32,
+        destination: EndpointId,
+    ) -> bool {
+        if self.0.returns.len() >= MAX_CIRCUITS_TOTAL {
+            debug!("circuit table full, refusing");
+            return false;
+        }
+        if self.0.clients.contains_key(&key) || self.0.aliases.contains_key(&key) {
+            debug!("return key is already a name here, refusing");
+            return false;
+        }
+        match self.0.returns.entry(key) {
+            dashmap::Entry::Occupied(_) => false,
+            dashmap::Entry::Vacant(entry) => {
+                entry.insert(Return {
+                    owner,
+                    circuit,
+                    destination,
+                });
+                true
+            }
+        }
+    }
+
+    /// Closes every circuit that ended at an endpoint which has just gone.
+    ///
+    /// The connection that opened the circuit is told by circuit id, not by
+    /// endpoint id: it may be another relay, and naming the destination to it
+    /// would undo the point of chaining. The key is released here, so the
+    /// circuit stops holding a name nobody can answer.
+    ///
+    /// A scan rather than a reverse index. The table is bounded, this runs once
+    /// per disconnect, and a second index is a second thing that can disagree
+    /// with the first.
+    fn close_circuits_ending_at(&self, destination: EndpointId) {
+        let closing: Vec<(EndpointId, Return)> = self
+            .0
+            .returns
+            .iter()
+            .filter(|entry| entry.destination == destination)
+            .map(|entry| (*entry.key(), *entry.value()))
+            .collect();
+
+        for (key, entry) in closing {
+            self.0.returns.remove(&key);
+            if let Some(client) = self.0.clients.get(&entry.owner) {
+                // Best effort, like the peer-gone notification beside it. A
+                // client that misses this finds out when its next datagram on
+                // that circuit is refused.
+                let _ = client.active.try_send_circuit_closed(entry.circuit);
+            }
+        }
+    }
+
+    /// Builds a client table that can open circuits.
+    ///
+    /// Without this the table refuses them, which is the default and what every
+    /// relay did before circuits.
+    pub fn with_circuit_opener(opener: Arc<dyn CircuitOpener>) -> Self {
+        Self(Arc::new(Inner {
+            opener: Some(opener),
+            ..Default::default()
+        }))
+    }
+
+    /// A client table whose relay will also dial other relays.
+    pub fn with_circuits(opener: Arc<dyn CircuitOpener>, dialer: MaybeDialer) -> Self {
+        Self(Arc::new(Inner {
+            opener: Some(opener),
+            links: Links::new(dialer),
+            ..Default::default()
+        }))
+    }
+
     pub(super) fn send_packet(
         &self,
         dst: EndpointId,
@@ -262,18 +393,30 @@ impl Clients {
         src: EndpointId,
         metrics: &Metrics,
     ) -> Result<(), ForwardPacketError> {
-        // A destination is either a key somebody connected under or a name one
-        // of those connections also answers to. Resolved in that order, so an
-        // alias can never shadow a real connection.
+        // A destination is either a key somebody connected under, a name one of
+        // those connections also answers to, or the return key of a circuit.
+        // Resolved in that order, so neither an alias nor a circuit can shadow
+        // a real connection.
+        let mut circuit = None;
         let dst = match self.0.clients.contains_key(&dst) {
             true => dst,
             false => match self.0.aliases.get(&dst) {
                 Some(primary) => *primary,
-                None => {
-                    debug!(dst = %dst.fmt_short(), "no connected client, dropped packet");
-                    metrics.send_packets_dropped.inc();
-                    return Ok(());
-                }
+                None => match self.0.returns.get(&dst) {
+                    Some(entry) => {
+                        // A reply on a circuit is written as a circuit frame,
+                        // not as an addressed one. The connection that opened
+                        // the circuit knows the id and never learns who sent
+                        // this, which is the property the circuit is for.
+                        circuit = Some(entry.circuit);
+                        entry.owner
+                    }
+                    None => {
+                        debug!(dst = %dst.fmt_short(), "no connected client, dropped packet");
+                        metrics.send_packets_dropped.inc();
+                        return Ok(());
+                    }
+                },
             },
         };
 
@@ -282,10 +425,19 @@ impl Clients {
             metrics.send_packets_dropped.inc();
             return Ok(());
         };
-        match client.active.try_send_packet(src, data) {
+        // Circuit traffic is kept out of this bookkeeping, in both directions.
+        // Its only purpose is the peer-gone notification, and that notification
+        // names an endpoint: telling the connection at one end of a circuit
+        // which endpoint at the other end has gone would hand it exactly the
+        // fact the circuit exists to withhold. A circuit learns the far end is
+        // gone from `CircuitClosed`, which names the circuit and nobody.
+        let is_circuit = circuit.is_some() || self.0.returns.contains_key(&src);
+        match client.active.try_send_packet(src, data, circuit) {
             Ok(_) => {
-                // Record sent_to relationship
-                self.0.sent_to.entry(src).or_default().insert(dst);
+                if !is_circuit {
+                    // Record sent_to relationship
+                    self.0.sent_to.entry(src).or_default().insert(dst);
+                }
                 Ok(())
             }
             Err(TrySendError::Full(_)) => {

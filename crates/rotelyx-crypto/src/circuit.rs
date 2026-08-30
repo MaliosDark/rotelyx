@@ -33,7 +33,7 @@
 //! message layer already makes, applied to the social graph rather than to
 //! content.
 //!
-//! The cost is 1192 bytes, paid **once per circuit** rather than per datagram.
+//! The cost is 1328 bytes, paid **once per circuit** rather than per datagram.
 //! A per-packet seal at that size would be impossible fifty times a second, and
 //! that is why the design carries an id afterwards rather than resealing.
 
@@ -53,8 +53,25 @@ const CIRCUIT_LABEL: &[u8] = b"rotelyx relay circuit v1";
 
 /// Bytes on the wire: the KEM ciphertext, the nonce, the sealed body, the tag.
 ///
-/// The body is a 32 byte endpoint id and an 8 byte hour.
-pub const SEALED_HOP_LEN: usize = CIRCUIT_LEN_KEM + 24 + 40 + 16;
+/// The body is a 32 byte destination, a 32 byte return key, the next relay's
+/// address, and an 8 byte hour.
+pub const SEALED_HOP_LEN: usize = CIRCUIT_LEN_KEM + 24 + CIRCUIT_BODY_LEN + 16;
+
+/// Destination, return key, next relay, hour.
+const CIRCUIT_BODY_LEN: usize = 32 + 32 + NEXT_RELAY_LEN + 8;
+
+/// Room for the next relay's address, zero padded.
+///
+/// Fixed rather than length prefixed so that every descriptor is the same size.
+/// A descriptor whose length varied with the address inside it would say how
+/// long that address is to anybody who saw one go past, and a short one would
+/// be a shorter relay name.
+///
+/// Ninety six bytes holds `https://` and a host of eighty eight, which is far
+/// past any relay name anybody would type and short of the 253 a DNS name may
+/// be. A relay named longer than this cannot be chained to, and `seal` says so
+/// rather than truncating.
+pub const NEXT_RELAY_LEN: usize = 96;
 const CIRCUIT_LEN_KEM: usize = CIRCUIT_KEM;
 const CIRCUIT_KEM: usize = CIPHERTEXT_LEN;
 
@@ -78,10 +95,44 @@ impl core::fmt::Debug for SealedHop {
 
 /// What the exit relay reads out: where to forward, and when this stops being
 /// valid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hop {
     /// The endpoint this circuit ends at.
     pub destination: [u8; 32],
+    /// Where the next relay is, when this hop ends at a relay rather than at a
+    /// person.
+    ///
+    /// `None` means the destination is a client of the relay opening this, which
+    /// is the only case that exists before chaining. `Some` carries the URL that
+    /// relay dials, because a relay is reached by address and not by endpoint
+    /// id, and the id alone would leave the first relay with a name and no way
+    /// to use it.
+    ///
+    /// It is sealed, so only the relay this descriptor is for reads it, and the
+    /// relay carrying the outer layer learns nothing about where the circuit
+    /// continues.
+    pub next_relay: Option<String>,
+    /// The key the exit relay presents to the destination as the sender, and
+    /// answers on for the reply.
+    ///
+    /// # Why this is here and not left to the first relay
+    ///
+    /// The destination's transport associates arriving packets with a peer by
+    /// this key, so something has to be presented, and it cannot be the first
+    /// relay's own key: every circuit through that relay would then look
+    /// identical to the destination, and a reply addressed to the relay could
+    /// not be matched back to one circuit.
+    ///
+    /// It is sealed here rather than passed alongside because that puts the
+    /// choice with the caller. The first relay carries this and cannot read it,
+    /// so it cannot substitute a key of its own choosing and cannot learn which
+    /// name the destination will see.
+    ///
+    /// Giving it up costs the caller nothing, because the caller already dials
+    /// under a key generated for one call and belonging to no identity. What
+    /// the exit relay learns is that name, which is what the destination learns
+    /// too, and neither of them learns anything that outlives the call.
+    pub return_key: [u8; 32],
     /// Hours since the Unix epoch. Bound into the associated data as well, so a
     /// captured request cannot be replayed tomorrow to reopen a path.
     pub hour: u64,
@@ -131,8 +182,20 @@ impl SealedHop {
         let mut nonce = [0u8; 24];
         getrandom::fill(&mut nonce).map_err(|_| HybridError::Entropy)?;
 
-        let mut body = Vec::with_capacity(40);
+        let mut next = [0u8; NEXT_RELAY_LEN];
+        if let Some(url) = hop.next_relay.as_deref() {
+            // Refused rather than truncated: a truncated URL is a different
+            // host, and dialling a different host is worse than not dialling.
+            if url.is_empty() || url.len() > NEXT_RELAY_LEN {
+                return Err(HybridError::BadCiphertext);
+            }
+            next[..url.len()].copy_from_slice(url.as_bytes());
+        }
+
+        let mut body = Vec::with_capacity(CIRCUIT_BODY_LEN);
         body.extend_from_slice(&hop.destination);
+        body.extend_from_slice(&hop.return_key);
+        body.extend_from_slice(&next);
         body.extend_from_slice(&hop.hour.to_be_bytes());
 
         let cipher =
@@ -185,13 +248,34 @@ impl SealedHop {
                 continue;
             };
 
-            if body.len() != 40 {
+            if body.len() != CIRCUIT_BODY_LEN {
                 return Err(HybridError::BadCiphertext);
             }
             let mut destination = [0u8; 32];
             destination.copy_from_slice(&body[..32]);
+            let mut return_key = [0u8; 32];
+            return_key.copy_from_slice(&body[32..64]);
+
+            // Trailing zeros are the padding, so what is left is the address or
+            // nothing. Anything that is not valid UTF-8 is refused rather than
+            // repaired: this becomes a URL a relay dials.
+            let padded = &body[64..64 + NEXT_RELAY_LEN];
+            let end = padded.iter().position(|b| *b == 0).unwrap_or(NEXT_RELAY_LEN);
+            let next_relay = match end {
+                0 => None,
+                _ => {
+                    if padded[end..].iter().any(|b| *b != 0) {
+                        return Err(HybridError::BadCiphertext);
+                    }
+                    match core::str::from_utf8(&padded[..end]) {
+                        Ok(url) => Some(url.to_owned()),
+                        Err(_) => return Err(HybridError::BadCiphertext),
+                    }
+                }
+            };
+
             let mut h = [0u8; 8];
-            h.copy_from_slice(&body[32..40]);
+            h.copy_from_slice(&body[64 + NEXT_RELAY_LEN..CIRCUIT_BODY_LEN]);
             let inner = u64::from_be_bytes(h);
 
             // The hour appears twice, and both must agree. Sealing it only in
@@ -201,7 +285,12 @@ impl SealedHop {
             if inner != hour {
                 return Err(HybridError::BadCiphertext);
             }
-            return Ok(Hop { destination, hour });
+            return Ok(Hop {
+                destination,
+                return_key,
+                next_relay,
+                hour,
+            });
         }
 
         Err(HybridError::BadCiphertext)
@@ -243,7 +332,12 @@ mod tests {
     #[test]
     fn the_exit_relay_reads_the_destination_and_nobody_else_can() {
         let (secret, public, exit_id) = relay();
-        let hop = Hop { destination: [9u8; 32], hour: 400_000 };
+        let hop = Hop {
+            destination: [9u8; 32],
+            return_key: [137u8; 32],
+            next_relay: None,
+            hour: 400_000,
+        };
 
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
         let out = sealed.open(&secret, &exit_id, 400_000).expect("open");
@@ -257,13 +351,27 @@ mod tests {
             "the destination appears in the sealed bytes, so the carrying relay \
              can read who this circuit is for"
         );
+
+        // Nor the return key. The carrying relay must not learn which name the
+        // destination will see, or it could recognise that name arriving back
+        // and hold both ends of the circuit it is supposed to only carry.
+        assert!(
+            !wire.windows(32).any(|w| w == hop.return_key),
+            "the return key appears in the sealed bytes, so the carrying relay \
+             can recognise the reply"
+        );
     }
 
     #[test]
     fn another_relay_cannot_open_it() {
         let (_, public, exit_id) = relay();
         let (other_secret, _, _) = relay();
-        let hop = Hop { destination: [3u8; 32], hour: 400_000 };
+        let hop = Hop {
+            destination: [3u8; 32],
+            return_key: [131u8; 32],
+            next_relay: None,
+            hour: 400_000,
+        };
 
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
         assert!(sealed.open(&other_secret, &exit_id, 400_000).is_err());
@@ -272,7 +380,12 @@ mod tests {
     #[test]
     fn a_descriptor_for_one_relay_is_refused_at_another() {
         let (secret, public, exit_id) = relay();
-        let hop = Hop { destination: [3u8; 32], hour: 400_000 };
+        let hop = Hop {
+            destination: [3u8; 32],
+            return_key: [131u8; 32],
+            next_relay: None,
+            hour: 400_000,
+        };
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
 
         // Same key, different claimed identity. The id is in the associated
@@ -284,7 +397,12 @@ mod tests {
     #[test]
     fn yesterdays_circuit_request_does_not_open_today() {
         let (secret, public, exit_id) = relay();
-        let hop = Hop { destination: [3u8; 32], hour: 400_000 };
+        let hop = Hop {
+            destination: [3u8; 32],
+            return_key: [131u8; 32],
+            next_relay: None,
+            hour: 400_000,
+        };
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
 
         // Replay is what the hour is bound in to stop: a captured request would
@@ -296,7 +414,12 @@ mod tests {
     #[test]
     fn an_hour_either_side_still_opens() {
         let (secret, public, exit_id) = relay();
-        let hop = Hop { destination: [3u8; 32], hour: 400_000 };
+        let hop = Hop {
+            destination: [3u8; 32],
+            return_key: [131u8; 32],
+            next_relay: None,
+            hour: 400_000,
+        };
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
 
         // Two machines disagree about the time. Refusing a circuit over a clock
@@ -309,7 +432,12 @@ mod tests {
     #[test]
     fn a_flipped_bit_anywhere_is_refused() {
         let (secret, public, exit_id) = relay();
-        let hop = Hop { destination: [5u8; 32], hour: 400_000 };
+        let hop = Hop {
+            destination: [5u8; 32],
+            return_key: [133u8; 32],
+            next_relay: None,
+            hour: 400_000,
+        };
         let wire = SealedHop::seal(&public, &exit_id, &hop).expect("seal").to_bytes();
 
         for i in (0..wire.len()).step_by(37) {
@@ -326,7 +454,12 @@ mod tests {
     #[test]
     fn two_seals_of_one_hop_do_not_look_alike() {
         let (_, public, exit_id) = relay();
-        let hop = Hop { destination: [5u8; 32], hour: 400_000 };
+        let hop = Hop {
+            destination: [5u8; 32],
+            return_key: [133u8; 32],
+            next_relay: None,
+            hour: 400_000,
+        };
 
         // A first relay watching one sender open circuits must not be able to
         // tell that two of them go to the same place.
@@ -338,7 +471,12 @@ mod tests {
     #[test]
     fn the_wire_form_round_trips_and_the_length_is_fixed() {
         let (secret, public, exit_id) = relay();
-        let hop = Hop { destination: [1u8; 32], hour: 12 };
+        let hop = Hop {
+            destination: [1u8; 32],
+            return_key: [129u8; 32],
+            next_relay: None,
+            hour: 12,
+        };
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
         let wire = sealed.to_bytes();
 
@@ -350,13 +488,116 @@ mod tests {
         assert!(SealedHop::from_bytes(&[0u8; 4]).is_err());
     }
 
+    /// The next relay's address survives, and so does its absence.
+    #[test]
+    fn the_next_relay_survives_the_round_trip() {
+        let (secret, public, exit_id) = relay();
+
+        for next in [
+            None,
+            Some("https://relay.example.invalid".to_owned()),
+            Some("h".to_owned()),
+            // Exactly the room there is, so the boundary is exercised rather
+            // than assumed.
+            Some("h".repeat(NEXT_RELAY_LEN)),
+        ] {
+            let hop = Hop {
+                destination: [1u8; 32],
+                return_key: [2u8; 32],
+                next_relay: next.clone(),
+                hour: 400_000,
+            };
+            let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
+            let out = sealed.open(&secret, &exit_id, 400_000).expect("open");
+            assert_eq!(out.next_relay, next, "the next relay did not survive");
+        }
+    }
+
+    /// An address longer than there is room for is refused, not truncated.
+    ///
+    /// A truncated URL is a different host. Dialling a different host than the
+    /// caller asked for is worse than refusing to dial.
+    #[test]
+    fn an_address_too_long_is_refused_rather_than_shortened() {
+        let (_, public, exit_id) = relay();
+        let hop = Hop {
+            destination: [1u8; 32],
+            return_key: [2u8; 32],
+            next_relay: Some("h".repeat(NEXT_RELAY_LEN + 1)),
+            hour: 400_000,
+        };
+        assert!(
+            SealedHop::seal(&public, &exit_id, &hop).is_err(),
+            "an address past the room available was accepted"
+        );
+    }
+
+    /// Every descriptor is the same size, whatever is inside it.
+    ///
+    /// A length that varied with the address would tell anybody watching one go
+    /// past how long the next relay's name is.
+    #[test]
+    fn a_descriptor_is_the_same_size_whatever_it_carries() {
+        let (_, public, exit_id) = relay();
+        for next in [
+            None,
+            Some("h".to_owned()),
+            Some("https://relay.example.invalid".to_owned()),
+            Some("h".repeat(NEXT_RELAY_LEN)),
+        ] {
+            let hop = Hop {
+                destination: [1u8; 32],
+                return_key: [2u8; 32],
+                next_relay: next,
+                hour: 400_000,
+            };
+            let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
+            assert_eq!(
+                sealed.to_bytes().len(),
+                SEALED_HOP_LEN,
+                "descriptors are not all the same size"
+            );
+        }
+    }
+
+    /// The carrying relay cannot read where the circuit goes next.
+    #[test]
+    fn the_next_relay_is_not_in_the_bytes_the_first_relay_carries() {
+        let (_, public, exit_id) = relay();
+        let url = "https://relay.example.invalid";
+        let hop = Hop {
+            destination: [1u8; 32],
+            return_key: [2u8; 32],
+            next_relay: Some(url.to_owned()),
+            hour: 400_000,
+        };
+        let wire = SealedHop::seal(&public, &exit_id, &hop)
+            .expect("seal")
+            .to_bytes();
+        assert!(
+            !wire
+                .windows(url.len())
+                .any(|w| w == url.as_bytes()),
+            "the next relay's address is readable in the descriptor"
+        );
+    }
+
     #[test]
     fn debug_never_leaks_the_destination() {
         let (_, public, exit_id) = relay();
-        let hop = Hop { destination: [0xABu8; 32], hour: 5 };
+        let hop = Hop {
+            destination: [0xABu8; 32],
+            return_key: [0xABu8; 32],
+            next_relay: Some("https://relay.example.invalid".to_owned()),
+            hour: 5,
+        };
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
         let shown = format!("{sealed:?}");
         assert!(!shown.contains("ab"), "the destination reached a log: {shown}");
+        assert!(
+            !shown.contains("relay.example.invalid"),
+            "the next relay reached a log: {shown}"
+        );
         assert!(shown.contains("opaque"));
     }
 }

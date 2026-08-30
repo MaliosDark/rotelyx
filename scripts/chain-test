@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Two relays, a circuit through both.
+#
+# Everything else about chaining is tested inside one process. This is the part
+# that cannot be: the first relay dialling the second over a real socket. It
+# starts both, reads the names they print, and runs the test that speaks to
+# them.
+#
+# Plain http on loopback, so no certificate is needed. That leaves TLS and DNS
+# untested here, which is what a pair of deployed relays would cover.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+FIRST_PORT=${FIRST_PORT:-34221}
+EXIT_PORT=${EXIT_PORT:-34220}
+STATE=$(mktemp -d)
+trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$STATE"' EXIT
+
+cargo build -p rotelyx-relay
+
+# The exit relay: opens circuits, chains nothing.
+./target/debug/rotelyx-relay \
+	--bind "127.0.0.1:$EXIT_PORT" --open \
+	--identity "$STATE/exit.id" --circuit-key "$STATE/exit.circuit" \
+	>"$STATE/exit.log" 2>&1 &
+
+# The first relay: opens circuits and carries them onward, to that one only.
+echo "http://127.0.0.1:$EXIT_PORT" >"$STATE/peers"
+./target/debug/rotelyx-relay \
+	--bind "127.0.0.1:$FIRST_PORT" --open \
+	--identity "$STATE/first.id" --circuit-key "$STATE/first.circuit" \
+	--chain --chain-to "$STATE/peers" \
+	>"$STATE/first.log" 2>&1 &
+
+# Each prints its two names before it listens.
+for log in "$STATE/exit.log" "$STATE/first.log"; do
+	for _ in $(seq 100); do
+		grep -q "relay listening" "$log" && break
+		sleep 0.1
+	done
+	if ! grep -q "relay listening" "$log"; then
+		echo "a relay did not start:" >&2
+		cat "$log" >&2
+		exit 1
+	fi
+done
+
+names() { grep "^$2" "$1" | sed "s/^$2 *//"; }
+
+CHAIN_EXIT_URL="http://127.0.0.1:$EXIT_PORT" \
+CHAIN_EXIT_ID=$(names "$STATE/exit.log" "endpoint id:") \
+CHAIN_EXIT_KEY=$(names "$STATE/exit.log" "circuit key:") \
+CHAIN_FIRST_URL="http://127.0.0.1:$FIRST_PORT" \
+CHAIN_FIRST_ID=$(names "$STATE/first.log" "endpoint id:") \
+CHAIN_FIRST_KEY=$(names "$STATE/first.log" "circuit key:") \
+	cargo test -p rotelyx-relay --test chained_circuit --test relay_key \
+		-- --ignored --nocapture
+
+echo
+echo "first relay:"
+sed 's/^/  /' "$STATE/first.log" | tail -5

@@ -8,6 +8,14 @@ It is excluded from the Rotelyx workspace (`exclude = ["crates/net"]` in the roo
 manifest) so that upstream's own test suites and lint configuration do not run
 as part of Rotelyx's. Each crate here is its own workspace root.
 
+That exclusion means `cargo test --workspace` cannot reach any of this, which
+was fine while the code here was only vendored and is not fine now that we
+write in it: alias binding and the circuit frames are ours. A subprotocol
+negotiation test sat broken here through the rename away from upstream's names
+because nothing ran it. The `vendored transport` job in CI runs
+`rotelyx-relay-proto`'s suite for that reason. The other crates here are still
+unrun, and are still only vendored.
+
 ## What is here
 
 | Crate | Derived from | LOC | Role |

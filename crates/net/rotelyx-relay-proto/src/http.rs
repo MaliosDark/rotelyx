@@ -54,9 +54,26 @@ pub enum ProtocolVersion {
     /// Version 2 (added in rotelyx_transport 0.98.0)
     /// - Removed `Health` frame (id 11)
     /// - Added `Status` frame (id 13)
-    #[default]
     #[strum(serialize = "rotelyx-relay-v2")]
     V2,
+    /// Version 3, which is Rotelyx's and not upstream's.
+    /// - Added the circuit frames (ids 15 to 21)
+    /// - Added the relay key frames (ids 22 and 23)
+    ///
+    /// # Why relay chaining needed a version and not just a refusal
+    ///
+    /// A frame type a relay does not know is not refused politely: reading it
+    /// fails, and a failed read ends the connection. So a client that spoke
+    /// circuits to a relay built before them would not learn "no", it would
+    /// lose the connection it was using. Agreeing the version at the handshake
+    /// is how a client finds out before it costs anything.
+    ///
+    /// This says the relay **knows** these frames, not that it will serve them.
+    /// Whether a particular relay terminates or carries circuits is its
+    /// operator's decision and is still answered with `CircuitClosed`.
+    #[default]
+    #[strum(serialize = "rotelyx-relay-v3")]
+    V3,
 }
 
 impl ProtocolVersion {
@@ -65,7 +82,7 @@ impl ProtocolVersion {
     // This list needs to be maintained by hand; the `all_is_exhaustive` test in this module
     // asserts that the length matches the actual variant count via a `cfg(test)`-only
     // `strum::EnumCount` derive.
-    pub const ALL: &'static [Self] = &[Self::V2, Self::V1];
+    pub const ALL: &'static [Self] = &[Self::V3, Self::V2, Self::V1];
 
     /// Returns an iterator of all supported protocol version identifiers, in order of preference.
     pub fn all() -> impl Iterator<Item = &'static str> {

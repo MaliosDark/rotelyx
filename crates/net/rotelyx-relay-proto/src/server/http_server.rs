@@ -35,6 +35,8 @@ use super::{
     AllowAll, ClientRequest, DynAccessControl, SpawnError, clients::Clients,
     streams::InvalidBucketConfig,
 };
+use crate::server::circuits::MaybeOpener;
+use crate::server::links::MaybeDialer;
 use crate::{
     KeyCache,
     defaults::{DEFAULT_KEY_CACHE_CAPACITY, timeouts::SERVER_WRITE_TIMEOUT},
@@ -352,6 +354,10 @@ pub(super) struct ServerBuilder {
     key_cache_capacity: usize,
     /// Access control for endpoints.
     access: Arc<dyn DynAccessControl>,
+    /// Opens circuit descriptors. `None` refuses every circuit.
+    circuit_opener: MaybeOpener,
+    /// Dials other relays. `None` chains nothing.
+    circuit_dialer: MaybeDialer,
     metrics: Option<Arc<Metrics>>,
     establish_timeout: Duration,
 }
@@ -367,6 +373,8 @@ impl ServerBuilder {
             client_rx_ratelimit: None,
             key_cache_capacity: DEFAULT_KEY_CACHE_CAPACITY,
             access: Arc::new(AllowAll),
+            circuit_opener: None,
+            circuit_dialer: None,
             metrics: None,
             establish_timeout: ESTABLISH_TIMEOUT,
         }
@@ -381,6 +389,23 @@ impl ServerBuilder {
     /// Set the access control.
     pub(super) fn access(mut self, access: Arc<dyn DynAccessControl>) -> Self {
         self.access = access;
+        self
+    }
+
+    /// Gives this server something that can open circuit descriptors.
+    ///
+    /// Without it every circuit is refused, which is the default.
+    pub(super) fn circuit_opener(mut self, opener: MaybeOpener) -> Self {
+        self.circuit_opener = opener;
+        self
+    }
+
+    /// Gives this server something that can dial other relays.
+    ///
+    /// Without it a circuit that names another relay is refused, which is the
+    /// default.
+    pub(super) fn circuit_dialer(mut self, dialer: MaybeDialer) -> Self {
+        self.circuit_dialer = dialer;
         self
     }
 
@@ -449,6 +474,8 @@ impl ServerBuilder {
             KeyCache::new(self.key_cache_capacity),
             self.access,
             self.metrics.unwrap_or_default(),
+            self.circuit_opener,
+            self.circuit_dialer,
         );
 
         let addr = self.addr;
@@ -705,6 +732,8 @@ impl RelayServiceWithNotify {
 ///     KeyCache::new(1024),
 ///     Arc::new(AllowAll),
 ///     Arc::new(Metrics::default()),
+///     None, // Refuses circuits
+///     None, // Chains none
 /// );
 /// let service = RelayServiceWithNotify::new(service, Arc::new(Notify::new()));
 ///
@@ -918,11 +947,16 @@ impl RelayService {
         key_cache: KeyCache,
         access: Arc<dyn DynAccessControl>,
         metrics: Arc<Metrics>,
+        circuit_opener: MaybeOpener,
+        circuit_dialer: MaybeDialer,
     ) -> Self {
         Self(Arc::new(Inner {
             handlers,
             headers,
-            clients: Clients::default(),
+            clients: match circuit_opener {
+                Some(opener) => Clients::with_circuits(opener, circuit_dialer),
+                None => Clients::default(),
+            },
             write_timeout: SERVER_WRITE_TIMEOUT,
             rate_limit: watch::Sender::new(rate_limit),
             key_cache,
@@ -981,6 +1015,8 @@ impl RelayService {
     ///     key_cache,
     ///     Arc::new(AllowAll),
     ///     metrics,
+    ///     None, // Refuses circuits
+    ///     None, // Chains none
     /// );
     ///
     /// // Generate a self-signed certificate for HTTPS
@@ -1356,10 +1392,10 @@ mod tests {
         let addr = server.addr();
 
         for offered in [
-            "rotelyx_transport-relay-v2,rotelyx_transport-relay-v1",
-            "rotelyx_transport-relay-v1,rotelyx_transport-relay-v2",
-            "baz, rotelyx_transport-relay-v1, rotelyx_transport-relay-v2, boo",
-            "foo, rotelyx_transport-relay-v2, bar",
+            "rotelyx-relay-v2,rotelyx-relay-v1",
+            "rotelyx-relay-v1,rotelyx-relay-v2",
+            "baz, rotelyx-relay-v1, rotelyx-relay-v2, boo",
+            "foo, rotelyx-relay-v2, bar",
         ] {
             let ws_uri = format!("ws://{addr}{RELAY_PATH}");
             let (_stream, response) = tokio_websockets::ClientBuilder::new()
@@ -1489,6 +1525,8 @@ mod tests {
             KeyCache::test(),
             Arc::new(crate::server::AllowAll),
             metrics.clone(),
+            None,
+            None,
         );
 
         info!("Create client A and connect it to the server.");
@@ -1601,6 +1639,8 @@ mod tests {
             KeyCache::test(),
             Arc::new(crate::server::AllowAll),
             Default::default(),
+            None,
+            None,
         );
 
         info!("Create client A and connect it to the server.");

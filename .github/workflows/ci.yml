@@ -52,6 +52,35 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  transport:
+    # `cargo test --workspace` cannot reach crates/net: it is excluded from
+    # membership so upstream's lint config does not become ours. That was fine
+    # while the vendored code was only vendored. It is not fine now that we
+    # write in it: alias binding and the circuit frames are ours and live
+    # there. A subprotocol negotiation test sat broken in that crate through a
+    # rename because nothing ran it, so this job runs it.
+    name: vendored transport
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-features --manifest-path crates/net/rotelyx-relay-proto/Cargo.toml
+
+  chain:
+    # The only thing that covers a relay dialling another relay. Everything
+    # else about chaining runs inside one process, and the seam between the
+    # dialler and the TLS stack is exactly where the first defect was: the
+    # dialler asked for a crypto provider nothing installs, so every dial would
+    # have failed in production while every in-process test passed.
+    name: a circuit through two relays
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/chain-test
+
   lint:
     name: format and clippy
     runs-on: ubuntu-latest

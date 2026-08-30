@@ -451,6 +451,20 @@ pub struct Client {
 }
 
 impl Client {
+    /// A client over an in-memory pipe, for tests that need a relay to talk to
+    /// without one existing.
+    ///
+    /// Used by the link tests: what those are about is what a relay says to
+    /// another relay, and standing up a second server with certificates to hear
+    /// it would test TLS instead.
+    #[cfg(all(test, feature = "server"))]
+    pub(crate) fn test(io: tokio::io::DuplexStream) -> Self {
+        Self {
+            conn: Conn::test(io, crate::http::ProtocolVersion::V3),
+            local_addr: None,
+        }
+    }
+
     /// Splits the client into a sink and a stream.
     pub fn split(self) -> (ClientStream, ClientSink) {
         let (sink, stream) = split(self.conn);

@@ -16,8 +16,36 @@ path = "src/main.rs"
 rotelyx-relay-proto = { path = "../net/rotelyx-relay-proto", features = ["server"] }
 rotelyx-net.workspace = true
 
+# Opening a circuit descriptor is the same hybrid construction the message
+# layer uses, so this binary links it.
+#
+# What that does not change: a relay still cannot read a message, and the
+# reason is that it holds no message keys, not that it lacks the code. The
+# layering that does matter is kept: `rotelyx-relay-proto`, the vendored
+# transport, has no dependency on this and reaches the opening through a trait
+# that this crate implements.
+rotelyx-crypto.workspace = true
+
 anyhow.workspace = true
 clap.workspace = true
+data-encoding.workspace = true
+
+# Dialling another relay needs the crypto provider the TLS stack was built
+# with, and the resolver the transport uses. Both are the same ones the relay
+# already serves with; naming them here is what lets this crate hand the
+# transport a dialler instead of the transport inventing one.
+rotelyx-discovery = { path = "../net/rotelyx-discovery" }
+rustls = { version = "0.23", default-features = false }
+
+# Reading another relay's published circuit key, which is one HTTP GET.
+#
+# The same version and features the vendored transport already asks for, so
+# this binary carries one HTTP client and not two. `rustls-no-provider` means
+# the provider is chosen here rather than by the library, which is why `main`
+# installs one before serving.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls-no-provider",
+] }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -25,3 +53,8 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 # Only the tests build a `ClientRequest`, which needs request parts.
 http = "1"
+
+# The chained circuit test speaks the relay protocol as a client would, which
+# means driving a sink and a stream.
+rotelyx-future = { path = "../net/rotelyx-future" }
+bytes = "1"
