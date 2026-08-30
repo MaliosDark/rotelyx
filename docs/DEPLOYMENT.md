@@ -382,6 +382,56 @@ start on an empty allowlist rather than falling open. A relay that silently
 serves the whole internet is the failure nobody notices, because it works
 perfectly.
 
+### 4a. Circuits, which are off
+
+A relay does nothing about circuits unless its operator asks. Two separate
+decisions, and they are separate because they expose different things.
+
+**Terminating circuits** means being the far end of a chain: this relay learns a
+destination and never learns who called. It needs a key, made on first use, and
+an identity, because a descriptor is sealed to a named relay:
+
+```sh
+rotelyx-relay --bind 0.0.0.0:3340 --open \
+    --identity     ~/.local/state/rotelyx/relay.identity \
+    --circuit-key  ~/.local/state/rotelyx/relay.circuit
+```
+
+Both files are written `0600` at creation, not afterwards: a key that was
+briefly world readable was world readable. The identity's public half is this
+relay's endpoint id and is printed at startup; **keep the file**, because losing
+it renames the relay and every invitation naming the old name stops working. The
+circuit key is published at `/circuit-key` for callers' relays to fetch, and
+losing it costs only the ability to terminate circuits.
+
+**Carrying circuits onward** means dialling another relay named inside a sealed
+descriptor. Understand what that is before turning it on: **a stranger's circuit
+chooses the host your relay connects to.** Your relay reads that address first
+and nothing has vouched for it.
+
+```sh
+    --chain --chain-to /etc/rotelyx/peer-relays
+```
+
+`peer-relays` holds one relay URL per line, `#` starts a comment, and an empty
+file refuses to start rather than falling open, like the allowlist. Without
+`--chain-to`, `--chain` dials whatever a descriptor names and says so in a
+warning at startup. The comparison against the list is exact: a near miss is not
+a match.
+
+### 4b. Whose relay it is
+
+The landing page can carry an operator's name and mark:
+
+```sh
+    --operator "Some Name" --logo /path/to/mark.png
+```
+
+A PNG, at most 64 KiB, embedded in the page rather than linked, because the
+page's own policy forbids fetching anything. What the page says underneath does
+not change and is not configurable: it is a Rotelyx relay, it holds no keys, and
+it cannot read what passes through it. The mark says who runs it.
+
 ### Firewall
 
 The relay binds `0.0.0.0` because nginx is on another machine. That exposes port
@@ -550,6 +600,7 @@ substitute for loading the page and completing a handshake.
 | Mailbox persistence | Not implemented. A restart drops every uncollected envelope |
 | Push notifications | Not implemented |
 | Multi region relays | One region. Add more when there are users to justify them |
+| Relay chaining | **Protocol built and tested between two running relays. No client opens a circuit yet**, so turning the flags on changes nothing a user sees. See `docs/RELAY-CHAINING-PLAN.md` |
 
 ---
 
