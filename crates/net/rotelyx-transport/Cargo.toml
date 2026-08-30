@@ -524,9 +524,24 @@ features = ["env-filter"]
 [target.'cfg(target_os = "linux")'.dev-dependencies.ctor]
 version = "1.0"
 
+# The network simulation the NAT tests run in. Linux only: it builds
+# topologies in user namespaces.
+#
+# # Why no features
+#
+# This asked for `rotelyx-metrics`, which is not a feature `patchbay` has: the
+# rename that made this tree's own crates Rotelyx's renamed a feature belonging
+# to somebody else's crate, and the whole package stopped resolving. Nothing
+# here has ever run because of it.
+#
+# The name it should have been is `iroh-metrics`, and that is not the answer
+# either: it pulls `iroh-metrics` into the graph and the `contacts no third
+# party infrastructure` job refuses any package whose name starts with `iroh`.
+# The feature only wires patchbay's own reporting into that crate, which
+# nothing here reads, so it is not asked for at all.
 [target.'cfg(target_os = "linux")'.dev-dependencies.patchbay]
 version = "0.6"
-features = ["rotelyx-metrics"]
+default-features = false
 
 [target.'cfg(target_os = "linux")'.dev-dependencies.testdir]
 version = "0.10"

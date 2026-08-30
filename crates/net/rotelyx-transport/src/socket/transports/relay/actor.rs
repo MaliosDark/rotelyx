@@ -162,6 +162,8 @@ struct ActiveRelayActor {
     /// on reconnect, a dropped link would leave every address except the
     /// primary quietly unreachable, and nothing would report it.
     aliases: Vec<SecretKey>,
+    /// Where a peer whose circuit cannot be rebuilt is reported.
+    lost_circuits: LostCircuits,
     /// Peers whose traffic goes through a circuit, and the descriptors that
     /// open one.
     ///
@@ -171,6 +173,63 @@ struct ActiveRelayActor {
     /// is the one outcome somebody who asked for a circuit must not silently
     /// get, so it is re-opened rather than remembered as having once existed.
     circuits: Vec<PendingCircuit>,
+}
+
+/// How many times one connection re-opens a circuit that keeps closing.
+///
+/// A relay that refuses answers with a close, and a close is what asks for a
+/// re-open, so without this the two are a loop. Three is enough to ride out a
+/// relay restart and short of anything that looks like an attack on it.
+const MAX_CIRCUIT_REOPENS: u8 = 3;
+
+/// Peers whose circuit is gone and cannot be rebuilt from what is held.
+///
+/// # Why anybody needs to be told
+///
+/// A descriptor has an hour sealed into it and stops opening once that hour has
+/// passed. So a connection can re-open a circuit that dropped a moment ago and
+/// cannot re-open one that has been down since yesterday. When that happens the
+/// peer keeps its traffic **dropped** rather than addressed, which is the safe
+/// failure and is also a peer that has silently stopped working.
+///
+/// Somebody above has to seal a fresh descriptor, and this is how they find
+/// out. Watched rather than polled, so a caller learns at the moment it happens
+/// and not on whatever schedule it thought to ask on.
+///
+/// A peer leaves this set when a circuit is asked for again, which is the same
+/// call that fixes it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LostCircuits {
+    inner: Watchable<BTreeSet<EndpointId>>,
+}
+
+impl LostCircuits {
+    /// Records that `peer` needs a new descriptor.
+    fn lost(&self, peer: EndpointId) {
+        let mut set = self.inner.get();
+        if set.insert(peer) {
+            let _ = self.inner.set(set);
+        }
+    }
+
+    /// Records that `peer` has one again.
+    fn found(&self, peer: EndpointId) {
+        let mut set = self.inner.get();
+        if set.remove(&peer) {
+            let _ = self.inner.set(set);
+        }
+    }
+
+    /// Who needs a new descriptor right now.
+    ///
+    /// A snapshot rather than a watcher because that is what the endpoint above
+    /// exposes, and a watcher nothing subscribes to is a second way to ask the
+    /// same question. `Watchable` is underneath, so adding one later is a
+    /// method and not a rework.
+    pub(crate) fn now(&self) -> BTreeSet<EndpointId> {
+        self.inner.get()
+    }
+
 }
 
 /// A circuit somebody asked for, and the sealed layers that open it.
@@ -251,6 +310,8 @@ struct ActiveRelayActorOptions {
     my_relay: HomeRelayWatch,
     /// Keys to bind as aliases as soon as this relay connection is up.
     aliases: Vec<SecretKey>,
+    /// Where a peer whose circuit cannot be rebuilt is reported.
+    lost_circuits: LostCircuits,
 }
 
 /// Configuration needed to create a connection to a relay server.
@@ -315,6 +376,7 @@ impl ActiveRelayActor {
     fn new(opts: ActiveRelayActorOptions) -> Self {
         let ActiveRelayActorOptions {
             url,
+            lost_circuits,
             prio_inbox_: prio_inbox,
             inbox,
             relay_datagrams_send,
@@ -336,6 +398,7 @@ impl ActiveRelayActor {
             // behaves exactly as it did before circuits existed, which is the
             // property that keeps this change off the path everybody uses.
             circuits: Vec::new(),
+            lost_circuits,
             prio_inbox,
             inbox,
             relay_datagrams_recv,
@@ -619,6 +682,9 @@ impl ActiveRelayActor {
             established: false,
             circuits: HashMap::new(),
             by_circuit: HashMap::new(),
+            circuit_required: BTreeSet::new(),
+            reopen: std::collections::VecDeque::new(),
+            reopened: HashMap::new(),
             #[cfg(test)]
             test_pong: None,
         };
@@ -656,6 +722,7 @@ impl ActiveRelayActor {
             self.run_sending(fut, &mut state, &mut client_stream).await?;
             state.circuits.insert(circuit.peer, id);
             state.by_circuit.insert(id, circuit.peer);
+            state.circuit_required.insert(circuit.peer);
         }
 
         // A buffer to pass through multiple datagrams at once as an optimisation.
@@ -744,6 +811,15 @@ impl ActiveRelayActor {
                                     state.by_circuit.remove(&old);
                                 }
                                 state.by_circuit.insert(id, peer);
+                                // From here this peer is unreachable except
+                                // through a circuit, whatever happens to this
+                                // one.
+                                state.circuit_required.insert(peer);
+                                // A fresh descriptor is the fix, so asking with
+                                // one clears the report and the count that
+                                // stopped it being retried.
+                                state.reopened.remove(&peer);
+                                self.lost_circuits.found(peer);
                             }
                             self.remember_circuit(peer, sealed, inner);
                         }
@@ -803,19 +879,41 @@ impl ActiveRelayActor {
                     // mode: a connection with no circuits produces byte for
                     // byte what it did before circuits existed.
                     let circuits = state.circuits.clone();
-                    let packet_iter = send_datagrams_buf.drain(..).map(move |item| {
-                        metrics.send_relay.inc_by(item.datagrams.contents.len() as _);
-                        Ok(match circuits.get(&item.remote_endpoint) {
-                            Some(circuit) => ClientToRelayMsg::CircuitDatagrams {
-                                circuit: *circuit,
-                                datagrams: item.datagrams,
-                            },
-                            None => ClientToRelayMsg::Datagrams {
-                                dst_endpoint_id: item.remote_endpoint,
-                                datagrams: item.datagrams,
-                            },
-                        })
-                    });
+                    let required = state.circuit_required.clone();
+                    let packet_iter = send_datagrams_buf
+                        .drain(..)
+                        .filter_map(move |item| {
+                            match circuits.get(&item.remote_endpoint) {
+                                Some(circuit) => {
+                                    metrics
+                                        .send_relay
+                                        .inc_by(item.datagrams.contents.len() as _);
+                                    Some(Ok(ClientToRelayMsg::CircuitDatagrams {
+                                        circuit: *circuit,
+                                        datagrams: item.datagrams,
+                                    }))
+                                }
+                                // Asked for a circuit and has none right now.
+                                // Dropped rather than sent addressed: sending
+                                // it would carry this under the peer's name,
+                                // which is the one thing asking for a circuit
+                                // rules out, and would do it silently.
+                                None if required.contains(&item.remote_endpoint) => {
+                                    warn!("no circuit to that peer, dropping rather than \
+                                           sending under their name");
+                                    None
+                                }
+                                None => {
+                                    metrics
+                                        .send_relay
+                                        .inc_by(item.datagrams.contents.len() as _);
+                                    Some(Ok(ClientToRelayMsg::Datagrams {
+                                        dst_endpoint_id: item.remote_endpoint,
+                                        datagrams: item.datagrams,
+                                    }))
+                                }
+                            }
+                        });
                     let mut packet_stream = rotelyx_future::stream::iter(packet_iter);
                     let fut = client_sink.send_all(&mut packet_stream);
                     self.run_sending(fut, &mut state, &mut client_stream).await?;
@@ -829,6 +927,55 @@ impl ActiveRelayActor {
                             self.handle_relay_msg(msg, &mut state);
                             // reset the ping timer, we have just received a message
                             ping_interval.reset();
+
+                            // A circuit that closed is asked for again, with
+                            // the descriptor that opened it the first time.
+                            //
+                            // That descriptor has an hour sealed into it and
+                            // stops opening once the hour has passed, so this
+                            // recovers a link that dropped and does not recover
+                            // one that has been down since yesterday. When it
+                            // stops working the peer keeps its traffic dropped
+                            // rather than addressed, and somebody above has to
+                            // seal a fresh one. There is no channel to tell
+                            // them yet, which is what is still missing here.
+                            while let Some(peer) = state.reopen.pop_front() {
+                                let tries = state.reopened.entry(peer).or_default();
+                                if *tries >= MAX_CIRCUIT_REOPENS {
+                                    warn!(
+                                        "a circuit closed {MAX_CIRCUIT_REOPENS} times; \
+                                         traffic to that peer stays dropped rather than \
+                                         addressed"
+                                    );
+                                    // Told rather than only logged. A log is
+                                    // read afterwards by somebody wondering why
+                                    // a contact went quiet; this is read by the
+                                    // code that can seal a fresh descriptor and
+                                    // fix it.
+                                    self.lost_circuits.lost(peer);
+                                    continue;
+                                }
+                                *tries += 1;
+
+                                let Some(pending) =
+                                    self.circuits.iter().find(|c| c.peer == peer).cloned()
+                                else {
+                                    continue;
+                                };
+                                let Some(id) =
+                                    (1u32..).find(|n| !state.by_circuit.contains_key(n))
+                                else {
+                                    continue;
+                                };
+                                let fut = client_sink.send(ClientToRelayMsg::OpenCircuit {
+                                    circuit: id,
+                                    sealed: pending.sealed.clone(),
+                                    inner: pending.inner.clone(),
+                                });
+                                self.run_sending(fut, &mut state, &mut client_stream).await?;
+                                state.circuits.insert(peer, id);
+                                state.by_circuit.insert(id, peer);
+                            }
                         },
                         Err(err) => break Err(e!(RunError::ClientStreamRead, err)),
                     }
@@ -900,16 +1047,17 @@ impl ActiveRelayActor {
                 trace!(circuit, "the relay opened a circuit");
             }
             RelayToClientMsg::CircuitClosed { circuit, reason } => {
-                // The circuit is gone at the relay, so the entry has to go here
-                // too. Left in place, every datagram for that peer would be
-                // sent on a number the relay no longer knows and would vanish.
-                // Removed, they go out addressed to the peer instead, which is
-                // worse for the property and better for the connection, and is
-                // a decision the layer above should be making rather than this
-                // one. That is the next piece of work.
+                // Gone at the relay, so the number goes here too: a datagram on
+                // an id the relay has forgotten is refused and comes back as
+                // another close, which is a loop.
+                //
+                // The peer stays in `circuit_required`, so its traffic is
+                // dropped rather than sent addressed. It is re-opened below if
+                // there is still a descriptor that can open one.
                 if let Some(peer) = state.by_circuit.remove(&circuit) {
                     state.circuits.remove(&peer);
-                    warn!(circuit, reason, "a circuit closed, traffic is addressed again");
+                    warn!(circuit, reason, "a circuit closed");
+                    state.reopen.push_back(peer);
                 }
             }
             RelayToClientMsg::RelayKey { .. } => {
@@ -1054,6 +1202,40 @@ struct ConnectedRelayState {
     /// A circuit datagram carries a number and no endpoint id, which is the
     /// whole point of it, so the only way back to a peer is this table.
     by_circuit: HashMap<u32, EndpointId>,
+    /// Peers whose traffic must go through a circuit, open or not.
+    ///
+    /// # Why this is separate from the table above
+    ///
+    /// That table says which circuit a peer is on. This says a peer may not be
+    /// reached any other way. They come apart exactly when a circuit closes,
+    /// and that gap is the whole reason this exists: without it, a closed
+    /// circuit means the peer is no longer in `circuits`, and the send path
+    /// falls through to an addressed datagram. Somebody who asked for a circuit
+    /// would then have their traffic carried under their peer's name, with a
+    /// line in a log as the only sign.
+    ///
+    /// So a peer stays here from the moment a circuit is asked for. While no
+    /// circuit is open, traffic to them is **dropped**. That loses datagrams,
+    /// which is a failure somebody notices, rather than the property, which is
+    /// a failure nobody notices.
+    circuit_required: BTreeSet<EndpointId>,
+    /// Peers whose circuit closed and should be tried again.
+    ///
+    /// Queued rather than re-opened where the close arrives, because that runs
+    /// with no access to the sink: the read half and the write half of this
+    /// connection are separate and only the loop holds both.
+    reopen: std::collections::VecDeque<EndpointId>,
+    /// How many times each peer's circuit has been re-opened on this
+    /// connection.
+    ///
+    /// # Why this is counted rather than retried until it works
+    ///
+    /// A relay that refuses answers with a close, and a close is what triggers
+    /// a re-open. Without a bound those two are a loop that asks a relay to
+    /// open a circuit as fast as the network allows, for as long as the
+    /// connection lasts, which is a denial of service this endpoint would be
+    /// committing against a relay somebody else runs.
+    reopened: HashMap<EndpointId, u8>,
     #[cfg(test)]
     test_pong: Option<([u8; 8], oneshot::Sender<()>)>,
 }
@@ -1115,6 +1297,9 @@ pub(super) struct RelayActor {
     /// The tasks for the [`ActiveRelayActor`]s in `active_relays` above.
     active_relay_tasks: JoinSet<()>,
     cancel_token: CancellationToken,
+    /// Peers whose circuit is gone and needs a fresh descriptor, shared with
+    /// every relay connection and read from above.
+    lost_circuits: LostCircuits,
     /// Keys this endpoint also answers to, kept so a relay we connect to later
     /// learns about them too. Without this an alias bound before the relay was
     /// up, or before we moved to a new relay, would be silently forgotten.
@@ -1257,6 +1442,7 @@ impl RelayActor {
         config: Config,
         relay_datagram_recv_queue: mpsc::Sender<RelayRecvDatagram>,
         cancel_token: CancellationToken,
+        lost_circuits: LostCircuits,
     ) -> Self {
         Self {
             config,
@@ -1264,6 +1450,7 @@ impl RelayActor {
             active_relays: Default::default(),
             active_relay_tasks: JoinSet::new(),
             aliases: Vec::new(),
+            lost_circuits,
             cancel_token,
         }
     }
@@ -1553,6 +1740,7 @@ impl RelayActor {
             metrics: self.config.metrics.clone(),
             my_relay: self.config.my_relay.clone(),
             aliases: self.aliases.clone(),
+            lost_circuits: self.lost_circuits.clone(),
         };
         let actor = ActiveRelayActor::new(opts);
         self.active_relay_tasks.spawn(
@@ -1737,6 +1925,7 @@ mod tests {
         relay_datagrams_send: mpsc::Receiver<RelaySendItem>,
         relay_datagrams_recv: mpsc::Sender<RelayRecvDatagram>,
         span: tracing::Span,
+        lost_circuits: super::LostCircuits,
     ) -> AbortOnDropHandle<()> {
         let opts = ActiveRelayActorOptions {
             url,
@@ -1758,6 +1947,7 @@ mod tests {
             metrics: Default::default(),
             my_relay: Default::default(),
             aliases: Vec::new(),
+            lost_circuits,
         };
         let task = tokio::spawn(ActiveRelayActor::new(opts).run().instrument(span));
         AbortOnDropHandle::new(task)
@@ -1784,6 +1974,7 @@ mod tests {
             send_datagram_rx,
             recv_datagram_tx,
             info_span!("echo-endpoint"),
+            Default::default(),
         );
         let echo_task = tokio::spawn({
             let relay_url = relay_url.clone();
@@ -1880,6 +2071,7 @@ mod tests {
             send_datagram_rx,
             datagram_recv_tx.clone(),
             info_span!("actor-under-test"),
+            Default::default(),
         );
 
         // Send a datagram to our echo endpoint.
@@ -1962,6 +2154,112 @@ mod tests {
         Ok(())
     }
 
+    /// A peer whose circuit cannot be opened is never sent addressed.
+    ///
+    /// # What had to be arranged for this to test anything
+    ///
+    /// The first version of this test passed with the behaviour deliberately
+    /// broken. Asking for a circuit records the peer against a circuit id
+    /// straight away, so the datagram went out as a circuit frame the relay
+    /// refused rather than down the path being tested. It looked like a drop
+    /// and was not one.
+    ///
+    /// So it waits for the relay's refusals to play out first. This relay has
+    /// no opener, refuses, the actor re-opens up to its bound and then gives
+    /// up, and only then is the peer in the state this is about: required to go
+    /// through a circuit, and holding none. Waiting for the loss report is how
+    /// the test knows it has arrived there, and tests that report at the same
+    /// time.
+    #[tokio::test]
+    #[traced_test]
+    async fn a_peer_whose_circuit_will_not_open_is_never_addressed() -> Result {
+        let (_relay_map, relay_url, _server) = test_utils::run_relay_server().await?;
+        let (peer_endpoint, _echo_endpoint_task) = start_echo_endpoint(relay_url.clone());
+
+        let secret_key = SecretKey::from_bytes(&[1u8; 32]);
+        let (datagram_recv_tx, mut datagram_recv_rx) = mpsc::channel(16);
+        let (send_datagram_tx, send_datagram_rx) = mpsc::channel(16);
+        let (_prio_inbox_tx, prio_inbox_rx) = mpsc::channel(8);
+        let (inbox_tx, inbox_rx) = mpsc::channel(16);
+        let cancel_token = CancellationToken::new();
+        let lost = super::LostCircuits::default();
+        let _task = start_active_relay_actor(
+            secret_key,
+            cancel_token.clone(),
+            relay_url.clone(),
+            prio_inbox_rx,
+            inbox_rx,
+            send_datagram_rx,
+            datagram_recv_tx.clone(),
+            info_span!("actor-under-test"),
+            lost.clone(),
+        );
+
+        // The control. No circuit asked for, so this goes out addressed and
+        // comes back, which proves the path works and that the silence later is
+        // the change rather than a broken test.
+        send_recv_echo(
+            RelaySendItem {
+                remote_endpoint: peer_endpoint,
+                url: relay_url.clone(),
+                datagrams: Datagrams::from(b"addressed"),
+            },
+            &send_datagram_tx,
+            &mut datagram_recv_rx,
+        )
+        .await?;
+
+        // Ask for a circuit. This relay was given no opener, so it refuses, and
+        // keeps refusing until the actor stops asking.
+        inbox_tx
+            .send(ActiveRelayMessage::OpenCircuit {
+                peer: peer_endpoint,
+                // The right length, or the relay refuses it as a malformed
+                // frame and ends the connection rather than answering. That is
+                // the frame check doing its job and it is not what this is
+                // testing: what opens or does not open is the descriptor, and
+                // this relay has nothing to open one with.
+                sealed: bytes::Bytes::from(vec![
+                    0u8;
+                    rotelyx_relay_proto::protos::relay::SEALED_HOP_LEN
+                ]),
+                inner: bytes::Bytes::new(),
+            })
+            .await
+            .std_context("ask for a circuit")?;
+
+        // Wait until it has given up, which is when the peer is in the state
+        // this test is about.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !lost.now().contains(&peer_endpoint) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .std_context("the actor never reported the circuit as lost")?;
+
+        // Now the peer is required to go through a circuit and has none.
+        send_datagram_tx
+            .send(RelaySendItem {
+                remote_endpoint: peer_endpoint,
+                url: relay_url.clone(),
+                datagrams: Datagrams::from(b"must not be addressed"),
+            })
+            .await
+            .std_context("send")?;
+
+        let echoed =
+            tokio::time::timeout(Duration::from_secs(5), datagram_recv_rx.recv()).await;
+
+        assert!(
+            echoed.is_err(),
+            "a datagram for a peer with no circuit was sent addressed to them, \
+             which is the one thing asking for a circuit rules out"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     #[traced_test]
     async fn test_active_relay_inactive() -> Result {
@@ -1982,6 +2280,7 @@ mod tests {
             send_datagram_rx,
             datagram_recv_tx,
             info_span!("actor-under-test"),
+            Default::default(),
         );
 
         // Wait until the actor is connected to the relay server.

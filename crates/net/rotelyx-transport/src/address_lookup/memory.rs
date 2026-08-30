@@ -50,7 +50,7 @@ use super::{AddressLookup, EndpointData, EndpointInfo, Error, Item};
 /// // Create the Address Lookup and endpoint.
 /// let address_lookup = MemoryLookup::new();
 ///
-/// let _ep = Endpoint::builder(presets::N0)
+/// let _ep = Endpoint::builder(presets::Minimal)
 ///     .address_lookup(address_lookup.clone())
 ///     .bind()
 ///     .await?;
@@ -143,7 +143,7 @@ impl MemoryLookup {
     /// // create a MemoryLookup from the list of addrs.
     /// let address_lookup = MemoryLookup::from_endpoint_info(addrs);
     /// // create an endpoint with the memory lookup address_lookup
-    /// let endpoint = Endpoint::builder(presets::N0)
+    /// let endpoint = Endpoint::builder(presets::Minimal)
     ///     .address_lookup(address_lookup)
     ///     .bind()
     ///     .await?;

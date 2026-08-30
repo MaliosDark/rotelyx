@@ -39,7 +39,8 @@ pub(crate) use self::ip::Config as IpConfig;
 #[cfg(not(wasm_browser))]
 use self::ip::{IpNetworkChangeSender, IpTransports, IpTransportsSender};
 pub(crate) use self::relay::{
-    HomeRelayWatch, RelayActorConfig, RelayActorMessage, RelayConnectionState, RelayTransport,
+    HomeRelayWatch, LostCircuits, RelayActorConfig, RelayActorMessage, RelayConnectionState,
+    RelayTransport,
 };
 
 /// How many times all transports may error on `poll_recv` before we give up.
@@ -254,6 +255,15 @@ impl Transports {
     /// Taken before this object is moved into the QUIC endpoint, in the same
     /// way as the network change sender, because afterwards there is no way
     /// back to it.
+    /// Peers whose circuit is gone and needs a fresh descriptor, across every
+    /// relay this endpoint uses.
+    ///
+    /// Taken here for the same reason the binder is: after this object moves
+    /// into the QUIC endpoint there is no way back to it.
+    pub(crate) fn lost_circuits(&self) -> Vec<LostCircuits> {
+        self.relay.iter().map(|r| r.lost_circuits().clone()).collect()
+    }
+
     pub(crate) fn create_alias_binder(&self) -> RelayAliasBinder {
         RelayAliasBinder {
             relays: self.relay.iter().map(|r| r.alias_sender()).collect(),

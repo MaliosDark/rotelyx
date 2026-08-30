@@ -14,7 +14,7 @@
 //! # use rotelyx_error::{StackResultExt, StdResultExt};
 //! # async fn wrapper() -> rotelyx_error::Result<()> {
 //! let addr: EndpointAddr = todo!();
-//! let ep = Endpoint::bind(presets::N0).await?;
+//! let ep = Endpoint::bind(presets::Minimal).await?;
 //! let conn = ep.connect(addr, b"my-alpn").await?;
 //! let mut send_stream = conn.open_uni().await.std_context("unable to open uni")?;
 //! send_stream
@@ -34,7 +34,7 @@
 //! # use rotelyx_transport::{Endpoint, EndpointAddr, endpoint::presets};
 //! # use rotelyx_error::{StackResultExt, StdResultExt};
 //! # async fn wrapper() -> rotelyx_error::Result<()> {
-//! let ep = Endpoint::builder(presets::N0)
+//! let ep = Endpoint::builder(presets::Minimal)
 //!     .alpns(vec![b"my-alpn".to_vec()])
 //!     .bind()
 //!     .await?;
@@ -183,7 +183,7 @@
 //!
 //! async fn connect(addr: EndpointAddr) -> Result<()> {
 //!     // The Endpoint is the central object that manages an rotelyx_transport node.
-//!     let ep = Endpoint::bind(presets::N0).await?;
+//!     let ep = Endpoint::bind(presets::Minimal).await?;
 //!
 //!     // Establish a QUIC connection, open a bi-directional stream, exchange messages.
 //!     let conn = ep.connect(addr, b"hello-world").await?;
@@ -212,7 +212,7 @@
 //!
 //! async fn accept() -> Result<()> {
 //!     // To accept connections at least one ALPN must be configured.
-//!     let ep = Endpoint::builder(presets::N0)
+//!     let ep = Endpoint::builder(presets::Minimal)
 //!         .alpns(vec![b"hello-world".to_vec()])
 //!         .bind()
 //!         .await?;

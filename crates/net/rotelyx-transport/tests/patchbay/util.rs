@@ -5,7 +5,6 @@ use rotelyx_transport::{
     endpoint::{Connection, Path, PathEvent, presets},
     tls::CaTlsConfig,
 };
-use rotelyx_metrics::MetricsGroupSet;
 use rotelyx_error::{Result, StackResultExt, StdResultExt, anyerr, ensure_any};
 use rotelyx_future::{StreamExt, boxed::BoxFuture, task::AbortOnDropHandle};
 use rotelyx_quic::Side;
@@ -248,9 +247,14 @@ impl Pair {
 
                 // Wait until the client run function completed before dropping the endpoint.
                 barrier_server.wait().await;
-                for group in endpoint.metrics().groups() {
-                    dev.record_iroh_metrics(group);
-                }
+                // Upstream records the endpoint's metrics into the simulation's
+                // report here. Removed, because the method behind it is
+                // `patchbay`'s `iroh-metrics` feature, and asking for that
+                // pulls `iroh-metrics`, `netwatch`, `portmapper` and several
+                // `n0-*` crates into this tree. What it recorded is a metrics
+                // dump written after the run function has already finished and
+                // read by nobody here; what these tests are for is hole
+                // punching, and that is unchanged.
                 res
             }
             .instrument(error_span!("ep-server"))
@@ -289,9 +293,14 @@ impl Pair {
 
                 // Wait until the server run function completed before dropping the endpoint.
                 barrier_client.wait().await;
-                for group in endpoint.metrics().groups() {
-                    dev.record_iroh_metrics(group);
-                }
+                // Upstream records the endpoint's metrics into the simulation's
+                // report here. Removed, because the method behind it is
+                // `patchbay`'s `iroh-metrics` feature, and asking for that
+                // pulls `iroh-metrics`, `netwatch`, `portmapper` and several
+                // `n0-*` crates into this tree. What it recorded is a metrics
+                // dump written after the run function has already finished and
+                // read by nobody here; what these tests are for is hole
+                // punching, and that is unchanged.
                 res
             }
             .instrument(error_span!("ep-client"))

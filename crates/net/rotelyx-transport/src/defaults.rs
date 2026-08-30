@@ -32,28 +32,14 @@ pub(crate) mod timeouts {
     pub(crate) const NET_REPORT_TIMEOUT: Duration = Duration::from_secs(10);
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
-    use std::time::Duration;
-
-    use n0_tracing_test::traced_test;
-
-    use super::staging::NA_EAST_RELAY_HOSTNAME;
-    use crate::dns::DnsResolver;
-
-    const TIMEOUT: Duration = Duration::from_secs(5);
-    const STAGGERING_DELAYS: &[u64] = &[200, 300];
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_dns_lookup_ipv4_ipv6() {
-        let resolver = DnsResolver::new();
-        let res: Vec<_> = resolver
-            .lookup_ipv4_ipv6_staggered(NA_EAST_RELAY_HOSTNAME, TIMEOUT, STAGGERING_DELAYS)
-            .await
-            .unwrap()
-            .collect();
-        assert!(!res.is_empty());
-        dbg!(res);
-    }
-}
+// Rotelyx: upstream's one test here is deleted rather than repaired.
+//
+// It resolved `NA_EAST_RELAY_HOSTNAME`, a hostname belonging to the operator
+// whose relays and presets this tree has already removed, and asserted the
+// lookup returned something. So it tested that somebody else's DNS was up, over
+// the network, from a unit test, against infrastructure this project
+// deliberately does not use.
+//
+// The staging module it read that name from went with the presets, which is why
+// this stopped compiling and why every other test in this crate stopped
+// compiling with it. See `endpoint/presets.rs`.

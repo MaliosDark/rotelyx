@@ -458,11 +458,33 @@ ExitRelay::seal_circuit          two layers, one per relay
   same rule the relay follows, and `rotelyx-core` seals them because that is
   where an invitation's `ExitRelay` lives.
 
-**What is still not decided:** what to do when a relay closes a circuit
-mid-session. It currently falls back to addressed traffic and logs a warning,
-which keeps the connection and drops the property. Somebody who chose
-`PathPolicy::Chained` asked for the opposite. That decision belongs above the
-transport, and the code says so where it happens.
+**A circuit that closes does not become addressed traffic.** That was left
+undecided and is now decided the only way it can be: a peer stays marked as
+reachable only through a circuit from the moment one is asked for, and while
+none is open its traffic is **dropped**. Losing datagrams is a failure somebody
+notices; losing the property is a failure nobody notices, and it would have been
+carried out under the peer's own name with a line in a log as the only sign.
+
+The circuit is re-opened with the descriptor that opened it the first time, at
+most three times per connection. Three because a relay that refuses answers
+with a close and a close is what asks for a re-open: without a bound those two
+are a loop that asks a relay to open circuits as fast as the network allows, for
+as long as the connection lasts, which would be this endpoint attacking a relay
+somebody else runs.
+
+**And somebody is told when it cannot be fixed from here.** A descriptor has an
+hour sealed into it and stops opening once that hour has passed, so this
+recovers a link that dropped a moment ago and not one that has been down since
+yesterday. When the tries run out, the peer is reported through
+`NetEndpoint::circuits_needing_a_new_descriptor`, and the fix is to seal a fresh
+descriptor and call `route_through_circuit` again, which clears the report and
+the count together.
+
+Told rather than only logged, and the difference matters: a log is read
+afterwards by somebody wondering why a contact went quiet, and this is read by
+the code that can seal a descriptor and make them not quiet. A caller that
+ignores it has a contact who silently stopped working, which is the same failure
+the dropping was chosen to avoid, moved one layer up.
 
 ---
 

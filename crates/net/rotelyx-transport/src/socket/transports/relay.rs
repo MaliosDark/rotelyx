@@ -22,7 +22,8 @@ use crate::endpoint::RelayStatus;
 mod actor;
 
 pub(crate) use self::actor::{
-    Config as RelayActorConfig, HomeRelayWatch, RelayActorMessage, RelayConnectionState,
+    Config as RelayActorConfig, HomeRelayWatch, LostCircuits, RelayActorMessage,
+    RelayConnectionState,
 };
 use self::actor::{RelayActor, RelayRecvDatagram, RelaySendItem};
 
@@ -41,6 +42,8 @@ pub(crate) struct RelayTransport {
     _actor_handle: AbortOnDropHandle<()>,
     my_relay: HomeRelayWatch,
     my_endpoint_id: EndpointId,
+    /// Peers whose circuit is gone and needs a fresh descriptor.
+    lost_circuits: LostCircuits,
 }
 
 impl std::fmt::Display for RelayTransport {
@@ -70,7 +73,17 @@ impl RelayTransport {
         let my_endpoint_id = config.secret_key.public();
         let my_relay = config.my_relay.clone();
 
-        let relay_actor = RelayActor::new(config, relay_datagram_recv_tx, cancel_token);
+        // Shared rather than owned by the actor, because the point of it is to
+        // be read from outside: a peer whose circuit cannot be rebuilt needs a
+        // fresh descriptor from somebody above, and this is how they hear.
+        let lost_circuits = LostCircuits::default();
+
+        let relay_actor = RelayActor::new(
+            config,
+            relay_datagram_recv_tx,
+            cancel_token,
+            lost_circuits.clone(),
+        );
 
         let actor_handle = AbortOnDropHandle::new(task::spawn(
             async move {
@@ -89,7 +102,13 @@ impl RelayTransport {
             _actor_handle: actor_handle,
             my_relay,
             my_endpoint_id,
+            lost_circuits,
         }
+    }
+
+    /// Peers whose circuit is gone and needs a fresh descriptor.
+    pub(crate) fn lost_circuits(&self) -> &LostCircuits {
+        &self.lost_circuits
     }
 
     pub(crate) fn create_sender(&self) -> RelaySender {
@@ -339,7 +358,13 @@ mod tests {
     async fn test_relay_datagram_queue() {
         let capacity = 16;
         let (sender, mut receiver) = mpsc::channel(capacity);
-        let url = staging::default_na_east_relay().url;
+        // A name and nothing more: this test moves items through a queue in
+        // memory and never opens a socket. Upstream reached for its own
+        // operator's relay here, which was a real hostname standing in for a
+        // placeholder.
+        let url: RelayUrl = "https://relay.invalid"
+            .parse()
+            .expect("a url");
 
         let mut tasks = JoinSet::new();
 

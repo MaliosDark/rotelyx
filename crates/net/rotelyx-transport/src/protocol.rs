@@ -16,7 +16,7 @@
 //! #
 //! # #[cfg(with_crypto_provider)]
 //! # async fn test_compile() -> Result<(), BindError> {
-//! let endpoint = Endpoint::bind(presets::N0).await?;
+//! let endpoint = Endpoint::bind(presets::Minimal).await?;
 //!
 //! let router = Router::builder(endpoint).accept(b"/my/alpn", Echo).spawn();
 //! # Ok(())
@@ -80,7 +80,7 @@ use crate::{
 /// # use rotelyx_transport::{endpoint::{Connecting, presets}, protocol::{ProtocolHandler, Router}, Endpoint, EndpointAddr};
 /// #
 /// # async fn test_compile() -> rotelyx_error::Result<()> {
-/// let endpoint = Endpoint::bind(presets::N0).await?;
+/// let endpoint = Endpoint::bind(presets::Minimal).await?;
 ///
 /// let router = Router::builder(endpoint)
 ///     // .accept(&ALPN, <something>)

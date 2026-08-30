@@ -8,7 +8,7 @@
 //! # async fn wrapper() -> rotelyx_error::Result {
 //! use rotelyx_transport::{Endpoint, RelayMode, Watcher, endpoint::presets};
 //!
-//! let endpoint = Endpoint::builder(presets::N0).bind().await?;
+//! let endpoint = Endpoint::builder(presets::Minimal).bind().await?;
 //! # let _ = endpoint;
 //! # Ok(())
 //! # }

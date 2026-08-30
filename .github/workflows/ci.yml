@@ -67,6 +67,46 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features --manifest-path crates/net/rotelyx-relay-proto/Cargo.toml
 
+  transport:
+    # 107 tests in the vendored transport that had never compiled, let alone
+    # run. Thirty three of them named `presets::N0`, a preset this tree deleted
+    # on purpose because it registered infrastructure operated by somebody
+    # else, and one resolved that operator's DNS name and asserted it answered.
+    # Nothing said so, because nothing ran them.
+    name: vendored transport, unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo test --manifest-path crates/net/rotelyx-transport/Cargo.toml --lib
+
+  nat:
+    # Hole punching, which this project is built around and had never once
+    # exercised. Forty six tests in simulated network topologies: NATs of every
+    # hardness, a hard NAT that becomes punchable, an uplink that switches
+    # between v4 and v6, a link that goes down and comes back, degraded links.
+    #
+    # They were unrunnable, not missing. The manifest asked `patchbay` for a
+    # feature named `rotelyx-metrics`, which is not a feature it has: the rename
+    # that made this tree's crates Rotelyx's renamed one belonging to somebody
+    # else's crate, and the package stopped resolving. Nothing said so except a
+    # resolver error nobody was reading, because nothing ran these.
+    #
+    # One of them failed once in four runs, which is what a simulated network
+    # does. If this job goes red on a rerun that passed, that is the first thing
+    # to suspect.
+    name: nat traversal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo test --manifest-path crates/net/rotelyx-transport/Cargo.toml \
+            --test patchbay
+
   chain:
     # The only thing that covers a relay dialling another relay. Everything
     # else about chaining runs inside one process, and the seam between the

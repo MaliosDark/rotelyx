@@ -385,7 +385,7 @@ mod tests {
             Some(map) => RelayMode::Custom(map),
             None => RelayMode::Disabled,
         };
-        let mut builder = Endpoint::builder(presets::N0)
+        let mut builder = Endpoint::builder(presets::Minimal)
             .secret_key(secret_key)
             .relay_mode(relay_mode)
             .ca_tls_config(crate::tls::CaTlsConfig::insecure_skip_verify())

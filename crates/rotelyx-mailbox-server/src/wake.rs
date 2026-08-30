@@ -1017,6 +1017,168 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         assert_eq!(header["alg"], "RS256", "Google takes RS256 and not ES256");
     }
 
+    /// What this actually sends, read off the wire by a server that is not
+    /// Google.
+    ///
+    /// # Why this test exists
+    ///
+    /// Everything else here checks a value this module computed. This checks
+    /// the request it puts on a socket: that the assertion is exchanged at the
+    /// token endpoint, that the access token that comes back is the bearer on
+    /// the push, and that the push goes to the project's own URL. Those are
+    /// three places a mistake produces a phone that silently stops receiving,
+    /// and none of them are visible from the inside.
+    #[tokio::test]
+    async fn what_it_sends_is_what_google_asks_for() {
+        use axum::{Router, routing::post};
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct Seen {
+            token_body: String,
+            push_path: String,
+            push_auth: String,
+            push_body: String,
+        }
+
+        let seen = Arc::new(Mutex::new(Seen::default()));
+
+        let app = Router::new()
+            .route(
+                "/token",
+                post({
+                    let seen = seen.clone();
+                    move |body: String| async move {
+                        seen.lock().expect("not poisoned").token_body = body;
+                        r#"{"access_token":"an-access-token","expires_in":3599}"#
+                    }
+                }),
+            )
+            .route(
+                "/v1/projects/{project}/messages:send",
+                post({
+                    let seen = seen.clone();
+                    move |uri: axum::http::Uri,
+                          headers: axum::http::HeaderMap,
+                          body: String| async move {
+                        let mut seen = seen.lock().expect("not poisoned");
+                        seen.push_path = uri.path().to_owned();
+                        seen.push_auth = headers
+                            .get("authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned();
+                        seen.push_body = body;
+                        "{}"
+                    }
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let addr = listener.local_addr().expect("an address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let fcm = Fcm::new(&test_service_account())
+            .expect("a service account")
+            .at(format!("http://{addr}"));
+
+        let device = Device::registering("ab".repeat(32), "fcm".into(), "a-long-enough-secret");
+        fcm.wake(&device).await.expect("the push should be accepted");
+
+        let seen = seen.lock().expect("not poisoned");
+
+        // The assertion was exchanged, with the grant type Google requires.
+        assert!(
+            seen.token_body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth"),
+            "the token request did not carry the grant type: {}",
+            seen.token_body
+        );
+        assert!(
+            seen.token_body.contains("assertion=") && seen.token_body.contains('.'),
+            "the token request carried no assertion"
+        );
+
+        // The token that came back is what the push presented. A push that
+        // carried the assertion instead, or an empty bearer, is refused by
+        // Google with a message that says nothing about which of the two.
+        assert_eq!(
+            seen.push_auth, "Bearer an-access-token",
+            "the push did not present the access token that was just fetched"
+        );
+
+        // And it went to this project, not to a URL with the project missing.
+        assert_eq!(seen.push_path, "/v1/projects/rotelyx-test/messages:send");
+
+        // The payload names the device and says nothing else about it.
+        let body: serde_json::Value =
+            serde_json::from_str(&seen.push_body).expect("the push body is JSON");
+        assert_eq!(body["message"]["token"], device.token);
+        assert_eq!(
+            body["message"]["android"]["collapse_key"], "rotelyx-wake",
+            "three missed wakes should collapse into one"
+        );
+        assert!(
+            !seen.push_body.contains("tag") && !seen.push_body.contains("mailbox"),
+            "the push carries something about the conversation: {}",
+            seen.push_body
+        );
+    }
+
+    /// A second push reuses the access token rather than minting another.
+    ///
+    /// Google's tokens last an hour and minting one is a round trip. A server
+    /// that minted per push would add one to every wake, and would do it for
+    /// every device at once on every sweep.
+    #[tokio::test]
+    async fn the_access_token_is_fetched_once() {
+        use axum::{Router, routing::post};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let mints = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/token",
+                post({
+                    let mints = mints.clone();
+                    move || async move {
+                        mints.fetch_add(1, Ordering::SeqCst);
+                        r#"{"access_token":"an-access-token","expires_in":3599}"#
+                    }
+                }),
+            )
+            .route("/v1/projects/{project}/messages:send", post(|| async { "{}" }));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let addr = listener.local_addr().expect("an address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let fcm = Fcm::new(&test_service_account())
+            .expect("a service account")
+            .at(format!("http://{addr}"));
+        let device = Device::registering("ab".repeat(32), "fcm".into(), "a-long-enough-secret");
+
+        for _ in 0..3 {
+            fcm.wake(&device).await.expect("accepted");
+        }
+
+        assert_eq!(
+            mints.load(Ordering::SeqCst),
+            1,
+            "an access token was minted per push"
+        );
+    }
+
     /// A device registering for Android is accepted now, and was not before.
     #[test]
     fn an_android_device_may_register() {

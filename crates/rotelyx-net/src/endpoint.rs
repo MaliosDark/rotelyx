@@ -114,6 +114,25 @@ impl NetEndpoint {
         self.inner.route_through_circuit(url, peer, sealed, inner)
     }
 
+    /// Peers whose circuit is gone and needs a fresh descriptor.
+    ///
+    /// # Why a caller has to watch this
+    ///
+    /// A descriptor carries the hour it was sealed in and stops opening once
+    /// that hour has passed. So a circuit that drops is rebuilt from the one
+    /// already held, and one that has been down long enough is not. When that
+    /// happens the peer's traffic is **dropped rather than sent addressed**,
+    /// which keeps the property and stops the conversation.
+    ///
+    /// A caller that ignores this has a contact who silently went quiet. One
+    /// that watches it seals a fresh descriptor and calls
+    /// [`Self::route_through_circuit`] again, which is the fix.
+    ///
+    /// Empty is the ordinary case.
+    pub fn circuits_needing_a_new_descriptor(&self) -> std::collections::BTreeSet<EndpointId> {
+        self.inner.circuits_needing_a_new_descriptor()
+    }
+
     /// Which of this endpoint's addresses answered `session`.
     ///
     /// The caller names an address in the TLS server name, and one it does not

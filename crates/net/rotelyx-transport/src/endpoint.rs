@@ -342,7 +342,7 @@ impl Builder {
     /// # #[tokio::main]
     /// # async fn main() -> rotelyx_error::Result<()> {
     /// # use rotelyx_transport::{Endpoint, endpoint::presets};
-    /// let endpoint = Endpoint::builder(presets::N0)
+    /// let endpoint = Endpoint::builder(presets::Minimal)
     ///     .clear_ip_transports()
     ///     .bind_addr("127.0.0.1:0")?
     ///     .bind_addr("[::1]:0")?
@@ -422,7 +422,7 @@ impl Builder {
     /// # #[tokio::main]
     /// # async fn main() -> rotelyx_error::Result<()> {
     /// # use rotelyx_transport::{Endpoint, endpoint::{BindOpts, presets}};
-    /// let endpoint = Endpoint::builder(presets::N0)
+    /// let endpoint = Endpoint::builder(presets::Minimal)
     ///     .clear_ip_transports()
     ///     .bind_addr_with_opts("127.0.0.1:0", BindOpts::default().set_prefix_len(24))?
     ///     .bind_addr_with_opts("[::1]:0", BindOpts::default().set_prefix_len(48))?
@@ -1232,6 +1232,20 @@ impl Endpoint {
         self.inner.open_relay_circuit(url, peer, sealed, inner)
     }
 
+    /// Peers whose circuit is gone and needs a fresh descriptor.
+    ///
+    /// A descriptor has an hour sealed into it and stops opening once that hour
+    /// has passed, so a circuit that drops is rebuilt from the one held and a
+    /// circuit that has been down since yesterday is not. When that happens the
+    /// peer's traffic is **dropped**, never sent addressed, and this is how a
+    /// caller finds out it has to seal another and call
+    /// [`Self::route_through_circuit`] again.
+    ///
+    /// Empty is the ordinary case.
+    pub fn circuits_needing_a_new_descriptor(&self) -> std::collections::BTreeSet<EndpointId> {
+        self.inner.circuits_needing_a_new_descriptor()
+    }
+
     /// Which of this endpoint's addresses answered a caller that asked for
     /// `wanted`, where `wanted` is what the caller put in the TLS server name.
     ///
@@ -1279,7 +1293,7 @@ impl Endpoint {
     /// # async fn wrapper() -> rotelyx_error::Result<()> {
     /// use rotelyx_transport::{Endpoint, Watcher, endpoint::presets};
     ///
-    /// let endpoint = Endpoint::builder(presets::N0)
+    /// let endpoint = Endpoint::builder(presets::Minimal)
     ///     .alpns(vec![b"my-alpn".to_vec()])
     ///     .bind()
     ///     .await?;
@@ -1318,7 +1332,7 @@ impl Endpoint {
     /// # use rotelyx_future::StreamExt;
     /// # use tracing::info;
     /// # async fn wrapper() -> rotelyx_error::Result<()> {
-    /// let endpoint = Endpoint::bind(presets::N0).await?;
+    /// let endpoint = Endpoint::bind(presets::Minimal).await?;
     /// // We want to watch address changes in a different task, and stop our task
     /// // once the endpoint stops.
     /// let mut addr_stream = endpoint.watch_addr().stream();
@@ -1416,7 +1430,7 @@ impl Endpoint {
     /// // After this await returns, the endpoint is bound to a local socket.
     /// // It can be dialed, but almost certainly hasn't finished picking a
     /// // relay.
-    /// let endpoint = Endpoint::bind(presets::N0).await?;
+    /// let endpoint = Endpoint::bind(presets::Minimal).await?;
     ///
     /// // After this await returns we have a connection to at least one relay
     /// // and holepunching should work as expected.
@@ -1496,7 +1510,7 @@ impl Endpoint {
     ///
     /// # let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     /// # rt.block_on(async move {
-    /// let ep = Endpoint::bind(presets::N0).await.unwrap();
+    /// let ep = Endpoint::bind(presets::Minimal).await.unwrap();
     /// let _report = ep.net_report().initialized().await;
     /// # });
     /// # }
@@ -1576,7 +1590,7 @@ impl Endpoint {
     /// # use std::collections::BTreeMap;
     /// # use rotelyx_transport::endpoint::{Endpoint, presets};
     /// # async fn wrapper() -> rotelyx_error::Result<()> {
-    /// let endpoint = Endpoint::bind(presets::N0).await?;
+    /// let endpoint = Endpoint::bind(presets::Minimal).await?;
     /// assert_eq!(endpoint.metrics().socket.recv_datagrams.get(), 0);
     /// # Ok(())
     /// # }
@@ -1594,7 +1608,7 @@ impl Endpoint {
     /// # use rotelyx_metrics::{Metric, MetricsGroup, MetricValue, MetricsGroupSet};
     /// # use rotelyx_transport::endpoint::{Endpoint, presets};
     /// # async fn wrapper() -> rotelyx_error::Result<()> {
-    /// let endpoint = Endpoint::bind(presets::N0).await?;
+    /// let endpoint = Endpoint::bind(presets::Minimal).await?;
     /// let metrics: BTreeMap<String, MetricValue> = endpoint
     ///     .metrics()
     ///     .iter()
@@ -1617,7 +1631,7 @@ impl Endpoint {
     /// # use rotelyx_metrics::{Registry, MetricsSource};
     /// # use rotelyx_transport::endpoint::{Endpoint, presets};
     /// # async fn wrapper() -> rotelyx_error::Result<()> {
-    /// let endpoint = Endpoint::bind(presets::N0).await?;
+    /// let endpoint = Endpoint::bind(presets::Minimal).await?;
     /// let mut registry = Registry::default();
     /// registry.register_all(endpoint.metrics());
     /// let s = registry.encode_openmetrics_to_string()?;
@@ -1651,7 +1665,7 @@ impl Endpoint {
     ///     .std_context("spawn metrics server")?;
     ///
     /// // Spawn an endpoint and add the metrics to the registry.
-    /// let endpoint = Endpoint::bind(presets::N0).await?;
+    /// let endpoint = Endpoint::bind(presets::Minimal).await?;
     /// registry.write().unwrap().register_all(endpoint.metrics());
     ///
     /// // Fetch the metrics via HTTP.
@@ -1793,7 +1807,7 @@ impl Endpoint {
     /// # {
     /// # use rotelyx_transport::endpoint::{Endpoint, presets};
     /// # async fn wrapper() -> rotelyx_error::Result<()> {
-    /// let endpoint = Endpoint::bind(presets::N0).await?;
+    /// let endpoint = Endpoint::bind(presets::Minimal).await?;
     /// tokio::spawn(endpoint.closed().run_until(async move {
     ///     // the future will be aborted once the endpoint closes.
     /// }));
@@ -2419,7 +2433,7 @@ mod tests {
         let ep1 = {
             let span = info_span!("server");
             let _guard = span.enter();
-            Endpoint::builder(presets::N0)
+            Endpoint::builder(presets::Minimal)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .bind()
@@ -2428,7 +2442,7 @@ mod tests {
         let ep2 = {
             let span = info_span!("client");
             let _guard = span.enter();
-            Endpoint::builder(presets::N0)
+            Endpoint::builder(presets::Minimal)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .bind()
@@ -2489,7 +2503,7 @@ mod tests {
         ) -> Result<ConnectionError> {
             let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0u64);
             let secret = SecretKey::from_bytes(&rng.random());
-            let ep = Endpoint::builder(presets::N0)
+            let ep = Endpoint::builder(presets::Minimal)
                 .secret_key(secret)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .ca_tls_config(CaTlsConfig::insecure_skip_verify())
@@ -2536,7 +2550,7 @@ mod tests {
         ) -> Result {
             let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(1u64);
             let secret = SecretKey::from_bytes(&rng.random());
-            let ep = Endpoint::builder(presets::N0)
+            let ep = Endpoint::builder(presets::Minimal)
                 .secret_key(secret)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .ca_tls_config(CaTlsConfig::insecure_skip_verify())
@@ -2594,7 +2608,7 @@ mod tests {
         ) -> Result<ConnectionError> {
             let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0u64);
             let secret = SecretKey::from_bytes(&rng.random());
-            let ep = Endpoint::builder(presets::N0)
+            let ep = Endpoint::builder(presets::Minimal)
                 .secret_key(secret)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .ca_tls_config(CaTlsConfig::insecure_skip_verify())
@@ -2638,7 +2652,7 @@ mod tests {
         ) -> Result {
             let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(1u64);
             let secret = SecretKey::from_bytes(&rng.random());
-            let ep = Endpoint::builder(presets::N0)
+            let ep = Endpoint::builder(presets::Minimal)
                 .secret_key(secret)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .ca_tls_config(CaTlsConfig::insecure_skip_verify())
@@ -2694,7 +2708,7 @@ mod tests {
             node_addr_rx: oneshot::Receiver<EndpointAddr>,
         ) -> Result<()> {
             let secret = SecretKey::from([0u8; 32]);
-            let ep = Endpoint::builder(presets::N0)
+            let ep = Endpoint::builder(presets::Minimal)
                 .secret_key(secret)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .ca_tls_config(CaTlsConfig::insecure_skip_verify())
@@ -2744,7 +2758,7 @@ mod tests {
             node_addr_tx: oneshot::Sender<EndpointAddr>,
         ) -> Result<ConnectionError> {
             let secret = SecretKey::from([1u8; 32]);
-            let ep = Endpoint::builder(presets::N0)
+            let ep = Endpoint::builder(presets::Minimal)
                 .secret_key(secret)
                 .alpns(vec![TEST_ALPN.to_vec()])
                 .ca_tls_config(CaTlsConfig::insecure_skip_verify())
@@ -3928,7 +3942,7 @@ mod tests {
         // call endpoint.close
         // ensure methods behave in the expected way
         info!("Creating endpoint");
-        let ep = Endpoint::builder(presets::N0).bind().await?;
+        let ep = Endpoint::builder(presets::Minimal).bind().await?;
         let closed = ep.closed();
         info!("Closing endpoint");
         let now = Instant::now();
@@ -4035,7 +4049,7 @@ mod tests {
     #[traced_test]
     async fn test_closed_endpoint_unpolled_accept_fut() -> Result {
         info!("Creating endpoint");
-        let ep = Endpoint::builder(presets::N0).bind().await?;
+        let ep = Endpoint::builder(presets::Minimal).bind().await?;
 
         info!("Get accept future");
         let accept_fut = ep.accept();
@@ -4057,7 +4071,7 @@ mod tests {
     #[traced_test]
     async fn test_closed_endpoint_polled_accept_fut() -> Result {
         info!("Creating endpoint");
-        let ep = Endpoint::builder(presets::N0).bind().await?;
+        let ep = Endpoint::builder(presets::Minimal).bind().await?;
 
         info!("Run an accept task");
         let ep2 = ep.clone();

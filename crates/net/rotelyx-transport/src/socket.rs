@@ -336,6 +336,8 @@ impl ShutdownState {
 pub(crate) struct Socket {
     /// Asks the relays to also route packets addressed to another key here.
     alias_binder: transports::RelayAliasBinder,
+    /// Peers whose circuit is gone and needs a fresh descriptor, one per relay.
+    lost_circuits: Vec<transports::LostCircuits>,
     /// Read-only view of the per-remote `RemoteStateActor` inboxes.
     ///
     /// Lets callers send to an existing `RemoteStateActor` without going through
@@ -405,6 +407,19 @@ impl Socket {
     /// circuit opened: the relay answers that later, and a relay that refuses
     /// leaves traffic addressed. A caller that needs the guarantee has to watch
     /// for that rather than trust this.
+    /// Peers whose circuit is gone and needs a fresh descriptor.
+    ///
+    /// Gathered across every relay, because a peer reached through one relay's
+    /// circuit is that relay's to lose and a caller does not care which.
+    pub(crate) fn circuits_needing_a_new_descriptor(
+        &self,
+    ) -> std::collections::BTreeSet<EndpointId> {
+        self.lost_circuits
+            .iter()
+            .flat_map(|lost| lost.now())
+            .collect()
+    }
+
     pub(crate) fn open_relay_circuit(
         &self,
         url: RelayUrl,
@@ -1019,8 +1034,10 @@ impl EndpointInner {
         let home_relay_watch = transports.home_relay_watch();
 
         let alias_binder = transports.create_alias_binder();
+        let lost_circuits = transports.lost_circuits();
         let sock = Arc::new(Socket {
             alias_binder,
+            lost_circuits,
             remote_actors: remote_map.senders(),
             shutdown: shutdown_state,
             ipv6_reported,

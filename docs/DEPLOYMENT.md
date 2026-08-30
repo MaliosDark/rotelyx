@@ -606,13 +606,27 @@ substitute for loading the page and completing a handshake.
 
 ## 8. Outstanding field test
 
-The reason the relay exists at all is untested. Every test so far runs on
-loopback, which needs no hole punching, so NAT traversal has never been
-exercised.
+The reason the relay exists at all was untested, and is now half tested.
+
+**Simulated, and running.** `crates/net/rotelyx-transport/tests/patchbay.rs`
+builds network topologies in Linux user namespaces and puts 46 tests through
+them: NATs of every hardness including hard-to-hard, a hard NAT that becomes
+punchable, an uplink switching between v4 and v6 in every combination, a link
+that goes down and comes back, and degraded links. They run in CI now.
+
+They were never missing. The manifest asked `patchbay` for a feature it does not
+have, so the package would not resolve and nothing ran. One test failed once in
+four runs, which is what a simulated network does.
+
+**Still needed: two real networks.** A simulation says the code punches through
+the NATs somebody wrote a model of. It does not say what fraction of real
+networks a real pair of phones gets a direct path through, which is the number
+the path policy is chosen against.
 
 Needed:
 
 - [x] Relay running on a public address
+- [x] **Simulated NATs**, 46 tests, in CI
 - [x] **An instrument.** `rotelyx-cli probe` dials a peer and reports whether a
       direct path ever comes up
 - [ ] Two devices behind **different** NATs
