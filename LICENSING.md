@@ -84,6 +84,32 @@ contributions require the agreement in [docs/CLA.md](docs/CLA.md).
 
 Enquiries: see the repository owner.
 
+### Store builds
+
+Apple's terms restrict what a person may do with an app they download: install
+it on devices they own, and not pass it on. The AGPL says the opposite, that
+nobody may add restrictions on top of the rights it grants. Both cannot hold at
+once, which is why Apple removed VLC in 2011 after one of its authors objected.
+
+Only a copyright holder of code inside the app can raise that objection. Every
+AGPL line here is held by one person, and nothing the apps depend on is
+copyleft: `deny.toml` admits no GPL and no LGPL beyond one exception, on a
+target this project does not build for.
+
+So the binaries submitted to Apple and Google are distributed under the owner's
+own terms, while this repository stays AGPL and carries the same source. That is
+the dual licensing described above, applied to the project's own apps.
+
+It stops working the moment either half stops being true: a contribution taken
+without [docs/CLA.md](docs/CLA.md), or a copyleft dependency added. Both are
+refused for this reason and not only on taste.
+
+**This grants no exclusivity and is not meant to.** Anyone may build the code
+and publish an app of their own; the AGPL is what makes that permitted and
+Section 13 is what makes them publish their changes. What they may not do is
+call it Rotelyx, which is a question of the trademark above and not of any
+license.
+
 ## What is not in this repository
 
 No issuer secret, no operator keys, no customer records, no payment
