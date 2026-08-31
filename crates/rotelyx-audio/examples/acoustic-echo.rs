@@ -196,6 +196,9 @@ fn main() {
     println!("\n  the same, on short windows, each realigned:");
     let window = RATE / 2;
     let mut totals: Vec<f32> = Vec::new();
+    // Where each window had to be realigned to, kept so the slope can be read
+    // off afterwards. See the drift report below.
+    let mut alignments: Vec<(f64, f64)> = Vec::new();
     let mut at = 0usize;
     while at + window * 2 < played.len().min(heard.len().saturating_sub(delay)) {
         let far = &played[at..at + window];
@@ -210,6 +213,7 @@ fn main() {
             at += window;
             continue;
         };
+        alignments.push((at as f64, local as f64));
         let near_start = region_start + local;
         if near_start + window > heard.len() {
             break;
@@ -240,5 +244,74 @@ fn main() {
         println!("  {} dB", text.join(", "));
         println!("  mean {mean:.1} dB over {} windows", totals.len());
     }
+
+    // Which of the two explanations the gap has, measured rather than argued.
+    //
+    // The windowed figure realigns every half second and the whole-signal one
+    // does not, and the difference between them has two candidate causes: the
+    // clocks are apart, so a single alignment stops being right; or the
+    // canceller is restarted each window and what is being measured is
+    // convergence. They are told apart by whether the realignment **moves**.
+    //
+    // A speaker and a microphone on different crystals drift by hundreds of
+    // parts per million and the offset climbs steadily. Convergence does not
+    // move it at all: every window realigns to about the same place.
+    if alignments.len() >= 4 {
+        let n = alignments.len() as f64;
+        let mean_x = alignments.iter().map(|(x, _)| x).sum::<f64>() / n;
+        let mean_y = alignments.iter().map(|(_, y)| y).sum::<f64>() / n;
+        let cov: f64 = alignments
+            .iter()
+            .map(|(x, y)| (x - mean_x) * (y - mean_y))
+            .sum();
+        let var: f64 = alignments.iter().map(|(x, _)| (x - mean_x).powi(2)).sum();
+
+        // Samples of offset per sample of recording, which is parts per million
+        // once scaled. The sign says which side runs fast.
+        let ppm = if var > 0.0 { cov / var * 1e6 } else { 0.0 };
+
+        // How much of the movement that line actually explains.
+        //
+        // **A slope through scattered points is a number that looks like an
+        // answer.** The first version of this printed -2024 ppm from a spread of
+        // 471 ms, and said "which is drift". Drift it is not: two crystals a few
+        // hundred parts per million apart move the alignment by about eight
+        // milliseconds over twenty four seconds, not by half a second. What that
+        // slope was fitted to was a per-window delay estimate jumping between
+        // peaks, and a line through noise has a slope like anything else.
+        let ss_tot: f64 = alignments.iter().map(|(_, y)| (y - mean_y).powi(2)).sum();
+        let slope = if var > 0.0 { cov / var } else { 0.0 };
+        let ss_res: f64 = alignments
+            .iter()
+            .map(|(x, y)| (y - (mean_y + slope * (x - mean_x))).powi(2))
+            .sum();
+        let r2 = if ss_tot > 0.0 { 1.0 - ss_res / ss_tot } else { 0.0 };
+
+        let spread = {
+            let mut v: Vec<f64> = alignments.iter().map(|(_, y)| *y).collect();
+            v.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
+            v[v.len() - 1] - v[0]
+        };
+
+        println!();
+        println!(
+            "  realignment: {ppm:+.0} ppm slope, spread {:.0} ms, fit {r2:.2}",
+            spread * 1000.0 / RATE as f64
+        );
+
+        if r2 < 0.5 {
+            println!("  and that slope means nothing: the alignments are scattered, not");
+            println!("  on a line. What moves the window is the delay estimate picking a");
+            println!("  different peak, so this says the estimate is noisy and says");
+            println!("  nothing about the clocks. Sharpen it before reading a drift here.");
+        } else if ppm.abs() < 20.0 {
+            println!("  which is no drift: the two ends share a clock closely enough,");
+            println!("  so the gap above is the canceller converging and not alignment.");
+        } else {
+            println!("  which is drift: a single alignment cannot hold for a recording");
+            println!("  this long, and the gap above is at least partly that.");
+        }
+    }
+
     println!();
 }

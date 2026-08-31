@@ -222,6 +222,45 @@ enough to have been believed.
 
 ## Running them
 
+### A fourth attempt, and what it found instead
+
+The direct test of drift is whether the per-window realignment **moves**: clocks
+a few hundred parts per million apart move it steadily, convergence does not
+move it at all. `acoustic-echo` reports that slope now.
+
+It came back **-2024 ppm on one run and -4210 on the next**, both from a spread
+of 471 ms with a fit of 0.10. None of that is drift: two crystals 341 ppm apart
+move eight milliseconds over twenty four seconds, not half a second, and a
+number that doubles between runs is measuring nothing. The alignments are not on
+a line. The per-window estimate is picking different correlation peaks, which is
+what speech offers a half-second correlation: no sharp one to find.
+
+**So the tool refuses to read a drift out of it.** Below a fit of 0.5 it says
+the estimate is noisy and says nothing about clocks. The first version printed
+"-2024 ppm, which is drift", and that sentence was wrong in the way this
+document exists to catch: confident, plausible, and about the right quantity.
+
+The order of work is settled even though the cause is not. **Sharpen the delay
+estimate first.** Until a half-second window aligns to the same place twice,
+nothing measured through it separates drift from convergence.
+
+### The search had no bound, and that was worth more than the gap
+
+The estimate searched the whole recording for its peak. On a twenty-four second
+clip it found one **3295 ms out, with a correlation of 0.29**, on a recording
+whose real offset is about 650 ms: the harness records, waits four tenths of a
+second, then plays.
+
+Everything downstream aligned to a delay that does not exist. The canceller,
+handed a reference with no relation to what the microphone heard, adapted to
+noise and **added 7 dB of echo**. Bounded to two seconds it finds 650 ms at
+0.58, and the same canceller removes about 7 dB instead. **Nothing in `echo.rs`
+changed.**
+
+A weak correlation is now said out loud rather than used in silence, which is
+what let this sit unnoticed. Numbers in this document taken before that bound
+was added are not comparable to numbers taken after it.
+
     scripts/measure-echo [clip]
     scripts/measure-denoise [clip]
 

@@ -256,9 +256,35 @@ mod tests {
         let kept = energy(&out[tail..]);
         let spoken = energy(&voice[voice.len() - 48_000..]);
 
+        // Printed so a change of a few percent is visible without reading the
+        // source to find out what the bounds were.
+        let fraction = kept / spoken;
+        println!("  the voice keeps {:.0}% of its energy", fraction * 100.0);
+
+        // Bounded on both sides, and the reason for each is different.
+        //
+        // **Below**, because taking the voice out with the room is the failure
+        // this exists to catch. It measures 56% and the bound was 30%, which
+        // left room for the suppressor to get half again as destructive without
+        // anything failing: a guard that has stopped guarding. Fifty leaves six
+        // points for a legitimate change and catches a real one.
+        //
+        // **Above**, because a suppressor that does nothing passed. The input
+        // here is voice plus hiss, so leaving it untouched keeps *more* than the
+        // voice had, and every assertion below a hundred percent was satisfied
+        // by removing nothing at all. The other test in this module watches a
+        // held tone, which is a different signal and would not have caught it
+        // either.
         assert!(
-            kept > spoken * 0.3,
-            "the voice was taken out with the room: {kept:.5} left of {spoken:.5}"
+            fraction > 0.50,
+            "the voice was taken out with the room: {:.0}% left, and it measures 56",
+            fraction * 100.0
+        );
+        assert!(
+            fraction < 0.75,
+            "the suppressor kept {:.0}% of voice-plus-hiss, which is more voice \
+             than there was: it is not removing the hiss",
+            fraction * 100.0
         );
     }
 

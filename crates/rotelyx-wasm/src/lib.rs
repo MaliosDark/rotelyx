@@ -1619,6 +1619,68 @@ impl SessionKey {
         })
     }
 
+    /// A key the platform already holds, rather than one derived from a
+    /// passphrase.
+    ///
+    /// # Why this exists
+    ///
+    /// Android has a keystore and iOS has a secure enclave, and a key held
+    /// there is protected by hardware and by the device unlock rather than by
+    /// something a person can be made to say. Neither is reachable from this
+    /// crate: they are platform interfaces, and the part that belongs here is
+    /// being able to **take** the key those produce rather than insisting on
+    /// deriving one.
+    ///
+    /// The salt is still carried, and still random, so a blob sealed this way
+    /// has the same shape as any other and the two are not told apart on disk.
+    /// Nothing is derived from it in this path; it is there because the format
+    /// has a slot for it and a blob with an empty one would be a blob that
+    /// announces which kind of key opened it.
+    ///
+    /// **32 bytes, and they have to be a key.** This does no stretching, so
+    /// anything with less entropy than a key is worth less than a passphrase
+    /// would have been. Give it what a keystore returned, not something typed.
+    pub fn from_platform_key(key: &[u8]) -> Result<SessionKey, Error> {
+        let key: [u8; 32] = key
+            .try_into()
+            .map_err(|_| Error::new("a platform key is 32 bytes"))?;
+
+        let mut salt = [0u8; 16];
+        getrandom::fill(&mut salt).map_err(|e| Error::new(format!("entropy: {e}")))?;
+
+        Ok(SessionKey {
+            key: Zeroizing::new(key),
+            salt,
+        })
+    }
+
+    /// Open an existing blob with a key the platform holds.
+    ///
+    /// The blob's salt is read and ignored, for the reason in
+    /// [`Self::from_platform_key`]: it is carried so that every blob looks
+    /// alike, and nothing here is derived from it.
+    pub fn unlock_with_platform_key(key: &[u8], blob_b64: &str) -> Result<SessionKey, Error> {
+        let key: [u8; 32] = key
+            .try_into()
+            .map_err(|_| Error::new("a platform key is 32 bytes"))?;
+
+        let raw = decode(blob_b64)?;
+        if raw.len() < 25 {
+            return Err(Error::new("this is too short to be a sealed session"));
+        }
+        if &raw[..8] != SEAL_MAGIC {
+            return Err(Error::new("this is not a sealed Rotelyx session"));
+        }
+        let salt: [u8; 16] = raw[9..25]
+            .try_into()
+            .map_err(|_| Error::new("malformed header"))?;
+
+        Ok(SessionKey {
+            key: Zeroizing::new(key),
+            salt,
+        })
+    }
+
     /// Derive the key for an existing blob, whose salt travels inside it.
     pub fn unlock(passphrase: &str, blob_b64: &str) -> Result<SessionKey, Error> {
         let raw = decode(blob_b64)?;
@@ -2471,6 +2533,59 @@ mod tests {
             message_text(&group[0].receive(&payload).expect("decrypt")).expect("plaintext"),
             "vuelvo a estar"
         );
+    }
+
+    /// A key the platform holds seals and opens, and a passphrase does not open
+    /// it.
+    ///
+    /// The two paths produce blobs of the same shape on purpose, so what stops
+    /// them being confused is that neither key opens the other's. If a
+    /// passphrase-derived key ever opened a platform-sealed blob, the salt
+    /// would be doing work it is documented not to do.
+    #[test]
+    fn a_platform_key_seals_and_opens_and_a_passphrase_does_not() {
+        let group = group_of(2);
+        let platform = [7u8; 32];
+
+        let key = SessionKey::from_platform_key(&platform).expect("a platform key");
+        let sealed = group[1].seal_session(&key).expect("seal");
+
+        let same = SessionKey::unlock_with_platform_key(&platform, &sealed).expect("unlock");
+        assert!(
+            Session::unseal_session(&sealed, &same).is_ok(),
+            "the key that sealed it did not open it"
+        );
+
+        let mut other = platform;
+        other[0] ^= 1;
+        let wrong = SessionKey::unlock_with_platform_key(&other, &sealed).expect("a key");
+        assert!(
+            Session::unseal_session(&sealed, &wrong).is_err(),
+            "a key differing in one bit opened it"
+        );
+
+        // And a passphrase, however good, is not this key.
+        let typed = SessionKey::unlock("a passphrase long enough to pass", &sealed)
+            .expect("deriving is allowed; opening is what must fail");
+        assert!(
+            Session::unseal_session(&sealed, &typed).is_err(),
+            "a passphrase opened a blob sealed with a key the platform held"
+        );
+    }
+
+    /// A platform key is a key, not something typed.
+    ///
+    /// Nothing here stretches it, so anything shorter is worth less than the
+    /// passphrase path it replaces. Refused rather than padded.
+    #[test]
+    fn a_platform_key_that_is_not_32_bytes_is_refused() {
+        for len in [0usize, 1, 16, 31, 33, 64] {
+            assert!(
+                SessionKey::from_platform_key(&vec![0u8; len]).is_err(),
+                "{len} bytes was accepted as a platform key"
+            );
+        }
+        assert!(SessionKey::from_platform_key(&[0u8; 32]).is_ok());
     }
 
     /// The blob is the whole participant. Without the passphrase it must be

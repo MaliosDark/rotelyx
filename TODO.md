@@ -267,9 +267,20 @@ Everything needed for this is built.
       without anybody noticing, and `scripts/browser-test/run` now fails if it
       does
 
-- [ ] Measure hole punch success rate across NAT types
+- [ ] Measure hole punch success rate across NAT types. **Simulated: done**, 46
+      tests in `crates/net/rotelyx-transport/tests/patchbay.rs`, NATs of every
+      hardness including hard against hard, in CI. **Real networks: not done**,
+      and a simulation only says the code punches through the NATs somebody
+      wrote a model of. `rotelyx-cli probe` is the instrument and prints one
+      record per run; it needs two machines on different networks and enough
+      runs for a rate to mean something
 - [ ] Measure how often `PreferDirect` costs a connection that `Fastest` would
-      have kept
+      have kept. **Not started, and deliberately behind the one above.** It
+      needs the latency of both paths at the moment the choice is made, and the
+      transport does not expose it: `TransportAddrInfo` carries an address and
+      how it is used, and no timing. Surfacing it is transport work, and doing
+      that to feed a second instrument before the first one has produced a
+      single number would be building two things to measure nothing
 
 ### 2. Published test vectors for the post quantum composition
 
@@ -292,7 +303,30 @@ Everything needed for this is built.
       removed: it refused nobody unwilling to be refused. See section 3, where
       blocking became withdrawing an invitation
 - [ ] Derive the sealing key from the device keystore rather than a passphrase,
-      where the platform offers one
+      where the platform offers one. **The engine half is done and was the part
+      blocking it:** `SessionKey::from_platform_key` and
+      `unlock_with_platform_key` take the 32 bytes a keystore or a secure
+      enclave returns, so the platform no longer has to make one up and hand it
+      over as a passphrase.
+
+      A blob sealed that way has the same shape as any other, salt included, so
+      the two are not told apart on disk. Nothing is derived from that salt in
+      this path; it is carried because the format has a slot and a blob with an
+      empty one would announce which kind of key opened it. Nothing is
+      stretched either, so **what goes in has to be a key**: anything typed is
+      worth less here than it was on the passphrase path, and 32 bytes is
+      enforced rather than padded.
+
+      **And it is reachable.** The ABI had only `key.create` and `key.unlock`,
+      both taking a passphrase, so the engine's new path would have been
+      unusable from the one place a keystore lives. `key.fromPlatformKey` and
+      `key.unlockWithPlatformKey` are in the ABI and in `docs/MOBILE.md`, which
+      the parity guard checks.
+
+      What is left is per platform and lives in the app: the Android keystore
+      and the iOS enclave are interfaces neither this crate nor the engine can
+      call, and the browser has no equivalent, which is why the passphrase path
+      stays
 - [x] **Encrypted MLS group state at rest, in the browser.** It was the only
       client that kept any when this was written; the native clients and the
       phone keep theirs now, sealed the same way, in the two items below.
@@ -1028,7 +1062,14 @@ wide margin the largest single task remaining in the project.
       about a tenth today because the base is 86% of a frame and 44% of the base
       is the envelope. Grouped energy coding takes 20.3 bytes to 12.4 but needs
       200 ms of batching: wire it into the mailbox path, where the latency is
-      affordable, and leave calls on the per-frame path
+      affordable, and leave calls on the per-frame path.
+
+      **There is no mailbox path for audio to wire it into.** `rotelyx-codec`
+      is used by calls, per frame; the mailbox carries sealed text. Nothing
+      stops a voice note, since an envelope holds whatever ciphertext it is
+      given, and nothing builds one either. `grouped` is written, measured and
+      called by nobody, and it stays that way until somebody decides voice notes
+      are a feature. That is a product decision and not a piece of plumbing
 - [x] **An arithmetic coder**, in `rotelyx-codec::entropy`, with an adaptive
       model that is never transmitted. A constant source costs 0.013 bits per
       symbol; an incompressible one costs 1.008, which is the theoretical floor
@@ -1475,7 +1516,38 @@ wide margin the largest single task remaining in the project.
       four-second recording, and it does not survive twenty-four seconds and 46
       windows. Restarting the canceller is part of what the windowed measurement
       does, so some of the gap may be convergence rather than alignment, and a
-      delay estimate is the next thing to try
+      delay estimate is the next thing to try.
+
+      **The delay estimate was tried, and it is not good enough to answer the
+      question with.** `acoustic-echo` now reports the slope of the per-window
+      realignment, which is the direct test: clocks a few hundred parts per
+      million apart move the alignment steadily, and convergence does not move
+      it at all. What came back was **-2024 ppm on one run and -4210 on the
+      next, both from a spread of 471 ms with a fit of 0.10.**
+
+      None of that is drift. Two crystals 341 ppm apart move eight milliseconds
+      over twenty four seconds, not half a second, and a figure that changes by
+      a factor of two between runs is measuring nothing. The alignments are not
+      on a line: the per-window estimate is picking different correlation peaks
+      in speech, which has no sharp autocorrelation to find.
+
+      **The tool says so rather than printing the number.** It refuses to read a
+      drift out of a fit below 0.5, because the first version of it printed
+      "-2024 ppm, which is drift" and that sentence was wrong in the way that is
+      hardest to catch: confident, plausible, and about the right quantity.
+
+      So the order of work is settled even though the cause is not. **Sharpen
+      the delay estimate first.** Until a half-second window aligns to the same
+      place twice, nothing measured through it separates drift from convergence
+
+      **And a separate finding, worth more than the above.** The estimate had no
+      upper bound and searched the whole recording, so it found a peak 3295 ms
+      out, on a recording whose real offset is 650. Everything downstream
+      aligned to a delay that does not exist and the canceller, handed a
+      reference unrelated to what the microphone heard, **added 7 dB of echo**.
+      Bounded to two seconds, the same canceller removes 7. Nothing in
+      `echo.rs` changed. The numbers at the top of this entry were taken with
+      the unbounded search and are not comparable to anything measured now
 - [x] **Measured the noise suppressor against a real room.** It removes
       **12.9 dB** from synthetic hiss added to the clip and **4.8 dB** from a real
       one, stable across runs to a tenth of a decibel. `docs/ACOUSTIC.md`,
@@ -1495,12 +1567,25 @@ wide margin the largest single task remaining in the project.
       above the same room with nothing playing, so they are the noise floor with
       a little tail on top. The tool records the quiet room now and prints that
       number, because the story was good enough to have been believed
-- [ ] **The suppressor costs 2.4 dB of speech, and the test allows 5.2.** Both
-      the synthetic and the acoustic runs keep 56 to 58 percent of the speech
-      energy, which is a real cost paid whether the noise was worth removing or
-      not. `a_voice_survives` asks only that more than 30 percent survives. That
-      bound is loose enough for the suppressor to get considerably worse without
-      anything failing, which is the shape of a guard that stops guarding
+- [x] **The guard is bounded on both sides now, and the second side mattered
+      more.** `a_voice_survives` asked only that more than 30 percent of the
+      speech energy survived, while the suppressor keeps 56, which left room for
+      it to get half again as destructive without anything failing.
+
+      That much the entry already said. What it did not say is that **a
+      suppressor doing nothing at all passed.** The input is voice plus hiss, so
+      leaving it untouched keeps *more* energy than the voice had: sabotaged to
+      return its input unchanged, the test reported 136 percent and passed every
+      assertion. The other test in the module watches a held tone, a different
+      signal, and would not have caught it either.
+
+      Bounded above and below now, and the measured figure is printed so a
+      change of a few points is visible without reading the source to find out
+      what the bound was. Both bounds were checked by breaking the code they
+      guard.
+
+      The 2.4 dB of speech the suppressor costs is unchanged and still real. It
+      is a cost paid whether the noise was worth removing or not
 
 ### 7. Mobile clients
 
@@ -1659,8 +1744,10 @@ wide margin the largest single task remaining in the project.
       copy are the same bytes, `d95035a6`, and `test/shipped_engine_test.dart`
       fails if they drift again
 
-- [ ] **Redeploy `site/`. The live one is behind, and mixing it with a current
-      client fails one time in eight.** This session changed the MLS credential
+- [x] **Redeploy `site/`. The live one was behind, and mixing it with a current
+      client failed one time in eight.** Done, and verified from outside with
+      `scripts/verify-deployment https://rotelyx.com`: the page and the engine it
+      loads are the same build as this source. This session changed the MLS credential
       from the person's bytes to `person_len ‖ person ‖ device`, so devices could
       be separate leaves. Both ends of this repository were changed together and
       every test passed, which is exactly why nothing caught it: a suite where
@@ -1944,55 +2031,30 @@ outside firm. See `docs/THREAT-MODEL.md` section 5 for the full list of gates.
 
 ### A spent allowance is silent on two of the three clients
 
-- [ ] **`overQuota` is handled by the browser and by nobody else.** When the
-      period's allowance is spent the server refuses the deposit and replies
-      with the limit, what was used, and the tier. `site/chat.html` puts that on
-      screen. The phone's reply switch has no case for it and no default, and
-      `rotelyx-mailbox-client` folds it into `Reply::Other`, whose comment used
-      to justify that by saying quotas belong to a phone. They do not: an
-      unauthenticated caller is issued a free capability and metered like any
-      other, so a desktop hits the same wall.
+- [x] **`overQuota` is handled everywhere now.** It was the browser only: the
+      phone's reply switch had no case for it and `rotelyx-mailbox-client` folded
+      it into `Reply::Other`, so on both a refused deposit returned as though it
+      had worked. The message was not stored and the sender was not told, which
+      is the same shape as the fan-out defect and the reason that one survived:
+      a refusal that produces no error looks exactly like success.
 
-      On both, `deposit` returns as though it worked. The message is not stored
-      and the sender is not told, which is the same shape as the fan-out defect
-      and the reason that one survived: a refusal that produces no error looks
-      exactly like success.
+      The Rust client has `Reply::OverQuota` and fails on it. The phone handles
+      it in `mailbox_client.dart`, whose doc now carries the rule that stops this
+      recurring: **every reply saying a request failed has a case here.**
 
-      The free allowance is 64 MiB a period, so text alone will not reach it,
-      about sixty five thousand messages at the 1 KiB floor. Attachments will.
+- [x] **`Collected` is sent by every client now.** It was the Rust one only.
+      Delivery peeks and removal waits for an acknowledgement, which is the P-4
+      fix, so an envelope nobody acknowledged sat in the mailbox for its whole
+      seven-day TTL: a seized disk yielded seven days of ciphertext rather than
+      only what was never delivered, a tag filled its 256 slots and the server
+      refused further deposits, and every reconnect re-downloaded the backlog.
 
----
+      `site/chat.html` sends it. The phone sends it from `rotelyx_service.dart`,
+      using the receipt the engine hands it through `mailbox.receiptFor`.
 
-### The phone and the browser never acknowledge, so nothing they receive is removed
-
-- [ ] **`Collected` is sent by the Rust client and by nobody else.** Delivery
-      peeks and removal waits for an acknowledgement, which is the P-4 fix. The
-      desktop and terminal clients send it, in
-      `rotelyx-mailbox-client::collected`. The phone does not and `site/chat.html`
-      does not, so every envelope those two receive stays in the mailbox for the
-      full seven-day TTL.
-
-      Three consequences, in the order they matter.
-
-      **Retention.** `rotelyx_store.dart` opens by saying the mailbox keeps
-      nothing and that an envelope is removed when it is collected. For this
-      client that is false: a seized disk yields seven days of ciphertext rather
-      than only what was never delivered. Content stays unreadable, and the
-      seizure-resistance argument is still weaker than the document claims.
-
-      **A tag fills.** `MAX_PER_TAG` is 256. Nothing is removed, so a
-      conversation past 256 messages inside one TTL fills the recipient's tag
-      and the server refuses further deposits: messages lost, to the sender's
-      eye silently. That is the one a user would meet.
-
-      **Re-delivery.** Every reconnect re-downloads the whole backlog. MLS
-      refuses the replays so nothing is shown twice, which is exactly why this
-      has not been noticed: the failure is invisible from the screen and costs
-      battery and bandwidth on a phone.
-
-      The fix is one message per client, naming the digests it opened. The
-      server already refuses a receipt for a tag the connection is not listening
-      on, so the receipt is not a capability.
+      **Read out of the code rather than believed from here**, because this
+      entry said otherwise long after it had stopped being true, and was
+      repeated as a live defect on the strength of that.
 
 ---
 

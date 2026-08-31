@@ -164,6 +164,8 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `session.free` | `handle` | bool |
 | `key.create` | `passphrase` | key handle |
 | `key.unlock` | `passphrase`, `blob` | key handle |
+| `key.fromPlatformKey` | `key` | key handle |
+| `key.unlockWithPlatformKey` | `key`, `blob` | key handle |
 | `key.free` | `handle` | bool |
 | `key.sealBlob` | `key`, `data` | sealed |
 | `key.openBlob` | `key`, `blob` | data |
@@ -289,6 +291,62 @@ must not carry the build machine's username.
 
 Copy `target/mobile/jniLibs` into the app's
 `android/app/src/main/jniLibs`, and Flutter packages it.
+
+## A key the platform holds
+
+`key.create` and `key.unlock` derive the sealing key from a passphrase with
+Argon2id at 64 MiB. That is right in a browser, which has nothing better, and it
+is not right on a phone: Android has a keystore and iOS a secure enclave, and a
+key held there is protected by hardware and by the device unlock rather than by
+something a person can be made to say.
+
+Neither is reachable from this engine, so the application fetches the key and
+passes it:
+
+```json
+{"op": "key.fromPlatformKey", "key": "<32 bytes, base64url>"}
+{"op": "key.unlockWithPlatformKey", "key": "<same>", "blob": "<sealed>"}
+```
+
+**What goes in has to be a key.** Nothing here stretches it, so anything typed
+is worth *less* on this path than it would have been on the passphrase one.
+Exactly 32 bytes, refused rather than padded. Give it what the keystore
+returned.
+
+A blob sealed this way looks like any other, salt included, so the two are not
+told apart on disk. Nothing is derived from that salt here; it is carried
+because the format has a slot for it, and a blob with an empty one would
+announce which kind of key opens it.
+
+## Saying an envelope arrived
+
+The mailbox does not remove an envelope when it hands it over. It **peeks**, and
+removes on an acknowledgement, so that a delivery that never reached anybody is
+still there to try again. That means an application which does not acknowledge
+leaves everything it has already read sitting in the mailbox.
+
+```json
+{"op": "collected", "digests": ["<hex>", ...]}
+```
+
+The digest comes from the engine: `mailbox.receiptFor` with the envelope, which
+needs no handle. It is a hash of what arrived, not a capability: the server
+refuses a receipt for a tag the connection is not listening on.
+
+### What it costs to skip, which is not obvious
+
+An application that reads and never acknowledges works perfectly. Nothing fails,
+nothing is shown twice, and three things go wrong out of sight:
+
+- **Retention.** Every envelope stays for the full seven-day TTL. A seized disk
+  yields seven days of ciphertext rather than only what was never delivered.
+  The content stays unreadable either way; what leaks is who had post waiting.
+- **Delivery stops.** A tag holds 256 envelopes. Once it fills, the server
+  refuses further deposits and the **sender is not told**, so messages are lost
+  silently. That is the one a user meets.
+- **Battery.** Every reconnect re-downloads the whole backlog. MLS refuses the
+  replays so nothing appears twice, which is exactly why this is invisible from
+  the screen.
 
 ## Waking a phone that is not running
 

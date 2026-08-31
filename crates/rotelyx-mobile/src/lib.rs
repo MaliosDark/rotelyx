@@ -216,6 +216,35 @@ fn dispatch(req: &Value) -> Res {
             lock().keys.insert(handle, key);
             return Ok(json!(handle));
         }
+        // The two below take a key the platform already holds, rather than
+        // deriving one. Base64url because this ABI carries JSON and raw bytes
+        // have no home in it; what arrives has to decode to exactly 32.
+        //
+        // Without these the engine's platform-key path is unreachable from an
+        // application, which is where a keystore lives: the Android keystore
+        // and the iOS enclave are interfaces neither this crate nor the engine
+        // can call.
+        "key.fromPlatformKey" => {
+            let key = str_arg(req, "key")?;
+            let raw = data_encoding::BASE64URL_NOPAD
+                .decode(key.as_bytes())
+                .map_err(|_| "the key is not base64url".to_owned())?;
+            let key = engine(SessionKey::from_platform_key(&raw))?;
+            let handle = next_handle();
+            lock().keys.insert(handle, key);
+            return Ok(json!(handle));
+        }
+        "key.unlockWithPlatformKey" => {
+            let key = str_arg(req, "key")?;
+            let blob = str_arg(req, "blob")?;
+            let raw = data_encoding::BASE64URL_NOPAD
+                .decode(key.as_bytes())
+                .map_err(|_| "the key is not base64url".to_owned())?;
+            let key = engine(SessionKey::unlock_with_platform_key(&raw, &blob))?;
+            let handle = next_handle();
+            lock().keys.insert(handle, key);
+            return Ok(json!(handle));
+        }
         "key.free" => {
             let handle = u64_arg(req, "handle")?;
             return Ok(json!(lock().keys.remove(&handle).is_some()));
