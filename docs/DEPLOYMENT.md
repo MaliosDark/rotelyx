@@ -615,8 +615,14 @@ punchable, an uplink switching between v4 and v6 in every combination, a link
 that goes down and comes back, and degraded links. They run in CI now.
 
 They were never missing. The manifest asked `patchbay` for a feature it does not
-have, so the package would not resolve and nothing ran. One test failed once in
-four runs, which is what a simulated network does.
+have, so the package would not resolve and nothing ran.
+
+One of them fails now and then, which is what a simulated network does: real
+packets timed through topologies in user namespaces. **The CI job runs the suite
+twice before calling it a failure**, and prints which attempt succeeded. Once,
+not until it passes: an unbounded retry turns a test that fails half the time
+into one that always passes, and a suite that starts needing the second attempt
+every time should be visible rather than tolerated.
 
 **Still needed: two real networks.** A simulation says the code punches through
 the NATs somebody wrote a model of. It does not say what fraction of real

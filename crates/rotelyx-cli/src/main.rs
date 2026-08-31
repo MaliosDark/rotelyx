@@ -1244,12 +1244,14 @@ fn probing_config(relay: Option<&str>) -> Result<NetConfig> {
 /// Observed rather than assumed: with `--relay` set, the address printed was
 ///
 /// ```text
-/// {"id":"3b427d3f...","addrs":[{"Ip":"192.168.68.46:56860"}]}
+/// {"id":"3b427d3f...","addrs":[{"Ip":"192.0.2.17:56860"}]}
 /// ```
 ///
 /// which is the operator's LAN address published to whoever they send an
 /// invitation to, on the one configuration whose entire purpose is not
-/// revealing it.
+/// revealing it. The address above is written from the documentation range
+/// rather than the one that was actually seen, for the same reason this
+/// function exists.
 ///
 /// The transport is not wrong to know its own addresses. What was wrong was
 /// printing all of them regardless of what the session would do with them.
@@ -1294,7 +1296,10 @@ mod tests {
         let id = rotelyx_net::SecretKey::generate().public();
         let mut addr = EndpointAddr::from(id);
         addr.addrs.insert(TransportAddr::Ip(
-            "192.168.68.46:56860".parse().expect("a socket address"),
+            // Documentation range, not a real network. This file is about not
+            // publishing somebody's address and would be a poor place to
+            // publish one.
+            "192.0.2.17:56860".parse().expect("a socket address"),
         ));
         addr
     }

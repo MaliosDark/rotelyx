@@ -143,9 +143,18 @@ jobs:
     # else's crate, and the package stopped resolving. Nothing said so except a
     # resolver error nobody was reading, because nothing ran these.
     #
-    # One of them failed once in four runs, which is what a simulated network
-    # does. If this job goes red on a rerun that passed, that is the first thing
-    # to suspect.
+    # One of them fails now and then, which is what a simulated network does:
+    # these build topologies in user namespaces and time real packets through
+    # them. So the job runs the suite twice before calling it a failure, and
+    # says which attempt it was on.
+    #
+    # **Retried once, not until it passes.** A retry loop with no bound turns a
+    # test that fails half the time into one that always passes, and the number
+    # of attempts is printed so that a suite which starts needing the second one
+    # every time is visible rather than quietly tolerated.
+    #
+    # A red gate that nobody believes is worse than no gate, which is why this
+    # is here and not a paragraph explaining the flake.
     name: nat traversal
     runs-on: ubuntu-latest
     steps:
@@ -153,8 +162,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: |
-          cargo test --manifest-path crates/net/rotelyx-transport/Cargo.toml \
-            --test patchbay
+          set -o pipefail
+          run() {
+            cargo test --manifest-path crates/net/rotelyx-transport/Cargo.toml \
+              --test patchbay
+          }
+          if run; then
+            echo "nat traversal: passed first time"
+          else
+            echo "nat traversal: first attempt failed, running once more" >&2
+            if run; then
+              echo "nat traversal: passed on the second attempt" >&2
+              echo "That is the simulation, not the code, unless it keeps" >&2
+              echo "happening: a suite that needs the retry every time is a" >&2
+              echo "suite that is telling you something." >&2
+            else
+              echo "nat traversal: failed twice, which is not the simulation" >&2
+              exit 1
+            fi
+          fi
 
   chain:
     # The only thing that covers a relay dialling another relay. Everything
