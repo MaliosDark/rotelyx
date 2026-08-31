@@ -74,15 +74,21 @@ hole-punch.
   relayed transport *as it is built today*. Mitigations: prefer direct paths and
   surface relay use in the UI; support self-hosted relays; rotate relay
   selection.
-- **The one design that would change this is written down and not built.**
+- **The one design that changes this is built, and off unless asked for.**
   Chaining two relays leaves the first knowing who sends and the second knowing
   who receives, so no single operator holds the pair. `docs/RELAY-CHAINING.md`
-  carries the design, including the part that decides whether it is worth
-  anything: two operators who collude, or one person running both, hold exactly
-  what one relay holds today, and the software cannot tell. The sealing is
-  implemented and tested in `rotelyx-crypto::circuit`; the protocol work is in
-  the vendored relay and has not started. Until it is built, this row stands as
-  written.
+  carries the design and `docs/RELAY-CHAINING-PLAN.md` what each phase settled.
+  It runs: a conversation between two machines through two relays, both ends
+  agreeing a safety number.
+
+  **Three things keep this row from being crossed out.** A relay terminates
+  circuits only with `--circuit-key` and carries them onward only with
+  `--chain`, so the ordinary deployment is still one relay. Nobody has used it
+  beyond that one run. And the part that decides whether it is worth anything is
+  not a software property at all: two operators who collude, or one person
+  running both, hold exactly what one relay holds today, and **nothing here can
+  check whether two relays are run by the same person** — they are two addresses
+  and two keys, and that is all a client can see.
 - **What a name per contact does and does not change here.** The identity key
   never reaches the wire; each invitation carries a transport key of its own, so
   no two people you invited are given the same **address**; and each conversation
