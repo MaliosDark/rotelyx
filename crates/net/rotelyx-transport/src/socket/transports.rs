@@ -95,6 +95,46 @@ impl RelayAliasBinder {
         delivered
     }
 
+    /// Asks the relay at `at` to fetch the circuit key of the relay at `about`.
+    ///
+    /// `None` for anything that produced no key, including this endpoint not
+    /// being connected to `at`. A caller cannot tell those apart and neither
+    /// can the relay: every failure is one answer, so that the shape of it does
+    /// not say which relays are reachable.
+    ///
+    /// One request per transport, each with its own channel, because a relay is
+    /// open on whichever transport reached it and this holds senders rather
+    /// than a map of which. The first answer that carries a key wins; a
+    /// transport that does not have that relay open drops its channel and says
+    /// nothing.
+    pub(crate) async fn fetch_relay_key(
+        &self,
+        at: rotelyx_transport_base::RelayUrl,
+        about: String,
+    ) -> Option<Vec<u8>> {
+        let mut answers = Vec::new();
+        for relay in &self.relays {
+            let (answer, answered) = tokio::sync::oneshot::channel();
+            if relay
+                .try_send(RelayActorMessage::FetchRelayKey {
+                    at: at.clone(),
+                    about: about.clone(),
+                    answer,
+                })
+                .is_ok()
+            {
+                answers.push(answered);
+            }
+        }
+
+        for answered in answers {
+            if let Ok(Some(key)) = answered.await {
+                return Some(key);
+            }
+        }
+        None
+    }
+
     /// Returns whether every relay took the request. A dropped one leaves the
     /// endpoint answering at an address nothing can reach, which looks exactly
     /// like a working setup until somebody tries to call, so it is reported

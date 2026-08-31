@@ -768,12 +768,28 @@ where
             }
         };
 
-        if !self.clients.claim_return_key(
-            hop.return_key,
-            self.guard.endpoint_id(),
-            circuit,
-            hop.destination,
-        ) {
+        // Only a circuit that ends here claims one.
+        //
+        // A return key is a name this relay answers on so that a reply
+        // addressed to it comes back on the circuit. That is how the far end of
+        // a chain works: the destination is an ordinary client and replies by
+        // name. A hop that continues to another relay has no such thing. Its
+        // replies arrive over the link, carrying a circuit number and no name
+        // at all, and are routed by that number.
+        //
+        // Claiming one anyway was refused in the one case that matters: the
+        // caller's own key is a name this relay already answers, because the
+        // caller is connected to it, and `claim_return_key` refuses a name
+        // somebody is really using. That check is right; asking it this
+        // question was not.
+        if chain_to.is_none()
+            && !self.clients.claim_return_key(
+                hop.return_key,
+                self.guard.endpoint_id(),
+                circuit,
+                hop.destination,
+            )
+        {
             return refused;
         }
 

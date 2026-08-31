@@ -600,7 +600,7 @@ substitute for loading the page and completing a handshake.
 | Mailbox persistence | **Implemented, not switched on here.** `--mailbox-state <path>` with `ROTELYX_MAILBOX_PASSPHRASE`, sealed with the same vault as the wake registry. Without both, the mailbox is memory only and a restart drops every uncollected envelope |
 | Push notifications | **Implemented for both, configured for neither.** iOS: `--apns-key`, `--apns-key-id`, `--apns-team-id`. Android: `--fcm-service-account <path>`, the JSON the Firebase console hands out. Either, both or neither. **Neither has ever called Apple or Google**: what is tested is the token, the claims and the request this server builds, not their acceptance |
 | Multi region relays | One region. Add more when there are users to justify them |
-| Relay chaining | **Protocol built and tested between two running relays. No client opens a circuit yet**, so turning the flags on changes nothing a user sees. See `docs/RELAY-CHAINING-PLAN.md` |
+| Relay chaining | **Works, and is off unless asked for.** `rotelyx-cli invite --through <exit>` names the far end; the caller passes `--relay <their own>` and the chain builds itself. Run between two machines with a person at each end. **Not deployed here**: this relay has no `--circuit-key`, so it terminates no circuits. See `docs/RELAY-CHAINING-PLAN.md` |
 
 ---
 

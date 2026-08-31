@@ -331,7 +331,6 @@ mod tests {
         assert_eq!(store.peek_many(&[theirs], 0).len(), 1);
     }
 
-    use super::*;
     use crate::envelope::TagKey;
 
     fn tag(n: u64) -> Tag {

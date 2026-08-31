@@ -27,7 +27,9 @@ fn a_binding() -> rotelyx_crypto::PqBinding {
 
 /// Valid specimens, one per parser, produced the way the protocol produces them.
 fn specimens() -> Vec<(&'static str, Vec<u8>, fn(&[u8]) -> bool)> {
-    let (secret, public) = HybridKem::generate();
+    // Only the public half and a ciphertext under it: what these parsers read
+    // is what arrives from somebody else, and none of it is opened here.
+    let (_secret, public) = HybridKem::generate();
     let (ciphertext, pq) = public.encapsulate();
 
     vec![

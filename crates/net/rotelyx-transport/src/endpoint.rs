@@ -1232,6 +1232,21 @@ impl Endpoint {
         self.inner.open_relay_circuit(url, peer, sealed, inner)
     }
 
+    /// Asks the relay at `at` for the circuit key of the relay at `about`.
+    ///
+    /// The point of asking one relay about another is that the caller must not
+    /// ask the second directly: that would hand it the caller's address before
+    /// any circuit exists, which is what a chain is for. The relay doing the
+    /// asking could answer with a key of its own, so **whatever comes back has
+    /// to be checked** against something the caller already had.
+    ///
+    /// `None` for anything that produced no key. A relay that terminates no
+    /// circuits, one that is unreachable and one this endpoint is not connected
+    /// to are the same answer, deliberately.
+    pub async fn fetch_relay_key(&self, at: RelayUrl, about: String) -> Option<Vec<u8>> {
+        self.inner.fetch_relay_key(at, about).await
+    }
+
     /// Peers whose circuit is gone and needs a fresh descriptor.
     ///
     /// A descriptor has an hour sealed into it and stops opening once that hour

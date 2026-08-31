@@ -23,7 +23,9 @@ use rotelyx_audio::echo::EchoCanceller;
 
 #[path = "common/mod.rs"]
 mod common;
-use common::{best_delay, db, read_wav, RATE};
+// `db` is not imported: this file defines its own below, which shadowed the
+// one here and left the import unused.
+use common::{best_delay, read_wav, RATE};
 
 const BLOCK: usize = 960;
 

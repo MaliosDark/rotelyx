@@ -420,6 +420,15 @@ impl Socket {
             .collect()
     }
 
+    /// Asks the relay at `at` for the circuit key of the relay at `about`.
+    pub(crate) async fn fetch_relay_key(
+        &self,
+        at: RelayUrl,
+        about: String,
+    ) -> Option<Vec<u8>> {
+        self.alias_binder.fetch_relay_key(at, about).await
+    }
+
     pub(crate) fn open_relay_circuit(
         &self,
         url: RelayUrl,

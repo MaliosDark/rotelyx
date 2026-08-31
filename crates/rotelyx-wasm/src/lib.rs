@@ -2477,7 +2477,7 @@ mod tests {
     /// worth nothing.
     #[test]
     fn a_sealed_session_needs_its_passphrase() {
-        let mut group = group_of(2);
+        let group = group_of(2);
         let key = SessionKey::create("the right passphrase for here").expect("key");
         let sealed = group[1].seal_session(&key).expect("seal");
 
@@ -2501,7 +2501,7 @@ mod tests {
     /// Tampering must fail loudly rather than produce a subtly wrong session.
     #[test]
     fn a_tampered_session_is_refused() {
-        let mut group = group_of(2);
+        let group = group_of(2);
         let phrase = "the passphrase for this long test";
         let key = SessionKey::create(phrase).expect("key");
         let sealed = group[1].seal_session(&key).expect("seal");

@@ -1,6 +1,14 @@
 //! Shared by the acoustic measurements. Not part of the library.
 //!
 //! In a subdirectory so cargo does not try to build it as an example of its own.
+//!
+//! # Why the dead code is allowed
+//!
+//! Each example compiles this module into itself and uses the part it needs, so
+//! anything the *other* example uses is dead in this one and warns. That is a
+//! fact about how a shared module is built rather than about the code, and
+//! silencing it here is what stops the two examples from having a copy each.
+#![allow(dead_code, reason = "each example uses a different part of this")]
 
 pub const RATE: usize = 48_000;
 

@@ -189,7 +189,8 @@ fn main() {
 
     let mut heard: Vec<f32> = Vec::new();
     let (mut sent, mut played, mut concealed) = (0u64, 0u64, 0u64);
-    let mut now_ms = 0u64;
+    // Set before its first read on every path below.
+    let mut now_ms;
 
     let windows: Vec<&[f32]> = (0..audio.len().saturating_sub(WINDOW))
         .step_by(FRAME)

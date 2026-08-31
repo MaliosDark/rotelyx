@@ -78,6 +78,7 @@ async fn a_circuit_opens_through_two_relays() {
     // The caller's own key, made for this call and belonging to no identity,
     // which is what the relays will see.
     let caller = SecretKey::generate();
+    let caller_id = caller.public();
     let return_at_exit = SecretKey::generate().public();
 
     // Somebody really connected to the exit relay, so that what the circuit
@@ -107,7 +108,17 @@ async fn a_circuit_opens_through_two_relays() {
         id("CHAIN_FIRST_ID").as_bytes(),
         &Hop {
             destination: *id("CHAIN_EXIT_ID").as_bytes(),
-            return_key: *SecretKey::generate().public().as_bytes(),
+            // The caller's own connection key, which is what a real client
+            // passes and what a freshly generated one hid.
+            //
+            // The first relay knows this key: the caller is connected to it
+            // under exactly this name. A hop that claimed a return key would be
+            // asking to answer on a name somebody is already using, and the
+            // relay refuses that, correctly. A hop that continues to another
+            // relay does not need one at all: its replies come back over the
+            // link, carrying a number and no name. This test used a fresh key
+            // and so never asked the question that failed.
+            return_key: *caller_id.as_bytes(),
             next_relay: Some(exit_url.clone()),
             hour: hour(),
         },

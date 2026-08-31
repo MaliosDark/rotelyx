@@ -54,6 +54,27 @@ enum Command {
         /// Hours the invitation stays valid.
         #[arg(long, default_value_t = 24)]
         hours: u64,
+
+        /// Name this relay as the far end of a chain, so the caller reaches you
+        /// through two relays rather than one.
+        ///
+        /// # What it buys and what it does not
+        ///
+        /// One relay learns who is talking to whom. Two split that: the
+        /// caller's relay learns the caller and that a circuit was opened
+        /// through this one; this one learns you and that traffic arrives from
+        /// theirs. Neither alone holds the pair.
+        ///
+        /// **Two relays run by one operator buy nothing.** Colluding operators
+        /// hold exactly what one holds today, and nothing here can check
+        /// whether two relays are run by the same person: they are two
+        /// addresses and two keys, and that is all anybody can see.
+        ///
+        /// The invitation carries this relay's name and a hash of its circuit
+        /// key, which is fetched from it now. It has to be a relay started with
+        /// `--circuit-key`, or it has no key to give.
+        #[arg(long, value_name = "URL")]
+        through: Option<String>,
     },
 
     /// Wait for a peer, then chat.
@@ -464,6 +485,16 @@ async fn chat(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // One TLS provider for this process, before anything builds a client.
+    //
+    // The HTTP client that reads a relay's circuit key is built with no
+    // provider of its own, and without this it does not fail, it **panics**,
+    // with a message about a feature flag rather than about what the user
+    // asked for.
+    let _ = rustls::crypto::CryptoProvider::install_default(
+        rotelyx_relay_proto::tls::default_provider().as_ref().clone(),
+    );
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -481,7 +512,7 @@ async fn main() -> Result<()> {
             println!("{}", identity.id());
         }
 
-        Command::Invite { hours } => {
+        Command::Invite { hours, through } => {
             let epoch = now_epoch()?;
             let expires = epoch + hours.max(1);
             let invitation = Invitation::issue(expires);
@@ -490,7 +521,19 @@ async fn main() -> Result<()> {
                 transport: *invitation.transport_bytes(),
                 expires_at_epoch: expires,
             };
-            let code = stored.code();
+            // Named after the code is minted, because the exit relay is
+            // something added to an invitation rather than part of one.
+            let code = match through.as_deref() {
+                None => stored.code(),
+                Some(url) => {
+                    let exit = exit_relay_at(url).await?;
+                    println!("  the caller will reach you through {url}");
+                    println!("  and their own relay, which is theirs to pick.");
+                    println!();
+                    data_encoding::BASE64URL_NOPAD
+                        .encode(&invitation.code_with_exit(&exit)[..])
+                }
+            };
 
             store::add_invitation(&paths.invitations, stored, epoch)?;
 
@@ -840,6 +883,18 @@ async fn main() -> Result<()> {
             // An invitation code carries where to call as well as permission to.
             // A bare address is still accepted, for a host running --open.
             let code = invite.as_deref().or(Some(addr.as_str()));
+            // The exit relay, when the code names one. Read out here because
+            // whether this call is chained decides what the endpoint is asked
+            // to do after it connects, which is past where the code is parsed.
+            let exit = code
+                .and_then(|text| {
+                    data_encoding::BASE64URL_NOPAD
+                        .decode(text.trim().as_bytes())
+                        .ok()
+                })
+                .and_then(|bytes| Invitation::read_code_full(&bytes).ok())
+                .and_then(|read| read.exit);
+
             let (evidence, addr, _invitation_secret) = match code {
                 Some(text) => {
                     let bytes = data_encoding::BASE64URL_NOPAD
@@ -897,6 +952,21 @@ async fn main() -> Result<()> {
             let endpoint =
                 RotelyxEndpoint::bind_as(&identity, transport, net_config(relay.as_deref())?)
                     .await?;
+
+            // A chain is built before the session, because a session that
+            // started addressed and became chained would have already told the
+            // first relay who this call is for.
+            if let Some(exit) = exit.as_ref() {
+                let Some(first) = relay.as_deref() else {
+                    bail!(
+                        "this invitation names an exit relay, so the call goes through two. \
+                         Pass --relay <url> for your own, which is the first of the two and \
+                         is yours to pick"
+                    );
+                };
+                chain_through(&endpoint, first, exit, dialled_id, &calling_as).await?;
+            }
+
             let mut session = endpoint
                 .connect_with(addr, &evidence)
                 .await
@@ -972,6 +1042,172 @@ fn net_config(relay: Option<&str>) -> Result<NetConfig> {
         RelayPolicy::SelfHosted(vec![url]),
         PathPolicy::RelayOnly,
     ))
+}
+
+/// Build the circuit this call goes through, before the call.
+///
+/// # The order of these steps is the whole security of it
+///
+/// The exit relay's key is not in the invitation, so it is fetched, and it is
+/// fetched **through this caller's own relay**. Asking the exit relay directly
+/// would hand it this caller's address before any circuit exists, which is the
+/// thing a chain is for.
+///
+/// That relay could answer with a key of its own and read every circuit sealed
+/// to it. It cannot, because the invitation carried a fingerprint of the real
+/// one and this refuses anything that does not match. **A caller that skipped
+/// that check would have a chain that protects nothing**, so it is not
+/// skippable: there is no path here that seals to an unchecked key.
+async fn chain_through(
+    endpoint: &RotelyxEndpoint,
+    first_relay: &str,
+    exit: &rotelyx_core::access::ExitRelay,
+    destination: RotelyxId,
+    return_key: &RotelyxId,
+) -> Result<()> {
+    let first: rotelyx_net::RelayUrl = first_relay
+        .parse()
+        .with_context(|| format!("{first_relay} is not a relay URL"))?;
+
+    // This relay's own name and key, which it publishes. Asking it about itself
+    // tells it nothing it does not already know.
+    let (mine_id, mine_key) = relay_identity_at(first_relay).await?;
+
+    // And the exit relay's, asked of this one rather than of it.
+    //
+    // Retried, because an endpoint that has just bound has not necessarily
+    // opened its relay connection yet, and asking a relay this endpoint is not
+    // connected to answers the same as a relay that refused. Ten seconds is far
+    // longer than a connection takes and short enough to fail while somebody is
+    // still watching.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let theirs = loop {
+        if let Some(key) = endpoint
+            .transport()
+            .fetch_relay_key(first.clone(), exit.url.clone())
+            .await
+        {
+            break key;
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!(
+                "{first_relay} did not hand back a circuit key for {}. Either this \
+                 endpoint never reached {first_relay}, or that relay terminates no \
+                 circuits, or it cannot be reached from there, or it will not talk to \
+                 it. Those look alike on purpose, so that the shape of a failure does \
+                 not say which relays are reachable",
+                exit.url
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    };
+
+    // Base64url on the wire, because that is how a relay publishes it. The
+    // fingerprint in the invitation is over the key's bytes, so that two
+    // spellings of one key give one answer, which means this has to decode
+    // before it compares.
+    let theirs = data_encoding::BASE64URL_NOPAD
+        .decode(String::from_utf8_lossy(&theirs).trim().as_bytes())
+        .context("that relay's key did not come back as base64url")?;
+
+    if !exit.accepts(&theirs) {
+        bail!(
+            "the key {} handed back for {} is not the one the invitation names. \
+             Either that relay changed its key, or the one carrying this call \
+             answered with a key of its own, which is the case this check exists \
+             for. Refusing rather than sealing a circuit to it",
+            first_relay,
+            exit.url
+        );
+    }
+
+    let theirs = rotelyx_crypto::hybrid::HybridPublicKey::from_bytes(&theirs)
+        .map_err(|_| anyhow::anyhow!("that key is not a key"))?;
+    let ours = rotelyx_crypto::hybrid::HybridPublicKey::from_bytes(&mine_key)
+        .map_err(|_| anyhow::anyhow!("this relay's own key is not a key"))?;
+
+    let hour = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("before the epoch")?
+        .as_secs()
+        / 3600;
+
+    let (sealed, inner) = exit
+        .seal_circuit(&mine_id, &ours, &theirs, &destination, return_key, hour)
+        .map_err(|e| anyhow::anyhow!("sealing the circuit: {e}"))?;
+
+    if !endpoint.transport().route_through_circuit(
+        first,
+        destination.endpoint_id(),
+        sealed.into(),
+        inner.into(),
+    ) {
+        bail!("this endpoint would not take the circuit request");
+    }
+
+    println!("  through {} and then {}", first_relay, exit.url);
+    Ok(())
+}
+
+/// A relay's own name and circuit key, read from the relay itself.
+///
+/// Returns the key's bytes rather than a parsed key, because one caller hashes
+/// them and the other seals with them.
+async fn relay_identity_at(url: &str) -> Result<(RotelyxId, Vec<u8>)> {
+    let at = format!(
+        "{}{}",
+        url.trim_end_matches('/'),
+        rotelyx_relay_proto::http::CIRCUIT_KEY_PATH
+    );
+    let body = reqwest::get(&at)
+        .await
+        .with_context(|| format!("asking {url} for its circuit key"))?
+        .error_for_status()
+        .with_context(|| {
+            format!("{url} has no circuit key: it was started without --circuit-key")
+        })?
+        .text()
+        .await
+        .context("reading the circuit key")?;
+
+    // `<endpoint id> <key>`, because a descriptor is sealed to the one and with
+    // the other, and either alone names nothing.
+    let (id, key) = body
+        .trim()
+        .split_once(' ')
+        .context("that relay did not name itself alongside its key")?;
+
+    let key = data_encoding::BASE64URL_NOPAD
+        .decode(key.as_bytes())
+        .context("that relay's circuit key is not base64url")?;
+    // Checked here rather than trusted onward: a hash of something that is not
+    // a key names nothing anybody can ever match.
+    rotelyx_crypto::hybrid::HybridPublicKey::from_bytes(&key)
+        .map_err(|_| anyhow::anyhow!("that relay's circuit key is not a key"))?;
+
+    let relay: RotelyxId = id
+        .parse()
+        .with_context(|| format!("{url} named itself {id}, which is not an endpoint id"))?;
+
+    Ok((relay, key))
+}
+
+/// Name a relay as the far end of a chain.
+///
+/// # Why the issuer may ask this relay directly and a caller may not
+///
+/// A caller must not: it would put their address in front of the one relay a
+/// chain exists to keep it from, before any circuit exists. The issuer is
+/// already talking to this relay, is already known to it, and is choosing it.
+/// The hash that goes in the invitation is what lets the caller check what
+/// their own relay fetches on their behalf.
+async fn exit_relay_at(url: &str) -> Result<rotelyx_core::access::ExitRelay> {
+    let (relay, key) = relay_identity_at(url).await?;
+    Ok(rotelyx_core::access::ExitRelay {
+        relay,
+        key_hash: rotelyx_core::access::ExitRelay::fingerprint(&key),
+        url: url.to_owned(),
+    })
 }
 
 /// A relay to fall back on, and a direct path preferred over it.

@@ -67,7 +67,7 @@ impl RelayDialer for Dialer {
             let at = format!(
                 "{}{}",
                 url.trim_end_matches('/'),
-                rotelyx_relay_proto::server::CIRCUIT_KEY_PATH
+                rotelyx_relay_proto::http::CIRCUIT_KEY_PATH
             );
             let client = reqwest::Client::builder()
                 // A relay that hung here would hold a task per ask, and the
@@ -85,7 +85,9 @@ impl RelayDialer for Dialer {
                 return None;
             }
             let body = response.text().await.ok()?;
-            let key = body.trim();
+            // `<endpoint id> <key>`. The id is the caller's to know, from the
+            // invitation; what this relay fetches on their behalf is the key.
+            let key = body.trim().rsplit(' ').next()?;
 
             // Checked here rather than trusted onward: this came from a machine
             // nobody has vouched for, and what the caller does with it is seal

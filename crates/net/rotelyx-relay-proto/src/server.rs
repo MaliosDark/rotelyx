@@ -56,7 +56,7 @@ use tracing::{Instrument, debug, error, info, info_span, instrument};
 use self::http_server::{BytesBody, HyperError, HyperResult};
 use crate::{
     defaults::DEFAULT_KEY_CACHE_CAPACITY,
-    http::{AUTH_TOKEN_URL_QUERY_PARAM, ProtocolVersion, RELAY_PROBE_PATH},
+    http::{AUTH_TOKEN_URL_QUERY_PARAM, CIRCUIT_KEY_PATH, ProtocolVersion, RELAY_PROBE_PATH},
     quic::server::{QuicServer, QuicSpawnError, ServerHandle as QuicServerHandle},
     tls::CaTlsConfig,
 };
@@ -1209,7 +1209,11 @@ pub fn brand_as(brand: Brand) {
     let _ = BRAND.set(brand);
 }
 
-/// This relay's circuit key, base64url, when it terminates circuits.
+/// This relay's endpoint id and circuit key, when it terminates circuits.
+///
+/// One line, `<endpoint id> <base64url key>`, because the two are useless
+/// apart: a descriptor is sealed **to** the id and **with** the key, and
+/// somebody holding one of them can do nothing.
 ///
 /// # Why a relay publishes this at all
 ///
@@ -1223,13 +1227,12 @@ pub fn brand_as(brand: Brand) {
 /// of publishing it rather than arranging to share it.
 static CIRCUIT_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// Publishes this relay's circuit key. Called by the binary before serving.
-pub fn publish_circuit_key(key: String) {
-    let _ = CIRCUIT_KEY.set(key);
+/// Publishes this relay's name and circuit key. Called by the binary before
+/// serving.
+pub fn publish_circuit_key(endpoint_id: String, key: String) {
+    let _ = CIRCUIT_KEY.set(format!("{endpoint_id} {key}"));
 }
 
-/// The path a relay's circuit key is served at.
-pub const CIRCUIT_KEY_PATH: &str = "/circuit-key";
 
 /// The landing page, with a status block rendered on each request.
 ///
@@ -2009,7 +2012,7 @@ mod tests {
     /// finding. Exported so the asking side uses this one.
     #[test]
     fn the_key_path_is_what_the_handler_is_registered_at() {
-        assert_eq!(super::CIRCUIT_KEY_PATH, "/circuit-key");
+        assert_eq!(crate::http::CIRCUIT_KEY_PATH, "/circuit-key");
     }
 
     /// A name with markup in it renders as that name.

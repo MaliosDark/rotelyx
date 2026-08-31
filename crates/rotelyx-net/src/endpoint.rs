@@ -103,6 +103,25 @@ impl NetEndpoint {
     /// **A relay that refuses one leaves traffic addressed to the peer**, so a
     /// caller whose whole reason for asking was the property has to check
     /// rather than assume.
+    /// Asks the relay at `at` for the circuit key of the relay at `about`.
+    ///
+    /// # Why a caller asks one relay about another
+    ///
+    /// To seal a circuit to the exit relay a caller needs its key, and must not
+    /// ask it: that would put the caller's address in front of the one party
+    /// the chain exists to keep it from, before any circuit exists. So the
+    /// caller's own relay asks. It learns which relay is being chained through,
+    /// which it learns anyway the moment it forwards.
+    ///
+    /// **What comes back is not trusted.** The relay doing the asking could
+    /// answer with a key of its own and read every circuit sealed to it. Check
+    /// it with [`rotelyx_core::access::ExitRelay::accepts`] against the
+    /// fingerprint the invitation carried, which is the whole reason that
+    /// fingerprint exists.
+    pub async fn fetch_relay_key(&self, at: RelayUrl, about: String) -> Option<Vec<u8>> {
+        self.inner.fetch_relay_key(at, about).await
+    }
+
     #[must_use]
     pub fn route_through_circuit(
         &self,

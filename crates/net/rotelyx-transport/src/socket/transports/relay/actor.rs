@@ -260,6 +260,25 @@ enum ActiveRelayMessage {
     /// the same as an alias: a circuit that was asked for and silently dropped
     /// leaves traffic going out addressed, which is the one outcome somebody
     /// who asked for a circuit must not get.
+    /// Ask this relay to fetch another relay's circuit key.
+    ///
+    /// # Why this one waits for an answer and the others do not
+    ///
+    /// An alias and a circuit are told to the relay and their outcome is the
+    /// traffic that follows. This is a question: the caller cannot seal a
+    /// circuit until it has the key, and cannot ask the relay it is sealing to
+    /// without handing that relay its address, which is the thing the chain is
+    /// for. So it asks its own relay and waits.
+    ///
+    /// `None` for anything that produced no key. The caller cannot tell a relay
+    /// that terminates no circuits from one that is unreachable, and neither
+    /// can this: they are the same answer on the wire, deliberately.
+    FetchRelayKey {
+        /// The relay to ask about.
+        url: String,
+        /// Where the answer goes.
+        answer: oneshot::Sender<Option<Vec<u8>>>,
+    },
     OpenCircuit {
         /// Who this circuit reaches. Traffic for them goes through it.
         peer: EndpointId,
@@ -601,6 +620,12 @@ impl ActiveRelayActor {
                                 self.aliases.push(key);
                             }
                         }
+                        ActiveRelayMessage::FetchRelayKey { answer, .. } => {
+                            // Not connected, so there is nobody to ask. Answered
+                            // rather than dropped: a caller waiting on a channel
+                            // that will never be written waits for ever.
+                            let _ = answer.send(None);
+                        }
                         ActiveRelayMessage::OpenCircuit {
                             peer,
                             sealed,
@@ -683,6 +708,7 @@ impl ActiveRelayActor {
             circuits: HashMap::new(),
             by_circuit: HashMap::new(),
             circuit_required: BTreeSet::new(),
+            asking: Vec::new(),
             reopen: std::collections::VecDeque::new(),
             reopened: HashMap::new(),
             #[cfg(test)]
@@ -781,6 +807,16 @@ impl ActiveRelayActor {
                                 self.my_relay
                                     .set_status(&self.url, RelayConnectionState::Connected);
                             }
+                        }
+                        ActiveRelayMessage::FetchRelayKey { url, answer } => {
+                            let fut = client_sink.send(ClientToRelayMsg::AskRelayKey {
+                                url: Bytes::from(url.clone().into_bytes()),
+                            });
+                            self.run_sending(fut, &mut state, &mut client_stream).await?;
+                            // Matched by the address on the way back, which the
+                            // answer carries, so two asks in flight are told
+                            // apart without a second number to keep in step.
+                            state.asking.push((url, answer));
                         }
                         ActiveRelayMessage::OpenCircuit {
                             peer,
@@ -1060,9 +1096,22 @@ impl ActiveRelayActor {
                     state.reopen.push_back(peer);
                 }
             }
-            RelayToClientMsg::RelayKey { .. } => {
-                // Nothing here asks for one. The key fetch belongs to whoever
-                // is building an invitation into a circuit, above this.
+            RelayToClientMsg::RelayKey { url, key } => {
+                let url = String::from_utf8_lossy(&url).into_owned();
+                // Everybody who asked about this address, because two callers
+                // wanting the same key both want it. An empty key is the one
+                // answer for every failure, so it is passed on as `None`
+                // rather than as an empty vector that looks like a key.
+                let answer = (!key.is_empty()).then(|| key.to_vec());
+                let mut still_waiting = Vec::new();
+                for (asked, sender) in state.asking.drain(..) {
+                    if asked == url {
+                        let _ = sender.send(answer.clone());
+                    } else {
+                        still_waiting.push((asked, sender));
+                    }
+                }
+                state.asking = still_waiting;
             }
             RelayToClientMsg::EndpointGone(endpoint_id) => {
                 state.endpoints_present.remove(&endpoint_id);
@@ -1219,6 +1268,11 @@ struct ConnectedRelayState {
     /// which is a failure somebody notices, rather than the property, which is
     /// a failure nobody notices.
     circuit_required: BTreeSet<EndpointId>,
+    /// Who is waiting on which relay's key.
+    ///
+    /// A list rather than a map: two asks about the same address are two
+    /// callers who both want the answer, and a map would drop one of them.
+    asking: Vec<(String, oneshot::Sender<Option<Vec<u8>>>)>,
     /// Peers whose circuit closed and should be tried again.
     ///
     /// Queued rather than re-opened where the close arrives, because that runs
@@ -1262,6 +1316,15 @@ pub(crate) enum RelayActorMessage {
     CheckConnectionAfterNetworkChange,
     /// Ask every relay to also route this key to this endpoint.
     BindAlias(SecretKey),
+    /// Ask the relay at `url` to fetch another relay's circuit key.
+    FetchRelayKey {
+        /// Which relay to ask.
+        at: RelayUrl,
+        /// Which relay to ask about.
+        about: String,
+        /// Where the answer goes.
+        answer: oneshot::Sender<Option<Vec<u8>>>,
+    },
     /// Carry traffic to `peer` through a circuit on the relay at `url`.
     ///
     /// Addressed to one relay, unlike an alias: a circuit descriptor is sealed
@@ -1532,6 +1595,25 @@ impl RelayActor {
             RelayActorMessage::CheckConnectionAfterNetworkChange => {
                 self.check_connection_after_network_change().await;
             }
+            RelayActorMessage::FetchRelayKey { at, about, answer } => {
+                // Opens the connection if there is not one, the same as sending
+                // a datagram does. A relay connection is made when there is a
+                // reason to have one, and asking a relay a question is a
+                // reason: an endpoint that has only just bound has no
+                // connection yet, and a caller building a circuit before its
+                // first packet is exactly the case that arrives here.
+                let handle = self.active_relay_handle(at.clone());
+                if handle
+                    .inbox_addr
+                    .try_send(ActiveRelayMessage::FetchRelayKey {
+                        url: about,
+                        answer,
+                    })
+                    .is_err()
+                {
+                    warn!(%at, "could not ask that relay for a key");
+                }
+            }
             RelayActorMessage::OpenCircuit {
                 url,
                 peer,
@@ -1542,22 +1624,17 @@ impl RelayActor {
                 // would ask them to open a descriptor they cannot read, and
                 // they would refuse it, which is a refusal per relay for a
                 // request that was never for them.
-                match self.active_relays.get(&url) {
-                    Some(handle) => {
-                        if let Err(err) =
-                            handle.inbox_addr.try_send(ActiveRelayMessage::OpenCircuit {
-                                peer,
-                                sealed,
-                                inner,
-                            })
-                        {
-                            warn!("could not ask {url} to open a circuit: {err:#}");
-                        }
-                    }
-                    // Not connected to that relay. Said rather than swallowed:
-                    // a caller who asked for a circuit and got silence would go
-                    // on sending addressed datagrams believing otherwise.
-                    None => warn!(%url, "no connection to that relay, so no circuit"),
+                // Opens the connection if there is not one. A circuit asked for
+                // before the first packet is the ordinary case, not an error:
+                // a session that started addressed and became chained would
+                // already have told the relay who it was for.
+                let handle = self.active_relay_handle(url.clone());
+                if let Err(err) = handle.inbox_addr.try_send(ActiveRelayMessage::OpenCircuit {
+                    peer,
+                    sealed,
+                    inner,
+                }) {
+                    warn!("could not ask {url} to open a circuit: {err:#}");
                 }
             }
             RelayActorMessage::BindAlias(key) => {

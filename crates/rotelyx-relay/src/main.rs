@@ -280,7 +280,10 @@ async fn main() -> Result<()> {
         // Also served, so a caller's own relay can fetch it on the caller's
         // behalf. The caller checks it against a hash from the invitation, so
         // publishing it costs nothing that keeping it quiet would save.
-        rotelyx_relay_proto::server::publish_circuit_key(opener.public_key());
+        rotelyx_relay_proto::server::publish_circuit_key(
+            secret.public().to_string(),
+            opener.public_key(),
+        );
         tracing::info!("terminating circuits for callers this relay does not see");
         relay.circuit_opener = Some(std::sync::Arc::new(opener));
     }

@@ -392,7 +392,6 @@ mod tests {
     }
 
     use super::*;
-    use crate::identity::Identity;
 
     fn tmp(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();

@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rotelyx_net::{NetConfig, NetEndpoint, PathPolicy, RelayPolicy, RelayUrl, SecretKey};
+use rotelyx_net::{NetConfig, NetEndpoint, SecretKey};
 
 /// Hostnames that must never appear in a relay map or in workspace source.
 ///

@@ -488,6 +488,51 @@ the dropping was chosen to avoid, moved one layer up.
 
 ---
 
+## Phase 7: somebody can actually use it
+
+Not in the plan either, and without it every piece above is reachable only from
+code nobody has written.
+
+**Done, and run between two machines with a person at each end.** Both sides
+calculated the same safety number, so the whole MLS handshake crossed the
+circuit rather than one test datagram.
+
+```sh
+# The one being reached, on the relay that will be the far end
+rotelyx-cli invite --through https://exit.example
+rotelyx-cli listen --relay https://exit.example
+
+# The caller, on a relay of their own choosing
+rotelyx-cli connect <code> --relay https://mine.example
+```
+
+The caller does the rest without being told: reads the exit relay out of the
+invitation, asks **its own relay** for that relay's key, checks it against the
+fingerprint, seals two layers and routes the session through the circuit.
+
+**A relay publishes its name alongside its key.** It published only the key, and
+a descriptor is sealed *to* a name and *with* a key, so an invitation could not
+be built without asking the operator for a line it prints at startup. One
+request answers both now, at a path that lives in the protocol module rather
+than the server one, because the side that asks is not built with the server.
+
+**Two things running it found that no test had.**
+
+- The fingerprint check refused a key that was correct. The wire carries base64
+  and the invitation hashes bytes, so the two were hashing different things. The
+  check caught it, which is what it is for, and it caught its author.
+- **A chained hop must not claim a return key.** It claimed one, and the relay
+  refused it because the name was already taken: by the caller, who is connected
+  to that relay under exactly that key. A hop that continues has no use for one,
+  because its replies arrive over the link carrying a number and no name. The
+  refusal was right and asking the question was not.
+
+  The chained test used a freshly generated key there and so never asked it. It
+  passes the caller's own key now, which is what a client does, and it fails
+  against a relay without the fix.
+
+---
+
 ## What would make me stop
 
 - **If phase 3's link design does not survive review.** It is the part with no

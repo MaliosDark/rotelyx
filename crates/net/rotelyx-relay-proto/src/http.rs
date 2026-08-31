@@ -13,6 +13,16 @@ pub(crate) const SUPPORTED_WEBSOCKET_VERSION: &str = "13";
 pub const RELAY_PATH: &str = "/relay";
 /// The HTTP path under which the relay allows doing latency queries for testing.
 pub const RELAY_PROBE_PATH: &str = "/ping";
+/// The HTTP path under which a relay publishes its name and circuit key.
+///
+/// `<endpoint id> <base64url key>`, or 404 from a relay that terminates no
+/// circuits, which is also what a relay built before circuits answers.
+///
+/// Here rather than beside the handler that serves it, because the side that
+/// asks is not the side that serves: a client naming an exit relay reads this,
+/// and a client is not built with the server feature. A path written twice is
+/// two constants that can disagree.
+pub const CIRCUIT_KEY_PATH: &str = "/circuit-key";
 
 /// The HTTP header name for relay client authentication
 pub const CLIENT_AUTH_HEADER: HeaderName = HeaderName::from_static("x-rotelyx-relay-client-auth-v1");

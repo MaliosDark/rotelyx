@@ -134,6 +134,10 @@ mod tests {
 
     /// Set the passphrase for the duration of a test and clear it afterwards,
     /// holding the lock across both.
+    #[allow(
+        dead_code,
+        reason = "the guard is held for the value's lifetime, never read"
+    )]
     struct Passphrase(std::sync::MutexGuard<'static, ()>);
 
     impl Passphrase {
