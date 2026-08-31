@@ -203,9 +203,7 @@ impl Mailbox {
 
     /// Collect across a recipient's whole polling window in one call.
     pub fn collect_many(&mut self, tags: &[Tag], now: u64) -> Vec<Envelope> {
-        tags.iter()
-            .flat_map(|t| self.collect(*t, now))
-            .collect()
+        tags.iter().flat_map(|t| self.collect(*t, now)).collect()
     }
 
     /// Drop everything past its TTL. A deployment runs this periodically;
@@ -241,9 +239,7 @@ impl Mailbox {
     pub fn snapshot(&self) -> Vec<(Tag, Vec<u8>)> {
         self.slots
             .iter()
-            .filter_map(|(tag, slot)| {
-                postcard::to_allocvec(slot).ok().map(|bytes| (*tag, bytes))
-            })
+            .filter_map(|(tag, slot)| postcard::to_allocvec(slot).ok().map(|bytes| (*tag, bytes)))
             .collect()
     }
 
@@ -446,8 +442,10 @@ mod tests {
         let key = TagKey::new([1u8; 32]);
 
         // The sender's clock lagged: it deposited under an earlier epoch.
-        mb.deposit(env(key.tag_for_epoch(8), b"tarde"), 0).expect("deposit");
-        mb.deposit(env(key.tag_for_epoch(10), b"ahora"), 0).expect("deposit");
+        mb.deposit(env(key.tag_for_epoch(8), b"tarde"), 0)
+            .expect("deposit");
+        mb.deposit(env(key.tag_for_epoch(10), b"ahora"), 0)
+            .expect("deposit");
 
         let got = mb.collect_many(&key.polling_tags(10, 3), 1);
         assert_eq!(got.len(), 2, "lookback must find the lagged deposit");

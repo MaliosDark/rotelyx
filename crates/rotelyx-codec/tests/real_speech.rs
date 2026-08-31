@@ -21,8 +21,8 @@
 //! anything.
 
 use rotelyx_codec::bands::{self, BANDS};
-use rotelyx_codec::mdct::{self, FRAME, WINDOW};
 use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder};
+use rotelyx_codec::mdct::{self, FRAME, WINDOW};
 use rotelyx_codec::{TelyxDecoder, TelyxEncoder};
 use std::fs;
 use std::path::Path;
@@ -477,7 +477,9 @@ fn per_band_error_on_speech() {
 
     for e in fs::read_dir(&dir).expect("the directory was checked above") {
         let p = e.unwrap().path();
-        if p.extension().is_none_or(|x| x != "wav") { continue; }
+        if p.extension().is_none_or(|x| x != "wav") {
+            continue;
+        }
         let Some(x) = read_wav(&p) else { continue };
 
         let mut enc = TelyxEncoder::new(60);
@@ -526,11 +528,15 @@ fn per_band_error_on_speech() {
 
     for b in 0..BANDS {
         let (lo, hi) = bands::hz(b);
-        if signal[b] < 1e-20 { continue; }
+        if signal[b] < 1e-20 {
+            continue;
+        }
         let snr = 10.0 * (signal[b] / noise[b].max(1e-30)).log10();
         println!(
             "  {b:>4}   {lo:>6.0}-{hi:<6.0} {:9.2} {:9.1} dB {:14.1}%",
-            rate[b] / frames, snr, 100.0 * noise[b] / total_noise
+            rate[b] / frames,
+            snr,
+            100.0 * noise[b] / total_noise
         );
     }
 }

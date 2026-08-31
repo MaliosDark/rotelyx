@@ -6,8 +6,8 @@
 //! are here, against a real server on a real socket, which also happens to be
 //! the only way to check what a visitor actually receives.
 
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 
 use rotelyx_relay_proto::server::{AllowAll, RelayConfig, Server, ServerConfig};
@@ -32,7 +32,9 @@ async fn landing_page() -> (String, Server) {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let mut socket = TcpStream::connect(addr).expect("connect");
-    socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
+    socket
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .ok();
     socket
         .write_all(b"GET / HTTP/1.1\r\nHost: relay\r\nConnection: close\r\n\r\n")
         .expect("write");
@@ -79,7 +81,11 @@ async fn landing_page() -> (String, Server) {
 async fn the_page_shows_a_status_strip() {
     let (page, server) = landing_page().await;
 
-    assert!(page.starts_with("HTTP/1.1 200"), "not a 200: {}", &page[..40.min(page.len())]);
+    assert!(
+        page.starts_with("HTTP/1.1 200"),
+        "not a 200: {}",
+        &page[..40.min(page.len())]
+    );
     assert!(page.contains("Operational"), "no status");
     assert!(page.contains("class=\"bars\""), "no availability strip");
 
@@ -103,7 +109,10 @@ async fn the_page_shows_a_status_strip() {
     // seconds ago: one bucket in progress and no claim about anything before.
     assert_eq!(part, 1, "the bucket in progress");
     assert_eq!(up, 0, "no whole bucket has been served");
-    assert_eq!(down, 0, "with no record, nothing may be asserted as an outage");
+    assert_eq!(
+        down, 0,
+        "with no record, nothing may be asserted as an outage"
+    );
     assert_eq!(up + part + down + unknown, 96, "the strip is 96 half hours");
     assert!(
         strip.ends_with("<i class=\"part\"></i>"),
@@ -153,8 +162,16 @@ async fn the_page_publishes_no_traffic_and_no_infrastructure() {
     let body = page.to_lowercase();
 
     for forbidden in [
-        "connected", "peers online", "clients:", "sessions:", "bytes served",
-        "192.168.", "10.0.", "/home/", "uid=", "hostname",
+        "connected",
+        "peers online",
+        "clients:",
+        "sessions:",
+        "bytes served",
+        "192.168.",
+        "10.0.",
+        "/home/",
+        "uid=",
+        "hostname",
         // The total connection cap is the one limit worth not publishing: it
         // is the number an attacker needs to exceed, and unlike the per
         // identity limits it cannot be found by probing without mounting the

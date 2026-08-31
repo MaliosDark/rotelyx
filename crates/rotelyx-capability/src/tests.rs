@@ -5,8 +5,8 @@
 
 use crate::*;
 
-use std::fs;
 use data_encoding::BASE64URL_NOPAD;
+use std::fs;
 
 use crate::{testing, vectors};
 
@@ -21,7 +21,7 @@ fn verifier() -> Verifier {
 
 #[test]
 fn a_minted_token_verifies_and_carries_its_tier() {
-            let token = testing::mint(SECRET, [1u8; 16], Tier::Plus, 1000, 0);
+    let token = testing::mint(SECRET, [1u8; 16], Tier::Plus, 1000, 0);
 
     let cap = verifier().verify(&token, 999).expect("verify");
     assert_eq!(cap.tier, Tier::Plus);
@@ -44,7 +44,7 @@ fn a_token_from_another_issuer_is_refused() {
 /// could promote a free token to plus.
 #[test]
 fn a_tampered_token_is_refused() {
-            let token = testing::mint(SECRET, [3u8; 16], Tier::Free, 1000, 0);
+    let token = testing::mint(SECRET, [3u8; 16], Tier::Free, 1000, 0);
 
     let mut raw = BASE64URL_NOPAD.decode(token.as_bytes()).expect("b64");
     raw[0] ^= 0xff;
@@ -55,7 +55,7 @@ fn a_tampered_token_is_refused() {
 
 #[test]
 fn an_expired_token_is_refused() {
-            let token = testing::mint(SECRET, [4u8; 16], Tier::Plus, 100, 0);
+    let token = testing::mint(SECRET, [4u8; 16], Tier::Plus, 100, 0);
 
     assert!(matches!(
         verifier().verify(&token, 100),
@@ -69,7 +69,7 @@ fn an_expired_token_is_refused() {
 /// from serving a thousand people.
 #[test]
 fn sharing_a_token_shares_its_quota() {
-            let token = testing::mint(SECRET, [5u8; 16], Tier::Plus, 1000, 1_000);
+    let token = testing::mint(SECRET, [5u8; 16], Tier::Plus, 1000, 1_000);
     let cap = verifier().verify(&token, 999).expect("verify");
 
     let mut meter = Meter::default();
@@ -90,7 +90,7 @@ fn sharing_a_token_shares_its_quota() {
 /// Two different tokens must not draw from one another's allowance.
 #[test]
 fn separate_tokens_are_metered_separately() {
-            let a = verifier()
+    let a = verifier()
         .verify(&testing::mint(SECRET, [6u8; 16], Tier::Plus, 1000, 500), 1)
         .expect("verify");
     let b = verifier()
@@ -145,8 +145,11 @@ fn one_free_caller_cannot_spend_another_ones_quota() {
 /// A quota that only resets on restart is not a subscription.
 #[test]
 fn the_allowance_returns_next_period() {
-            let cap = verifier()
-        .verify(&testing::mint(SECRET, [8u8; 16], Tier::Plus, 10_000, 100), 1)
+    let cap = verifier()
+        .verify(
+            &testing::mint(SECRET, [8u8; 16], Tier::Plus, 10_000, 100),
+            1,
+        )
         .expect("verify");
 
     let mut meter = Meter::default();
@@ -154,7 +157,10 @@ fn the_allowance_returns_next_period() {
     assert!(matches!(meter.charge(&cap, 1, 0), Charge::OverQuota { .. }));
 
     assert!(
-        matches!(meter.charge(&cap, 100, PERIOD_HOURS), Charge::Allowed { .. }),
+        matches!(
+            meter.charge(&cap, 100, PERIOD_HOURS),
+            Charge::Allowed { .. }
+        ),
         "the allowance must return when the period rolls over"
     );
 }
@@ -162,13 +168,19 @@ fn the_allowance_returns_next_period() {
 /// Refusing before spending, rather than after, is what makes it a limit.
 #[test]
 fn an_overshoot_is_refused_rather_than_recorded() {
-            let cap = verifier()
-        .verify(&testing::mint(SECRET, [9u8; 16], Tier::Free, 10_000, 100), 1)
+    let cap = verifier()
+        .verify(
+            &testing::mint(SECRET, [9u8; 16], Tier::Free, 10_000, 100),
+            1,
+        )
         .expect("verify");
 
     let mut meter = Meter::default();
     assert!(matches!(meter.charge(&cap, 90, 0), Charge::Allowed { .. }));
-    assert!(matches!(meter.charge(&cap, 20, 0), Charge::OverQuota { .. }));
+    assert!(matches!(
+        meter.charge(&cap, 20, 0),
+        Charge::OverQuota { .. }
+    ));
 
     // The refused charge must not have been counted.
     assert!(
@@ -209,10 +221,22 @@ fn the_free_tier_cannot_reach_the_paid_limits() {
     let free = Tier::Free.limits();
     let plus = Tier::Plus.limits();
 
-    assert!(free.max_payload < plus.max_payload, "attachment size is a paid limit");
-    assert!(free.ttl_seconds < plus.ttl_seconds, "retention is a paid limit");
-    assert!(free.max_per_tag < plus.max_per_tag, "backlog depth is a paid limit");
-    assert!(free.bytes_per_period < plus.bytes_per_period, "volume is a paid limit");
+    assert!(
+        free.max_payload < plus.max_payload,
+        "attachment size is a paid limit"
+    );
+    assert!(
+        free.ttl_seconds < plus.ttl_seconds,
+        "retention is a paid limit"
+    );
+    assert!(
+        free.max_per_tag < plus.max_per_tag,
+        "backlog depth is a paid limit"
+    );
+    assert!(
+        free.bytes_per_period < plus.bytes_per_period,
+        "volume is a paid limit"
+    );
 
     // Group size is a paid lever, in three steps.
     let more = Tier::PlusPlus.limits();
@@ -233,8 +257,11 @@ fn the_free_tier_cannot_reach_the_paid_limits() {
 /// still a liability and a leak.
 #[test]
 fn the_meter_forgets_old_periods() {
-            let cap = verifier()
-        .verify(&testing::mint(SECRET, [10u8; 16], Tier::Plus, 10_000, 100), 1)
+    let cap = verifier()
+        .verify(
+            &testing::mint(SECRET, [10u8; 16], Tier::Plus, 10_000, 100),
+            1,
+        )
         .expect("verify");
 
     let mut meter = Meter::default();
@@ -248,8 +275,11 @@ fn the_meter_forgets_old_periods() {
 /// A restart must not hand out a fresh allowance. This is the whole point.
 #[test]
 fn spending_survives_a_restart() {
-            let cap = verifier()
-        .verify(&testing::mint(SECRET, [20u8; 16], Tier::Plus, 10_000, 1_000), 1)
+    let cap = verifier()
+        .verify(
+            &testing::mint(SECRET, [20u8; 16], Tier::Plus, 10_000, 1_000),
+            1,
+        )
         .expect("verify");
 
     let dir = std::env::temp_dir().join(format!("rotelyx-meter-{}", std::process::id()));
@@ -262,10 +292,16 @@ fn spending_survives_a_restart() {
 
     let mut restarted = Meter::load(&path, 0).expect("load");
     assert!(
-        matches!(restarted.charge(&cap, 200, 0), Charge::OverQuota { used: 900, .. }),
+        matches!(
+            restarted.charge(&cap, 200, 0),
+            Charge::OverQuota { used: 900, .. }
+        ),
         "a restart must not reset what was already spent"
     );
-    assert!(matches!(restarted.charge(&cap, 100, 0), Charge::Allowed { .. }));
+    assert!(matches!(
+        restarted.charge(&cap, 100, 0),
+        Charge::Allowed { .. }
+    ));
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -281,8 +317,11 @@ fn a_missing_snapshot_is_a_first_start() {
 /// Counters from a period that has passed must not come back.
 #[test]
 fn a_stale_snapshot_does_not_resurrect_old_spending() {
-            let cap = verifier()
-        .verify(&testing::mint(SECRET, [21u8; 16], Tier::Plus, 100_000, 1_000), 1)
+    let cap = verifier()
+        .verify(
+            &testing::mint(SECRET, [21u8; 16], Tier::Plus, 100_000, 1_000),
+            1,
+        )
         .expect("verify");
 
     let dir = std::env::temp_dir().join(format!("rotelyx-stale-{}", std::process::id()));
@@ -308,8 +347,11 @@ fn a_stale_snapshot_does_not_resurrect_old_spending() {
 /// assumed, because it is the claim that makes the file safe to keep.
 #[test]
 fn the_snapshot_holds_nothing_but_ids_and_counts() {
-            let cap = verifier()
-        .verify(&testing::mint(SECRET, [22u8; 16], Tier::Plus, 10_000, 1_000), 1)
+    let cap = verifier()
+        .verify(
+            &testing::mint(SECRET, [22u8; 16], Tier::Plus, 10_000, 1_000),
+            1,
+        )
         .expect("verify");
 
     let dir = std::env::temp_dir().join(format!("rotelyx-shape-{}", std::process::id()));
@@ -332,7 +374,11 @@ fn the_snapshot_holds_nothing_but_ids_and_counts() {
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = fs::metadata(&path).expect("stat").permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "the snapshot must not be world readable");
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the snapshot must not be world readable"
+        );
     }
 
     let _ = fs::remove_dir_all(&dir);
@@ -363,11 +409,81 @@ fn the_frozen_vectors_still_verify() {
         (vectors::ED25519_TOKEN_PLUS, Tier::Plus),
         (vectors::ED25519_TOKEN_PLUSPLUS, Tier::PlusPlus),
     ] {
-        let cap = v.verify(token, 999_999).expect("a frozen vector must verify");
+        let cap = v
+            .verify(token, 999_999)
+            .expect("a frozen vector must verify");
         assert_eq!(cap.tier, tier);
         assert_eq!(cap.id, [7u8; 16]);
     }
 
-    let cap = v.verify(vectors::ED25519_TOKEN_QUOTA, 999_999).expect("verify");
-    assert_eq!(cap.limits.bytes_per_period, 12_345, "the quota override was lost");
+    let cap = v
+        .verify(vectors::ED25519_TOKEN_QUOTA, 999_999)
+        .expect("verify");
+    assert_eq!(
+        cap.limits.bytes_per_period, 12_345,
+        "the quota override was lost"
+    );
+}
+
+/// The two kinds of token are far enough apart in length to be told apart.
+///
+/// # Why a Rust test guards a number in a web page
+///
+/// The mailbox has two frames, `auth` and `authblind`, and refuses to guess
+/// which credential arrived: guessing would mean trying both and reporting
+/// whichever error read better, which is how a refusal stops naming one thing.
+/// The client is the side that knows what it holds, so the client says.
+///
+/// `site/chat.html` says it with a length threshold, because that is what a
+/// browser holding a pasted string can see. That threshold is only honest while
+/// the two formats stay far apart, and nothing in the browser can check it.
+/// This does.
+///
+/// The gap it is guarding: an Ed25519 token is a postcard claim set plus a 64
+/// byte signature, and a blind one is a 16 byte id plus an RSA signature at
+/// 2048 bits. Change either format enough and the threshold in the page silently
+/// starts sending some tokens to the wrong frame.
+#[test]
+fn the_two_token_kinds_are_not_close_in_length() {
+    /// The value in `tokenFrame` in `site/chat.html`. Above it the page sends
+    /// `authblind`, below it `auth`.
+    const THRESHOLD: usize = 240;
+
+    let signed = crate::testing::mint(
+        "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+        [7u8; 16],
+        Tier::PlusPlus,
+        u64::MAX / 2,
+        u64::MAX / 2,
+    );
+
+    assert!(
+        signed.len() < THRESHOLD,
+        "an Ed25519 token is {} characters, at or past the {THRESHOLD} the browser \
+         uses to pick a frame, so `site/chat.html` would present it as a blind one \
+         and the mailbox would refuse it",
+        signed.len()
+    );
+
+    for (name, blind) in [
+        ("plus", crate::vectors::BLIND_PLUS_TOKEN),
+        ("plus++", crate::vectors::BLIND_PLUSPLUS_TOKEN),
+    ] {
+        assert!(
+            blind.len() > THRESHOLD,
+            "the blind {name} token is {} characters, at or below the {THRESHOLD} the \
+             browser uses, so `site/chat.html` would present it as an Ed25519 one",
+            blind.len()
+        );
+    }
+
+    // Not just on either side: far enough apart that the threshold is a choice
+    // rather than a coincidence.
+    assert!(
+        crate::vectors::BLIND_PLUS_TOKEN.len() > signed.len() * 2,
+        "the two formats have grown close together: {} against {}. The browser \
+         cannot tell them apart by length any more and needs a real discriminator",
+        crate::vectors::BLIND_PLUS_TOKEN.len(),
+        signed.len()
+    );
 }

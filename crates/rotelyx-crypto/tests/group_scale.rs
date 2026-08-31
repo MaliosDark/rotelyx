@@ -41,9 +41,7 @@ fn measure_how_group_material_grows() {
         let joiner = Member::new(format!("member-{n}").as_bytes()).expect("identity");
         let kp = joiner.key_package().expect("key package");
 
-        let (commit, welcome) = group
-            .invite(&founder, kp.key_package())
-            .expect("invite");
+        let (commit, welcome) = group.invite(&founder, kp.key_package()).expect("invite");
         let tree = group.ratchet_tree().expect("tree");
 
         if checkpoints.get(next) == Some(&n) {

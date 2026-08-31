@@ -63,8 +63,8 @@
 //! does, which is a thing no real-time codec has any reason to support.
 
 use crate::bands::{self, BANDS};
-use crate::mdct::{self, FRAME, WINDOW};
 use crate::entropy::{decode_symbol, encode_symbol, Model, RangeDecoder, RangeEncoder};
+use crate::mdct::{self, FRAME, WINDOW};
 use crate::rangecoder::{Decoder, Encoder};
 use crate::rvq;
 use crate::tns;
@@ -260,7 +260,7 @@ pub fn unfold(symbol: usize) -> i16 {
     if symbol % 2 == 0 {
         (symbol / 2) as i16
     } else {
-        -(((symbol + 1) / 2) as i16)
+        -(symbol.div_ceil(2) as i16)
     }
 }
 
@@ -311,7 +311,11 @@ const AWAKE_LEVELS: i16 = (ENERGY_SYMBOLS - 1) as i16;
 /// flat line and `levels_round_trip_through_their_models` is what caught it.
 fn fold_residual(residual: i16) -> usize {
     let d = residual.rem_euclid(AWAKE_LEVELS);
-    fold(if d > AWAKE_LEVELS / 2 { d - AWAKE_LEVELS } else { d })
+    fold(if d > AWAKE_LEVELS / 2 {
+        d - AWAKE_LEVELS
+    } else {
+        d
+    })
 }
 
 /// Recover the level from a folded residual and the band below it.
@@ -414,36 +418,36 @@ impl LevelModels {
 /// The order is fixed and [`read_levels`] mirrors it exactly: every silence
 /// flag first, then every awake band's level.
 pub fn write_levels(stream: &mut RangeEncoder, levels: &[u8; BANDS], models: &mut LevelModels) {
-    for b in 0..BANDS {
-        let silent = (levels[b] == SILENT) as usize;
+    for (b, &level) in levels.iter().enumerate() {
+        let silent = (level == SILENT) as usize;
         encode_symbol(stream, &mut models.silence[band_context(b)], silent);
     }
 
     let mut predictor: Option<u8> = None;
     let mut previous_residual = 0i16;
 
-    for b in 0..BANDS {
-        if levels[b] == SILENT {
+    for (b, &level) in levels.iter().enumerate() {
+        if level == SILENT {
             continue;
         }
         match predictor {
-            None => encode_symbol(stream, &mut models.first, levels[b] as usize),
+            None => encode_symbol(stream, &mut models.first, level as usize),
             Some(p) => {
-                let residual = levels[b] as i16 - p as i16;
+                let residual = level as i16 - p as i16;
                 let model = models.residual_model(b, previous_residual);
                 encode_symbol(stream, model, fold_residual(residual));
                 previous_residual = residual;
             }
         }
-        predictor = Some(levels[b]);
+        predictor = Some(level);
     }
 }
 
 /// Read back what [`write_levels`] wrote.
 pub fn read_levels(stream: &mut RangeDecoder, models: &mut LevelModels) -> [u8; BANDS] {
     let mut silent = [false; BANDS];
-    for b in 0..BANDS {
-        silent[b] = decode_symbol(stream, &mut models.silence[band_context(b)]) == 1;
+    for (b, flag) in silent.iter_mut().enumerate() {
+        *flag = decode_symbol(stream, &mut models.silence[band_context(b)]) == 1;
     }
 
     let mut levels = [0u8; BANDS];
@@ -831,7 +835,8 @@ impl LayeredDecoder {
 
         let energies: Vec<f32> = self.last_energies.iter().map(|e| e * fade).collect();
         let coefficients = bands::denormalise(&shape, &energies);
-        self.overlap.push(&mdct::inverse(&coefficients, &self.window))
+        self.overlap
+            .push(&mdct::inverse(&coefficients, &self.window))
     }
 
     pub fn decode(&mut self, frame: &LayeredFrame) -> Result<Vec<f32>, CodecError> {
@@ -904,7 +909,9 @@ impl LayeredDecoder {
 
         let mut coefficients = bands::denormalise(&shape, &energies);
         filter.undo(&mut coefficients);
-        Ok(self.overlap.push(&mdct::inverse(&coefficients, &self.window)))
+        Ok(self
+            .overlap
+            .push(&mdct::inverse(&coefficients, &self.window)))
     }
 }
 
@@ -953,7 +960,6 @@ fn read_stage(decoder: &mut Decoder, n: usize, pulses: usize) -> rvq::Stage {
 fn fill_with_noise(shape: &mut [f32], seed: u32) {
     crate::invent_shape(shape, seed);
 }
-
 
 /// Codes the band shapes of one frame, leaving its energies to the caller.
 ///
@@ -1091,7 +1097,9 @@ impl ShapeDecoder {
         }
 
         let coefficients = bands::denormalise(&shape, &energies);
-        Ok(self.overlap.push(&mdct::inverse(&coefficients, &self.window)))
+        Ok(self
+            .overlap
+            .push(&mdct::inverse(&coefficients, &self.window)))
     }
 }
 
@@ -1390,7 +1398,6 @@ mod tests {
         );
     }
 
-
     /// A gap must sound like the voice continuing, not like a hole.
     ///
     /// # What this pins
@@ -1478,9 +1485,9 @@ mod tests {
                     s += gain * (2.0 * PI * f * t).sin();
                 }
                 // 0.25 rather than 0.3: at 0.3 this peaked at 1.113, which is
-            // not audio. No device can represent a sample past full scale, and
-            // measuring a codec on a signal that clips measures the clipping.
-            s * 0.25 * (0.5 + 0.5 * (2.0 * PI * 4.0 * t).sin())
+                // not audio. No device can represent a sample past full scale, and
+                // measuring a codec on a signal that clips measures the clipping.
+                s * 0.25 * (0.5 + 0.5 * (2.0 * PI * 4.0 * t).sin())
             })
             .collect()
     }
@@ -1507,7 +1514,9 @@ mod tests {
         let mut out = Vec::new();
 
         for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
-            let frame = encoder.encode(&signal[start..start + WINDOW]).expect("encode");
+            let frame = encoder
+                .encode(&signal[start..start + WINDOW])
+                .expect("encode");
             out.extend(decoder.decode(&frame.truncated(keep)).expect("decode"));
         }
         out
@@ -1582,7 +1591,9 @@ mod tests {
         let mut encoder = LayeredEncoder::new(60);
 
         encoder.encode(&signal[0..WINDOW]).expect("encode");
-        let frame = encoder.encode(&signal[FRAME..FRAME + WINDOW]).expect("encode");
+        let frame = encoder
+            .encode(&signal[FRAME..FRAME + WINDOW])
+            .expect("encode");
 
         assert!(!frame.base.is_empty());
         assert_eq!(frame.refinements.len(), LAYERS - 1);
@@ -1621,7 +1632,9 @@ mod tests {
         let all: Vec<usize> = (0..signal.len() - WINDOW).step_by(FRAME).collect();
 
         for (i, &start) in all.iter().enumerate() {
-            let f = encoder.encode(&signal[start..start + WINDOW]).expect("encode");
+            let f = encoder
+                .encode(&signal[start..start + WINDOW])
+                .expect("encode");
             energy_bytes += f.base[0] as usize;
             base_bytes += f.base.len();
             total_bytes += f.len();
@@ -1642,10 +1655,22 @@ mod tests {
         // Split the run in two, so the model's startup cost is separated from
         // what it settles at. A short clip measures mostly adaptation.
         println!("\n  over {frames} frames, per frame:");
-        println!("    energies      {:.1} bytes  (was 18, fixed width)", energy_bytes as f32 / frames as f32);
-        println!("    base layer    {:.1} bytes", base_bytes as f32 / frames as f32);
-        println!("    whole frame   {:.1} bytes", total_bytes as f32 / frames as f32);
-        println!("    base share    {:.0}%", 100.0 * base_bytes as f32 / total_bytes as f32);
+        println!(
+            "    energies      {:.1} bytes  (was 18, fixed width)",
+            energy_bytes as f32 / frames as f32
+        );
+        println!(
+            "    base layer    {:.1} bytes",
+            base_bytes as f32 / frames as f32
+        );
+        println!(
+            "    whole frame   {:.1} bytes",
+            total_bytes as f32 / frames as f32
+        );
+        println!(
+            "    base share    {:.0}%",
+            100.0 * base_bytes as f32 / total_bytes as f32
+        );
 
         // What the deltas actually look like, which decides what is possible.
         let mut encoder = LayeredEncoder::new(60);
@@ -1692,19 +1717,17 @@ mod tests {
 
             // The predictor is the band below, in this same frame.
             let mut predictor: Option<u8> = None;
-            for b in 0..BANDS {
-                if levels[b] == SILENT {
+            for &level in levels.iter() {
+                if level == SILENT {
                     continue;
                 }
                 match predictor {
                     Some(p) => {
-                        *deviation_hist
-                            .entry(levels[b] as i32 - p as i32)
-                            .or_default() += 1;
+                        *deviation_hist.entry(level as i32 - p as i32).or_default() += 1;
                     }
-                    None => *absolute_hist.entry(levels[b]).or_default() += 1,
+                    None => *absolute_hist.entry(level).or_default() += 1,
                 }
-                predictor = Some(levels[b]);
+                predictor = Some(level);
             }
         }
 
@@ -1814,8 +1837,8 @@ mod tests {
 
         for f in 1..frames.len() {
             let mut predictor: Option<u8> = None;
-            for b in 0..BANDS {
-                if frames[f][b] == SILENT {
+            for (b, &level) in frames[f].iter().enumerate() {
+                if level == SILENT {
                     continue;
                 }
                 if frames[f - 1][b] != SILENT {
@@ -1842,7 +1865,9 @@ mod tests {
         let mut encoder = LayeredEncoder::new(60);
 
         for start in (0..signal.len() - WINDOW).step_by(FRAME) {
-            let frame = encoder.encode(&signal[start..start + WINDOW]).expect("encode");
+            let frame = encoder
+                .encode(&signal[start..start + WINDOW])
+                .expect("encode");
 
             for keep in 0..=frame.refinements.len() {
                 let trimmed = frame.truncated(keep);
@@ -1852,8 +1877,11 @@ mod tests {
                 assert_eq!(back.base, trimmed.base);
                 // Trailing empty refinements are dropped rather than framed,
                 // which is the point of the format, so compare what is carried.
-                let sent: Vec<&Vec<u8>> =
-                    trimmed.refinements.iter().filter(|r| !r.is_empty()).collect();
+                let sent: Vec<&Vec<u8>> = trimmed
+                    .refinements
+                    .iter()
+                    .filter(|r| !r.is_empty())
+                    .collect();
                 let got: Vec<&Vec<u8>> = back.refinements.iter().collect();
                 assert_eq!(got.len(), sent.len(), "layer count changed on the wire");
                 for (a, b) in got.iter().zip(&sent) {
@@ -1962,7 +1990,11 @@ mod tests {
 
         let mut frames = Vec::new();
         for start in (0..signal.len() - WINDOW).step_by(FRAME) {
-            frames.push(encoder.encode(&signal[start..start + WINDOW]).expect("encode"));
+            frames.push(
+                encoder
+                    .encode(&signal[start..start + WINDOW])
+                    .expect("encode"),
+            );
         }
 
         // The same frames, delivered at four different rates.

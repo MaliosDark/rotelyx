@@ -79,9 +79,7 @@ fn the_operator_learns_nothing_it_should_not() {
 
     // No plaintext.
     assert!(
-        !on_the_wire
-            .windows(plaintext.len())
-            .any(|w| w == plaintext),
+        !on_the_wire.windows(plaintext.len()).any(|w| w == plaintext),
         "plaintext reached the operator"
     );
 
@@ -113,7 +111,7 @@ fn message_length_is_hidden_end_to_end() {
     let tag = tags.tag_for_epoch(1);
 
     let short = a.send(&alice, b"si").expect("send");
-    let long = a.send(&alice, &vec![b'x'; 150]).expect("send");
+    let long = a.send(&alice, &[b'x'; 150]).expect("send");
 
     let e_short = Envelope::seal(tag, &short).expect("seal");
     let e_long = Envelope::seal(tag, &long).expect("seal");
@@ -170,7 +168,11 @@ fn the_post_quantum_commit_survives_the_mailbox() {
 
     // And the conversation continues, now post-quantum protected.
     let msg = a.send(&alice, b"after the commit").expect("send");
-    let got = b.receive(&bob, &msg).expect("receive").message().expect("application");
+    let got = b
+        .receive(&bob, &msg)
+        .expect("receive")
+        .message()
+        .expect("application");
     assert_eq!(got, b"after the commit");
 }
 

@@ -5638,6 +5638,7 @@ dependencies = [
  "anyhow",
  "data-encoding",
  "futures-util",
+ "rotelyx-capability",
  "rotelyx-mailbox",
  "rotelyx-wasm",
  "serde",
@@ -5645,6 +5646,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

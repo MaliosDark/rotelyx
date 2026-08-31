@@ -183,8 +183,7 @@ impl RotelyxEndpoint {
         // none, which is the branch where every invitation is eligible.
         let dialled = Some(RotelyxId::from(self.net.answered_at(&session.net)));
         session.answered_at = dialled;
-        if let Err(e) = gate.admit(&session.peer(), &self.id, &evidence, current_epoch, dialled)
-        {
+        if let Err(e) = gate.admit(&session.peer(), &self.id, &evidence, current_epoch, dialled) {
             session.close().await;
             return Err(e.into());
         }
@@ -214,9 +213,7 @@ impl RotelyxEndpoint {
     /// For a call, which never uses one. See
     /// [`rotelyx_net::NetEndpoint::accept_media`] for why waiting for a stream
     /// is the wrong thing to do when the other side has no reason to open one.
-    pub async fn accept_media(
-        &self,
-    ) -> Result<(RotelyxId, rotelyx_net::Connection)> {
+    pub async fn accept_media(&self) -> Result<(RotelyxId, rotelyx_net::Connection)> {
         let (peer, conn) = self.net.accept_media().await?;
         Ok((RotelyxId::from(peer), conn))
     }
@@ -270,8 +267,6 @@ impl Session {
     pub fn peer(&self) -> RotelyxId {
         self.peer
     }
-
-
 
     pub async fn send(&mut self, frame: &Frame) -> Result<(), WireError> {
         frame.write(self.net.send_stream()).await

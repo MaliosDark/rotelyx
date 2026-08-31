@@ -216,7 +216,11 @@ mod tests {
             to_bob, to_carol,
             "two people invited separately were shown the same name and can link them"
         );
-        assert_ne!(to_bob, me.id(), "the long-lived identity reached a conversation");
+        assert_ne!(
+            to_bob,
+            me.id(),
+            "the long-lived identity reached a conversation"
+        );
         assert_ne!(to_carol, me.id());
     }
 
@@ -280,7 +284,9 @@ mod tests {
         let sn = a.safety_number(&b.id());
         let groups: Vec<_> = sn.split(' ').collect();
         assert_eq!(groups.len(), 12);
-        assert!(groups.iter().all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
+        assert!(groups
+            .iter()
+            .all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
     }
 
     #[test]

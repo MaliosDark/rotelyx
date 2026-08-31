@@ -16,14 +16,16 @@ fn open_call(session: u64) -> i64 {
     unsafe { rotelyx_mobile::rotelyx_call_open(session, 60, 0, call.as_ptr(), call.len() as i32) }
 }
 
-
 fn control(request: Value) -> Value {
     let text = CString::new(request.to_string()).expect("no NUL");
     let mut response = std::ptr::null_mut();
     unsafe { rotelyx_mobile::rotelyx_call(text.as_ptr(), &mut response) };
     assert!(!response.is_null());
     let reply: Value = unsafe {
-        let s = CStr::from_ptr(response).to_str().expect("UTF-8").to_string();
+        let s = CStr::from_ptr(response)
+            .to_str()
+            .expect("UTF-8")
+            .to_string();
         rotelyx_mobile::rotelyx_string_free(response);
         serde_json::from_str(&s).expect("JSON")
     };
@@ -34,8 +36,12 @@ fn control(request: Value) -> Value {
 /// Two sessions in one conversation, which is what a call needs before it can
 /// derive a key at all.
 fn paired() -> (u64, u64) {
-    let ana = control(json!({"op": "session.new", "label": "ana"})).as_u64().unwrap();
-    let beto = control(json!({"op": "session.new", "label": "beto"})).as_u64().unwrap();
+    let ana = control(json!({"op": "session.new", "label": "ana"}))
+        .as_u64()
+        .unwrap();
+    let beto = control(json!({"op": "session.new", "label": "beto"}))
+        .as_u64()
+        .unwrap();
 
     control(json!({"op": "session.found", "handle": ana}));
     let package = control(json!({"op": "session.keyPackage", "handle": beto}));
@@ -166,17 +172,15 @@ fn one_person_speaks_and_the_other_hears() {
 /// better than deriving a key from zeroes.
 #[test]
 fn a_call_needs_a_conversation() {
-    let alone = control(json!({"op": "session.new", "label": "alone"})).as_u64().unwrap();
+    let alone = control(json!({"op": "session.new", "label": "alone"}))
+        .as_u64()
+        .unwrap();
     assert_eq!(
         open_call(alone),
         -2,
         "a session with no conversation has no media key"
     );
-    assert_eq!(
-        open_call(999_999),
-        -1,
-        "an unknown session handle"
-    );
+    assert_eq!(open_call(999_999), -1, "an unknown session handle");
 }
 
 /// Nothing a wrapper passes may crash the audio path.
@@ -195,35 +199,58 @@ fn the_audio_path_refuses_rubbish_rather_than_crashing() {
 
     unsafe {
         // Null in, null out.
-        assert!(rotelyx_mobile::rotelyx_call_capture(
-            call, std::ptr::null(), samples, out.as_mut_ptr(), out.len() as i32) < 0);
-        assert!(rotelyx_mobile::rotelyx_call_capture(
-            call, pcm.as_ptr(), samples, std::ptr::null_mut(), 16) < 0);
+        assert!(
+            rotelyx_mobile::rotelyx_call_capture(
+                call,
+                std::ptr::null(),
+                samples,
+                out.as_mut_ptr(),
+                out.len() as i32
+            ) < 0
+        );
+        assert!(
+            rotelyx_mobile::rotelyx_call_capture(
+                call,
+                pcm.as_ptr(),
+                samples,
+                std::ptr::null_mut(),
+                16
+            ) < 0
+        );
 
         // A frame that is not 20 ms. The engine's window is fixed, so a caller
         // resampling badly must be told rather than quietly mixed.
         for wrong in [0, 1, samples - 1, samples + 1, samples * 2] {
             assert!(
                 rotelyx_mobile::rotelyx_call_capture(
-                    call, pcm.as_ptr(), wrong, out.as_mut_ptr(), out.len() as i32) < 0,
+                    call,
+                    pcm.as_ptr(),
+                    wrong,
+                    out.as_mut_ptr(),
+                    out.len() as i32
+                ) < 0,
                 "a {wrong} sample frame was accepted"
             );
         }
 
         // An output buffer too small for the datagram.
         rotelyx_mobile::rotelyx_call_capture(
-            call, pcm.as_ptr(), samples, out.as_mut_ptr(), out.len() as i32);
+            call,
+            pcm.as_ptr(),
+            samples,
+            out.as_mut_ptr(),
+            out.len() as i32,
+        );
         assert!(
-            rotelyx_mobile::rotelyx_call_capture(
-                call, pcm.as_ptr(), samples, out.as_mut_ptr(), 4) < 0,
+            rotelyx_mobile::rotelyx_call_capture(call, pcm.as_ptr(), samples, out.as_mut_ptr(), 4)
+                < 0,
             "a four byte buffer cannot hold a frame and must be refused"
         );
 
         // Delivery of nonsense: never authenticates, never crashes.
         for junk in [vec![], vec![0u8; 1], vec![0xffu8; 64], vec![0u8; 1199]] {
             assert_eq!(
-                rotelyx_mobile::rotelyx_call_deliver(
-                    call, junk.as_ptr(), junk.len() as i32, 0),
+                rotelyx_mobile::rotelyx_call_deliver(call, junk.as_ptr(), junk.len() as i32, 0),
                 0,
                 "a datagram that fails to authenticate is dropped, not an error"
             );
@@ -233,16 +260,22 @@ fn the_audio_path_refuses_rubbish_rather_than_crashing() {
         // Playback into nothing, and into a buffer too small.
         let mut speaker = vec![0i16; samples as usize];
         assert!(rotelyx_mobile::rotelyx_call_playback(call, std::ptr::null_mut(), samples) < 0);
-        assert!(rotelyx_mobile::rotelyx_call_playback(
-            call, speaker.as_mut_ptr(), samples - 1) < 0);
+        assert!(rotelyx_mobile::rotelyx_call_playback(call, speaker.as_mut_ptr(), samples - 1) < 0);
         assert_eq!(
             rotelyx_mobile::rotelyx_call_playback(call, speaker.as_mut_ptr(), samples),
             samples
         );
 
         // An unknown call handle, on every entry point.
-        assert!(rotelyx_mobile::rotelyx_call_capture(
-            -5, pcm.as_ptr(), samples, out.as_mut_ptr(), out.len() as i32) < 0);
+        assert!(
+            rotelyx_mobile::rotelyx_call_capture(
+                -5,
+                pcm.as_ptr(),
+                samples,
+                out.as_mut_ptr(),
+                out.len() as i32
+            ) < 0
+        );
         assert!(rotelyx_mobile::rotelyx_call_deliver(-5, out.as_ptr(), 1, 0) < 0);
         assert!(rotelyx_mobile::rotelyx_call_playback(-5, speaker.as_mut_ptr(), samples) < 0);
         assert!(rotelyx_mobile::rotelyx_call_stats(-5, std::ptr::null_mut()) < 0);

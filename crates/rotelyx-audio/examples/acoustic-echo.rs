@@ -25,7 +25,8 @@ use rotelyx_audio::echo::EchoCanceller;
 mod common;
 // `db` is not imported: this file defines its own below, which shadowed the
 // one here and left the import unused.
-use common::{best_delay, read_wav, RATE};
+use common::{read_wav, RATE};
+use rotelyx_audio::align::{align, align_near, MAX_PLAUSIBLE_DELAY};
 
 const BLOCK: usize = 960;
 
@@ -73,7 +74,10 @@ fn main() {
                 let cleaned = control.capture(n2);
                 if i * BLOCK >= BLOCK * 25 {
                     b += n2.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>();
-                    a += cleaned.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>();
+                    a += cleaned
+                        .iter()
+                        .map(|s| (*s as f64) * (*s as f64))
+                        .sum::<f64>();
                 }
             }
             (10.0 * (b / a.max(1e-30)).log10()) as f32
@@ -93,8 +97,14 @@ fn main() {
             })
             .collect();
 
-        println!("  control, invented echo, white noise far end: {:.1} dB", run(&noise));
-        println!("  control, invented echo, speech far end:      {:.1} dB", run(&played));
+        println!(
+            "  control, invented echo, white noise far end: {:.1} dB",
+            run(&noise)
+        );
+        println!(
+            "  control, invented echo, speech far end:      {:.1} dB",
+            run(&played)
+        );
     }
     println!(
         "\n  played {:.1}s, heard {:.1}s",
@@ -102,30 +112,24 @@ fn main() {
         heard.len() as f32 / RATE as f32
     );
 
-    let Some((delay, correlation)) = best_delay(&played, &heard) else {
+    let Some(coarse) = align(&played, &heard, MAX_PLAUSIBLE_DELAY) else {
         println!("  the microphone did not hear the speaker at all.");
         println!("  Nothing can be measured from this: check the output is not muted");
         println!("  and that the speaker is pointing at the microphone.");
         std::process::exit(1);
     };
 
+    let delay = coarse.delay;
     println!(
-        "  the speaker reaches the microphone {:.0} ms later, correlation {:.2}",
+        "  the speaker reaches the microphone {:.0} ms later, margin {:.2}",
         delay as f32 * 1000.0 / RATE as f32,
-        correlation
+        coarse.margin
     );
-    if correlation < 0.05 {
-        println!("  and barely: below about 0.05 this is a room that is not coupling,");
-        println!("  so what follows measures noise rather than an echo path.");
-    } else if correlation < 0.5 {
-        // Said out loud because the number below is meaningless without it. A
-        // direct acoustic path correlates strongly with what was played; a weak
-        // peak means the alignment is a guess, and a canceller aligned to a
-        // guess adapts to noise and makes the echo worse rather than better.
-        println!("  that correlation is weak. A direct path from a speaker to a");
-        println!("  microphone in the same room correlates far more strongly, so");
-        println!("  this alignment is probably wrong and the figures below are");
-        println!("  measuring a canceller that was handed the wrong reference.");
+    if coarse.at_edge() {
+        println!("  and that answer sits at the edge of the search, which means the");
+        println!("  correlation was still rising when it ran out of room. The real");
+        println!("  delay is outside the range and nothing below is trustworthy.");
+        std::process::exit(1);
     }
 
     // Aligned, so the canceller spends its filter on the room rather than on a
@@ -176,7 +180,10 @@ fn main() {
         "  while converging, the first 0.5s: {:.1} dB removed",
         db(early_before, early_after)
     );
-    println!("  once converged:                {:.1} dB removed", db(before, after));
+    println!(
+        "  once converged:                {:.1} dB removed",
+        db(before, after)
+    );
     println!(
         "  the canceller's own estimate:  {:.1} dB",
         canceller.loss_db()
@@ -195,6 +202,26 @@ fn main() {
     // it is.
     println!("\n  the same, on short windows, each realigned:");
     let window = RATE / 2;
+    // How far one window may sit from the coarse delay. Two crystals 341 ppm
+    // apart move eight milliseconds over this recording, so a hundred is wide
+    // enough to see any drift there is and narrow enough to exclude the wrong
+    // peaks an unbounded search finds in speech.
+    //
+    // Settable, because the first run at 100 ms came back with a spread of
+    // 100 ms and those being the same number means the measurement cannot tell
+    // a spread it found from the bound it was given. Widen it and see whether
+    // the spread follows:
+    //
+    //     ROTELYX_ALIGN_TOLERANCE_MS=400 scripts/measure-echo
+    let window_tolerance: usize = std::env::var("ROTELYX_ALIGN_TOLERANCE_MS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|ms| ms * RATE / 1000)
+        .unwrap_or(RATE / 10);
+    println!(
+        "  per-window search bounded to +/-{} ms around the coarse delay",
+        window_tolerance * 1000 / RATE
+    );
     let mut totals: Vec<f32> = Vec::new();
     // Where each window had to be realigned to, kept so the slope can be read
     // off afterwards. See the drift report below.
@@ -209,12 +236,21 @@ fn main() {
         }
         // Realigned inside this window, so whatever the clocks have drifted to
         // by now is taken out before the canceller sees it.
-        let Some((local, _)) = best_delay(far, &heard[region_start..region_end]) else {
+        //
+        // Searched **around** the coarse delay rather than forward from it. The
+        // previous version looked only at lags at or after `region_start`, so a
+        // path that drifted the other way clamped at zero and reported no
+        // movement, which is the shape of an answer and not one.
+        let Some(found) = align_near(far, &heard, region_start, window_tolerance) else {
             at += window;
             continue;
         };
-        alignments.push((at as f64, local as f64));
-        let near_start = region_start + local;
+        if found.at_edge() {
+            at += window;
+            continue;
+        }
+        alignments.push((at as f64, found.delay as f64 - region_start as f64));
+        let near_start = found.delay;
         if near_start + window > heard.len() {
             break;
         }
@@ -230,7 +266,10 @@ fn main() {
             fresh.played(f);
             let cleaned = fresh.capture(n2);
             b += n2.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>();
-            a += cleaned.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>();
+            a += cleaned
+                .iter()
+                .map(|s| (*s as f64) * (*s as f64))
+                .sum::<f64>();
         }
         totals.push(db(b, a) as f32);
         at += window;
@@ -285,7 +324,11 @@ fn main() {
             .iter()
             .map(|(x, y)| (y - (mean_y + slope * (x - mean_x))).powi(2))
             .sum();
-        let r2 = if ss_tot > 0.0 { 1.0 - ss_res / ss_tot } else { 0.0 };
+        let r2 = if ss_tot > 0.0 {
+            1.0 - ss_res / ss_tot
+        } else {
+            0.0
+        };
 
         let spread = {
             let mut v: Vec<f64> = alignments.iter().map(|(_, y)| *y).collect();

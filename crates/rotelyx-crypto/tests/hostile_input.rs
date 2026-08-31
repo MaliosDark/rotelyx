@@ -24,9 +24,16 @@ fn a_binding() -> rotelyx_crypto::PqBinding {
     rotelyx_crypto::PqBinding::new(b"a-group", 1, b"a-signature-key", A_SENDER)
 }
 
+/// A parser under test: its name, one valid input, and a call that says only
+/// whether it returned.
+///
+/// `bool` rather than the parsed value, because the parsers return types that
+/// have nothing in common and what is under test is whether the call returns at
+/// all rather than what it produces.
+type Specimen = (&'static str, Vec<u8>, fn(&[u8]) -> bool);
 
 /// Valid specimens, one per parser, produced the way the protocol produces them.
-fn specimens() -> Vec<(&'static str, Vec<u8>, fn(&[u8]) -> bool)> {
+fn specimens() -> Vec<Specimen> {
     // Only the public half and a ciphertext under it: what these parsers read
     // is what arrives from somebody else, and none of it is opened here.
     let (_secret, public) = HybridKem::generate();
@@ -38,11 +45,9 @@ fn specimens() -> Vec<(&'static str, Vec<u8>, fn(&[u8]) -> bool)> {
             public.to_bytes().to_vec(),
             (|b| HybridPublicKey::from_bytes(b).is_ok()) as fn(&[u8]) -> bool,
         ),
-        (
-            "HybridCiphertext",
-            ciphertext.to_bytes().to_vec(),
-            |b| HybridCiphertext::from_bytes(b).is_ok(),
-        ),
+        ("HybridCiphertext", ciphertext.to_bytes().to_vec(), |b| {
+            HybridCiphertext::from_bytes(b).is_ok()
+        }),
         (
             "WrappedPqSecret",
             pq.wrap_for(&public, &a_binding()).expect("wrap").to_bytes(),

@@ -149,7 +149,7 @@ fn err(e: impl std::fmt::Display) -> Error {
 fn decode(s: &str) -> Result<Vec<u8>, Error> {
     BASE64
         .decode(s.trim().as_bytes())
-        .map_err(|e| Error::new(&format!("not valid base64: {e}")))
+        .map_err(|e| Error::new(format!("not valid base64: {e}")))
 }
 
 /// What a conversation returns after a member is added.
@@ -271,7 +271,7 @@ impl Session {
     /// already advanced by the time the caller sees the result.
     pub fn invite(&mut self, key_package_b64: &str) -> Result<Invitation, Error> {
         if self.member_count() >= MAX_MEMBERS {
-            return Err(Error::new(&format!(
+            return Err(Error::new(format!(
                 "this conversation is full at {MAX_MEMBERS} members. Refusing rather than \
                  degrading: every message already costs one deposit per recipient, and \
                  beyond this the padding and the bandwidth both stop being reasonable"
@@ -400,7 +400,10 @@ impl Session {
     /// secret, because MLS looks a pre-shared key up by one id, so the secret
     /// is chosen here and sealed to each member rather than derived pairwise.
     #[wasm_bindgen(js_name = beginGroupPq)]
-    pub fn begin_group_pq(&mut self, hybrid_public_keys: Vec<String>) -> Result<Vec<String>, Error> {
+    pub fn begin_group_pq(
+        &mut self,
+        hybrid_public_keys: Vec<String>,
+    ) -> Result<Vec<String>, Error> {
         let group = self
             .conversation
             .as_ref()
@@ -475,13 +478,17 @@ impl Session {
 
         // First one wins. Overwriting would let a second wrap, arriving after
         // the legitimate one, replace the value the commit is about to look up.
-        if self.staged_pq.contains(&binding_id(&group.group_id(), group.epoch())) {
+        if self
+            .staged_pq
+            .contains(&binding_id(&group.group_id(), group.epoch()))
+        {
             return Err(Error::new(
                 "a post-quantum secret is already staged for this group and epoch",
             ));
         }
         group.stage_pq_secret(member, &secret).map_err(err)?;
-        self.staged_pq.push(binding_id(&group.group_id(), group.epoch()));
+        self.staged_pq
+            .push(binding_id(&group.group_id(), group.epoch()));
         Ok(())
     }
 
@@ -552,7 +559,11 @@ impl Session {
         self.sync_tag_keys()?;
 
         fn short(identity: &[u8]) -> String {
-            identity.iter().take(8).map(|b| format!("{b:02x}")).collect()
+            identity
+                .iter()
+                .take(8)
+                .map(|b| format!("{b:02x}"))
+                .collect()
         }
 
         // Built by serde rather than by hand.
@@ -569,7 +580,9 @@ impl Session {
         // same way. A message with an accent in it produced a document no
         // parser would accept, which in Spanish is most messages.
         let value = match outcome {
-            rotelyx_crypto::Received::Message { bytes: plaintext, .. } => {
+            rotelyx_crypto::Received::Message {
+                bytes: plaintext, ..
+            } => {
                 let text = String::from_utf8(plaintext)
                     .map_err(|_| Error::new("decrypted payload is not valid UTF-8"))?;
                 serde_json::json!({ "kind": "message", "text": text })
@@ -649,7 +662,10 @@ impl Session {
         for (_, key) in self.tag_keys.iter().rev() {
             let pk = key.payload_key();
             // Bound to this tag, or unbound because it came through a fan-out.
-            if let Ok(plain) = pk.open(Some(tag), sealed).or_else(|_| pk.open(None, sealed)) {
+            if let Ok(plain) = pk
+                .open(Some(tag), sealed)
+                .or_else(|_| pk.open(None, sealed))
+            {
                 return Ok(BASE64.encode(&plain));
             }
         }
@@ -765,12 +781,11 @@ impl Session {
     /// else can.
     #[wasm_bindgen(js_name = myTag)]
     pub fn my_tag(&self, time_bucket: u64) -> Result<String, Error> {
-        Ok(hex(
-            self.tag_key()?
-                .for_member(&self.member.signature_key())
-                .tag_for_epoch(time_bucket)
-                .as_bytes(),
-        ))
+        Ok(hex(self
+            .tag_key()?
+            .for_member(&self.member.signature_key())
+            .tag_for_epoch(time_bucket)
+            .as_bytes()))
     }
 
     /// The tags this member polls: its own, across the lookback window.
@@ -952,10 +967,7 @@ impl Session {
             // Sealed per recipient rather than once, so each payload is bound
             // to the address it is deposited under and an operator cannot move
             // one to another.
-            let payload = key
-                .payload_key()
-                .seal(Some(tag), &plaintext)
-                .map_err(err)?;
+            let payload = key.payload_key().seal(Some(tag), &plaintext).map_err(err)?;
             out.push(BASE64.encode(&Envelope::seal(tag, &payload).map_err(err)?.to_bytes()));
         }
         Ok(out)
@@ -971,7 +983,10 @@ impl Session {
     ) -> Result<String, Error> {
         let envelope = Envelope::from_bytes(&decode(envelope_b64)?).map_err(err)?;
 
-        if !self.my_tags(time_bucket, lookback)?.contains(&envelope.tag()) {
+        if !self
+            .my_tags(time_bucket, lookback)?
+            .contains(&envelope.tag())
+        {
             return Err(Error::new("envelope is not addressed to us in this window"));
         }
 
@@ -980,7 +995,10 @@ impl Session {
         for (_, key) in self.tag_keys.iter().rev() {
             let pk = key.payload_key();
             // Bound to this tag, or unbound because it came through a fan-out.
-            if let Ok(plain) = pk.open(Some(tag), sealed).or_else(|_| pk.open(None, sealed)) {
+            if let Ok(plain) = pk
+                .open(Some(tag), sealed)
+                .or_else(|_| pk.open(None, sealed))
+            {
                 return Ok(BASE64.encode(&plain));
             }
         }
@@ -1292,7 +1310,6 @@ pub fn receipt_for(envelope_b64: &str) -> Result<String, Error> {
     Ok(data_encoding::HEXLOWER.encode(&envelope.digest()))
 }
 
-
 /// Derive a meeting tag from a phrase both sides already know.
 ///
 /// # This tag is not a secret channel
@@ -1437,8 +1454,7 @@ const MEETING_BODY: usize = MEETING_ENTROPY * 8 / 5;
 #[wasm_bindgen(js_name = newMeetingCode)]
 pub fn new_meeting_code() -> Result<String, Error> {
     let mut bytes = [0u8; MEETING_ENTROPY];
-    getrandom::fill(&mut bytes)
-        .map_err(|e| Error::new(format!("no randomness available: {e}")))?;
+    getrandom::fill(&mut bytes).map_err(|e| Error::new(format!("no randomness available: {e}")))?;
 
     let mut out = String::with_capacity(MEETING_PREFIX.len() + MEETING_BODY);
     out.push_str(MEETING_PREFIX);
@@ -1450,7 +1466,9 @@ pub fn new_meeting_code() -> Result<String, Error> {
         bits += 8;
         while bits >= 5 {
             bits -= 5;
-            out.push(char::from(MEETING_ALPHABET[((buffer >> bits) & 0x1F) as usize]));
+            out.push(char::from(
+                MEETING_ALPHABET[((buffer >> bits) & 0x1F) as usize],
+            ));
         }
     }
     debug_assert_eq!(bits, 0, "entropy must divide into whole base32 characters");
@@ -1573,7 +1591,6 @@ impl Session {
             .position(|p| p.signature_key == mine)
             .ok_or_else(|| Error::new("this member is not in its own roster"))
     }
-
 }
 
 /// A key derived from a passphrase, held for the life of a tab.
@@ -1831,9 +1848,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-
-
-
 #[cfg(test)]
 mod tests {
 
@@ -1879,7 +1893,9 @@ mod tests {
         let mut bob = Session::new("bob").expect("identity");
 
         alice.found().expect("found");
-        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
 
         let group_id = alice.group_id().expect("group id");
@@ -1924,7 +1940,10 @@ mod tests {
         let envelope = alice.seal(&ct, 100).expect("seal");
         let opened = bob.open(&envelope, 100, 2).expect("open");
         let text = bob.receive(&opened).expect("receive");
-        assert!(text.contains("hello"), "the recipient could not read it: {text}");
+        assert!(
+            text.contains("hello"),
+            "the recipient could not read it: {text}"
+        );
     }
 
     /// A wrap minted by somebody outside the group is refused.
@@ -1961,7 +1980,10 @@ mod tests {
         assert_ne!(for_one, for_two, "two envelopes must not share a receipt");
 
         // Same bytes, same name, however many times a client is handed them.
-        assert_eq!(for_one, receipt_for(&BASE64.encode(&one.to_bytes())).expect("again"));
+        assert_eq!(
+            for_one,
+            receipt_for(&BASE64.encode(&one.to_bytes())).expect("again")
+        );
     }
 
     /// Rubbish is refused rather than named.
@@ -1978,7 +2000,9 @@ mod tests {
         let mut mallory = Session::new("mallory").expect("identity");
 
         alice.found().expect("found");
-        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
 
         // Mallory holds Bob's published hybrid key, which is public, and is not
@@ -1995,7 +2019,8 @@ mod tests {
             .begin_group_pq(vec![bob.hybrid_public_key()])
             .expect("wrap for bob");
         assert_eq!(wraps.len(), 1);
-        bob.open_group_pq(&wraps[0]).expect("bob opens alice's wrap");
+        bob.open_group_pq(&wraps[0])
+            .expect("bob opens alice's wrap");
 
         // And a wrap whose signature has been tampered with is refused rather
         // than opened. Flipping a byte of the signature is the cheapest forgery
@@ -2006,7 +2031,9 @@ mod tests {
         let tampered = BASE64.encode(&tampered);
 
         let mut carol = Session::new("carol").expect("identity");
-        let inv = alice.invite(&carol.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&carol.key_package().expect("kp"))
+            .expect("invite");
         carol.join(&inv.welcome, &inv.ratchet_tree).expect("join");
 
         assert!(
@@ -2032,7 +2059,9 @@ mod tests {
         alice.found().expect("found");
         let alone = alice.safety_number().expect("number");
 
-        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
         let with_bob = alice.safety_number().expect("number");
 
@@ -2050,7 +2079,9 @@ mod tests {
             "the two sides disagree about who is in the conversation"
         );
 
-        let inv = alice.invite(&carol.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&carol.key_package().expect("kp"))
+            .expect("invite");
         carol.join(&inv.welcome, &inv.ratchet_tree).expect("join");
         let with_carol = alice.safety_number().expect("number");
 
@@ -2062,7 +2093,9 @@ mod tests {
         // The shape is what a person reads aloud: six groups of five digits.
         let groups: Vec<&str> = with_carol.split(' ').collect();
         assert_eq!(groups.len(), 6);
-        assert!(groups.iter().all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
+        assert!(groups
+            .iter()
+            .all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
     }
 
     /// break is caught by `cargo test` instead of by a blank page.
@@ -2072,7 +2105,9 @@ mod tests {
         let mut bob = Session::new("bob").expect("identity");
 
         alice.found().expect("found");
-        let invitation = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let invitation = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&invitation.welcome, &invitation.ratchet_tree)
             .expect("join");
 
@@ -2115,7 +2150,9 @@ mod tests {
         let mut bob = Session::new("bob").expect("identity");
 
         alice.found().expect("found");
-        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
 
         alice
@@ -2138,7 +2175,9 @@ mod tests {
         let mut bob = Session::new("bob").expect("identity");
 
         alice.found().expect("found");
-        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
 
         assert_eq!(
@@ -2162,22 +2201,30 @@ mod tests {
         let mut mallory_b = Session::new("mallory2").expect("identity");
 
         alice.found().expect("found");
-        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
 
         mallory_a.found().expect("found");
         let inv2 = mallory_a
             .invite(&mallory_b.key_package().expect("kp"))
             .expect("invite");
-        mallory_b.join(&inv2.welcome, &inv2.ratchet_tree).expect("join");
+        mallory_b
+            .join(&inv2.welcome, &inv2.ratchet_tree)
+            .expect("join");
 
-        let foreign = mallory_a.seal(&BASE64.encode(b"payload"), 490_000).expect("seal");
+        let foreign = mallory_a
+            .seal(&BASE64.encode(b"payload"), 490_000)
+            .expect("seal");
         assert!(
             bob.open(&foreign, 490_000, 1).is_err(),
             "an envelope under someone else's tag must be refused"
         );
 
-        let ours = alice.seal(&BASE64.encode(b"payload"), 490_000).expect("seal");
+        let ours = alice
+            .seal(&BASE64.encode(b"payload"), 490_000)
+            .expect("seal");
         assert!(bob.open(&ours, 490_000, 1).is_ok());
     }
 
@@ -2200,9 +2247,9 @@ mod tests {
                 .expect("join");
 
             // Everyone already in the group applies the commit.
-            for j in 1..i {
+            for member in sessions.iter_mut().take(i).skip(1) {
                 assert!(
-                    !is_message(&sessions[j].receive(&invitation.commit).expect("commit")),
+                    !is_message(&member.receive(&invitation.commit).expect("commit")),
                     "an add commit carries no plaintext"
                 );
             }
@@ -2269,7 +2316,11 @@ mod tests {
         let epoch_before = group[0].epoch();
 
         // The committer seals one chosen secret to each of the others.
-        let keys: Vec<String> = group.iter().skip(1).map(|s| s.hybrid_public_key()).collect();
+        let keys: Vec<String> = group
+            .iter()
+            .skip(1)
+            .map(|s| s.hybrid_public_key())
+            .collect();
         let wrapped = group[0].begin_group_pq(keys).expect("wrap");
         assert_eq!(wrapped.len(), 3);
 
@@ -2410,7 +2461,9 @@ mod tests {
 
         let one_too_many = Session::new("gatecrasher").expect("identity");
         assert!(
-            founder.invite(&one_too_many.key_package().expect("kp")).is_err(),
+            founder
+                .invite(&one_too_many.key_package().expect("kp"))
+                .is_err(),
             "member {} must be refused rather than admitted quietly",
             MAX_MEMBERS + 1
         );
@@ -2467,9 +2520,11 @@ mod tests {
 
         let key = SessionKey::create(phrase).expect("key");
         let sealed = group[1].seal_session(&key).expect("seal");
-        let mut reopened =
-            Session::unseal_session(&sealed, &SessionKey::unlock(phrase, &sealed).expect("unlock"))
-                .expect("unseal");
+        let mut reopened = Session::unseal_session(
+            &sealed,
+            &SessionKey::unlock(phrase, &sealed).expect("unlock"),
+        )
+        .expect("unseal");
 
         assert_eq!(reopened.epoch(), epoch, "the epoch must not move");
         assert_eq!(reopened.member_count(), 3);
@@ -2510,9 +2565,11 @@ mod tests {
 
         let key = SessionKey::create(phrase).expect("key");
         let sealed = group[1].seal_session(&key).expect("seal");
-        let mut reopened =
-            Session::unseal_session(&sealed, &SessionKey::unlock(phrase, &sealed).expect("unlock"))
-                .expect("unseal");
+        let mut reopened = Session::unseal_session(
+            &sealed,
+            &SessionKey::unlock(phrase, &sealed).expect("unlock"),
+        )
+        .expect("unseal");
 
         // A resumed session rekeys before it is allowed to send, and the other
         // side has to hear about it. Without that it would be speaking at a
@@ -2523,7 +2580,9 @@ mod tests {
             "a resumed session sent without rekeying"
         );
         let commit = reopened.rekey_after_restore().expect("rekey after restore");
-        group[0].receive(&commit).expect("the other side applies the rekey");
+        group[0]
+            .receive(&commit)
+            .expect("the other side applies the rekey");
 
         let ciphertext = reopened.send("vuelvo a estar").expect("send");
         let envelopes = reopened.seal_for_group(&ciphertext, slot).expect("seal");
@@ -2596,7 +2655,8 @@ mod tests {
         let key = SessionKey::create("the right passphrase for here").expect("key");
         let sealed = group[1].seal_session(&key).expect("seal");
 
-        let wrong = SessionKey::unlock("an entirely different passphrase", &sealed).expect("derive");
+        let wrong =
+            SessionKey::unlock("an entirely different passphrase", &sealed).expect("derive");
         assert!(
             Session::unseal_session(&sealed, &wrong).is_err(),
             "a stolen browser profile without the passphrase must yield nothing"
@@ -2637,9 +2697,11 @@ mod tests {
 
         let key = SessionKey::create(phrase).expect("key");
         let sealed = alone.seal_session(&key).expect("seal");
-        let reopened =
-            Session::unseal_session(&sealed, &SessionKey::unlock(phrase, &sealed).expect("unlock"))
-                .expect("unseal");
+        let reopened = Session::unseal_session(
+            &sealed,
+            &SessionKey::unlock(phrase, &sealed).expect("unlock"),
+        )
+        .expect("unseal");
 
         assert_eq!(reopened.member_count(), 0);
         assert_eq!(reopened.epoch(), 0);
@@ -2705,7 +2767,7 @@ mod tests {
     /// issuer the mailbox trusts.
     #[test]
     fn a_token_can_be_bought_from_the_browser() {
-        use blind_rsa_signatures::{KeyPair, Randomized, Sha384, DefaultRng, PSS};
+        use blind_rsa_signatures::{DefaultRng, KeyPair, Randomized, Sha384, PSS};
 
         let keys = KeyPair::<Sha384, PSS, Randomized>::generate(&mut DefaultRng, 2048)
             .expect("issuer keys");
@@ -2721,10 +2783,7 @@ mod tests {
         let blind_sig = keys.sk.blind_sign(&seen).expect("sign");
 
         let token = request
-            .finish(
-                &public,
-                &data_encoding::BASE64URL_NOPAD.encode(&blind_sig),
-            )
+            .finish(&public, &data_encoding::BASE64URL_NOPAD.encode(&blind_sig))
             .expect("finalize");
 
         // What the issuer saw must not be in what it later has to honour.
@@ -2732,7 +2791,9 @@ mod tests {
             .decode(token.as_bytes())
             .expect("b64");
         assert!(
-            !spent.windows(seen.len().min(spent.len())).any(|w| w == &seen[..w.len()]),
+            !spent
+                .windows(seen.len().min(spent.len()))
+                .any(|w| w == &seen[..w.len()]),
             "the blinded message appears in the token, so a sale could be traced"
         );
 
@@ -2744,7 +2805,7 @@ mod tests {
     /// could be redeemed into somebody else's token.
     #[test]
     fn a_signature_for_another_request_is_refused() {
-        use blind_rsa_signatures::{KeyPair, Randomized, Sha384, DefaultRng, PSS};
+        use blind_rsa_signatures::{DefaultRng, KeyPair, Randomized, Sha384, PSS};
 
         let keys = KeyPair::<Sha384, PSS, Randomized>::generate(&mut DefaultRng, 2048)
             .expect("issuer keys");
@@ -2756,7 +2817,7 @@ mod tests {
         let for_them = keys
             .sk
             .blind_sign(
-                &data_encoding::BASE64URL_NOPAD
+                data_encoding::BASE64URL_NOPAD
                     .decode(theirs.blinded().as_bytes())
                     .expect("b64"),
             )
@@ -2845,7 +2906,9 @@ mod tests {
         for offset in 0..=3u64 {
             let sender_bucket = 490_001 - offset;
             let ciphertext = group[0].send("x").expect("send");
-            let envelopes = group[0].seal_for_group(&ciphertext, sender_bucket).expect("seal");
+            let envelopes = group[0]
+                .seal_for_group(&ciphertext, sender_bucket)
+                .expect("seal");
             let addressed = &group[0].recipient_tags(sender_bucket).expect("tags")[0];
 
             assert_eq!(
@@ -2868,15 +2931,15 @@ mod tests {
 
         // A sender whose clock had already turned the hour.
         let ciphertext = group[0].send("hello").expect("send");
-        let envelopes = group[0].seal_for_group(&ciphertext, receiver_bucket + 1).expect("seal");
+        let envelopes = group[0]
+            .seal_for_group(&ciphertext, receiver_bucket + 1)
+            .expect("seal");
 
         // What the page subscribed with: one bucket ahead, lookback 3.
         let subscribed = group[1]
             .my_polling_tags(receiver_bucket + 1, 3)
             .expect("tags");
-        let addressed = &group[0]
-            .recipient_tags(receiver_bucket + 1)
-            .expect("tags")[0];
+        let addressed = &group[0].recipient_tags(receiver_bucket + 1).expect("tags")[0];
 
         assert!(
             subscribed.contains(addressed),
@@ -2885,12 +2948,16 @@ mod tests {
 
         // What the page accepted with: the current bucket, lookback 2.
         assert!(
-            group[1].open_mine(&envelopes[0], receiver_bucket, 2).is_err(),
+            group[1]
+                .open_mine(&envelopes[0], receiver_bucket, 2)
+                .is_err(),
             "the mismatch is gone, so this test no longer describes anything"
         );
 
         // And with one window everywhere, it goes through.
-        assert!(group[1].open_mine(&envelopes[0], receiver_bucket + 1, 3).is_ok());
+        assert!(group[1]
+            .open_mine(&envelopes[0], receiver_bucket + 1, 3)
+            .is_ok());
     }
 
     /// The clock tolerance must be the same in both directions.
@@ -2914,7 +2981,9 @@ mod tests {
 
             let ciphertext = group[0].send("hello").expect("send");
             let envelopes = group[0].seal_for_group(&ciphertext, sender).expect("seal");
-            let reachable = group[1].open_mine(&envelopes[0], at(receiver), back).is_ok();
+            let reachable = group[1]
+                .open_mine(&envelopes[0], at(receiver), back)
+                .is_ok();
 
             let expected = offset.unsigned_abs() <= skew;
             assert_eq!(
@@ -2950,10 +3019,11 @@ mod tests {
         assert!(code.starts_with("RTLX1"), "no prefix: {code}");
         assert_eq!(code.len(), 5 + 24, "not the length the phone produces");
         assert!(
-            code[5..]
-                .bytes()
-                .all(|b| b.is_ascii_uppercase() && b != b'0' && b != b'1' && b != b'8'
-                    || (b'2'..=b'7').contains(&b)),
+            code[5..].bytes().all(|b| b.is_ascii_uppercase()
+                && b != b'0'
+                && b != b'1'
+                && b != b'8'
+                || (b'2'..=b'7').contains(&b)),
             "outside the base32 alphabet: {code}"
         );
     }
@@ -3143,7 +3213,10 @@ mod tests {
     fn a_meeting_tag_is_stable_and_phrase_specific() {
         let a = rendezvous_tag("see you at the mailbox").expect("tag");
         let b = rendezvous_tag("  see you at the mailbox  ").expect("tag");
-        assert_eq!(a, b, "surrounding whitespace must not change the meeting place");
+        assert_eq!(
+            a, b,
+            "surrounding whitespace must not change the meeting place"
+        );
 
         assert_ne!(
             a,
@@ -3198,7 +3271,9 @@ mod tests {
         let mut bob = Session::new("bob").expect("identity");
 
         alice.found().expect("found");
-        let inv = alice.invite(&bob.key_package().expect("kp")).expect("invite");
+        let inv = alice
+            .invite(&bob.key_package().expect("kp"))
+            .expect("invite");
         bob.join(&inv.welcome, &inv.ratchet_tree).expect("join");
 
         let short = alice.send("si").expect("send");

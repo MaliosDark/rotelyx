@@ -43,8 +43,7 @@ const MEMORY_KIB: u32 = 64 * 1024;
 const PASSES: u32 = 3;
 
 /// How many times Argon2id has run in this process. Only a test reads it.
-pub(crate) static DERIVATIONS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static DERIVATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 const LANES: u32 = 1;
 
 /// Sealed storage under an operator's passphrase.
@@ -91,7 +90,10 @@ impl Vault {
     ///
     /// The cache is per process and never written down. A restart pays the full
     /// cost once, which is correct: that is a passphrase being checked.
-    fn cached_key(passphrase: &str, salt: Option<[u8; 16]>) -> Result<([u8; 16], Zeroizing<[u8; 32]>)> {
+    fn cached_key(
+        passphrase: &str,
+        salt: Option<[u8; 16]>,
+    ) -> Result<([u8; 16], Zeroizing<[u8; 32]>)> {
         use std::sync::Mutex;
 
         /// Salt, a binding to the passphrase, and the key.
@@ -222,8 +224,7 @@ impl Vault {
         // previous snapshot readable rather than a truncated file that decrypts
         // to nothing and looks like an empty mailbox.
         let temporary = path.with_extension("tmp");
-        fs::write(&temporary, &out)
-            .with_context(|| format!("writing {}", temporary.display()))?;
+        fs::write(&temporary, &out).with_context(|| format!("writing {}", temporary.display()))?;
         restrict(&temporary)?;
         fs::rename(&temporary, path).with_context(|| format!("renaming to {}", path.display()))
     }
@@ -239,7 +240,10 @@ impl Vault {
 
         let header_len = MAGIC.len() + 1 + 16 + 24;
         if raw.len() < header_len + 16 {
-            return Err(anyhow!("{} is too short to be a mailbox vault", path.display()));
+            return Err(anyhow!(
+                "{} is too short to be a mailbox vault",
+                path.display()
+            ));
         }
 
         let (header, body) = raw.split_at(header_len);
@@ -407,8 +411,12 @@ mod tests {
     #[test]
     fn the_wrong_passphrase_yields_nothing() {
         let path = scratch("wrong-key");
-        Vault::seal("the right operator passphrase", &path, b"tags and ciphertext")
-            .expect("seal");
+        Vault::seal(
+            "the right operator passphrase",
+            &path,
+            b"tags and ciphertext",
+        )
+        .expect("seal");
 
         assert!(
             Vault::open("an entirely different passphrase", &path).is_err(),
@@ -476,7 +484,10 @@ mod tests {
     fn a_missing_vault_is_a_first_start() {
         let path = scratch("absent");
         let _ = fs::remove_file(&path);
-        assert_eq!(Vault::open("any long passphrase at all", &path).expect("open"), None);
+        assert_eq!(
+            Vault::open("any long passphrase at all", &path).expect("open"),
+            None
+        );
     }
 
     /// A file from a format this build does not speak must be refused rather
@@ -490,7 +501,9 @@ mod tests {
         raw[MAGIC.len()] = VERSION + 1;
         fs::write(&path, &raw).expect("write");
 
-        let error = Vault::open("the operator passphrase now", &path).unwrap_err().to_string();
+        let error = Vault::open("the operator passphrase now", &path)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("format version"), "got: {error}");
         let _ = fs::remove_file(&path);
     }

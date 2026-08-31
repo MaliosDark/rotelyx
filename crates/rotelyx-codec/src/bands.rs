@@ -123,7 +123,7 @@ pub fn denormalise(shape: &[f32], energies: &[f32]) -> Vec<f32> {
 /// of getting it wrong that looked reasonable while being written.
 pub fn allocate(energies: &[f32], total_bits: usize) -> Vec<usize> {
     // Bits per coefficient, per band.
-    let mut rate = vec![0usize; BANDS];
+    let mut rate = [0usize; BANDS];
     let mut left = total_bits;
 
     // Perceptual weight. Speech is understood below about three kilohertz, so
@@ -240,7 +240,10 @@ mod tests {
         // And the first band covers the frequencies speech lives in.
         let (start, end) = hz(0);
         assert_eq!(start, 0.0);
-        assert!(end <= 150.0, "the first band reaches {end} Hz, too coarse for pitch");
+        assert!(
+            end <= 150.0,
+            "the first band reaches {end} Hz, too coarse for pitch"
+        );
     }
 
     /// Normalising and putting the levels back must return the signal, or the
@@ -282,12 +285,11 @@ mod tests {
         let bits = allocate(&e, 336); // what 24 kbit/s actually leaves
 
         let mut funded = 0;
-        for b in 0..BANDS {
-            if bits[b] > 0 {
+        for (b, &given) in bits.iter().enumerate() {
+            if given > 0 {
                 assert!(
-                    bits[b] >= range(b).len(),
-                    "band {b} got {} bits for {} coefficients, which buys nothing",
-                    bits[b],
+                    given >= range(b).len(),
+                    "band {b} got {given} bits for {} coefficients, which buys nothing",
                     range(b).len()
                 );
                 funded += 1;
@@ -316,7 +318,10 @@ mod tests {
         let e = vec![0.5f32; BANDS];
         let bits = allocate(&e, 336);
 
-        assert!(bits[0] > 0 && bits[1] > 0 && bits[2] > 0, "the bottom went unfunded");
+        assert!(
+            bits[0] > 0 && bits[1] > 0 && bits[2] > 0,
+            "the bottom went unfunded"
+        );
         assert_eq!(
             bits[BANDS - 1],
             0,
@@ -377,8 +382,14 @@ mod tests {
         // goes to the narrow one.
         let bits = allocate(&e, 16);
 
-        assert_eq!(bits[2], 16, "the narrow band should have taken every affordable rate");
-        assert_eq!(bits[22], 0, "the wide band does not fit and must not be funded");
+        assert_eq!(
+            bits[2], 16,
+            "the narrow band should have taken every affordable rate"
+        );
+        assert_eq!(
+            bits[22], 0,
+            "the wide band does not fit and must not be funded"
+        );
 
         // With room for both, the narrow band is still served far past the
         // point where the wide one could have taken the budget instead.

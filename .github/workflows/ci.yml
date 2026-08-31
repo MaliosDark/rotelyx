@@ -52,14 +52,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
-  transport:
+  relay-proto:
     # `cargo test --workspace` cannot reach crates/net: it is excluded from
     # membership so upstream's lint config does not become ours. That was fine
     # while the vendored code was only vendored. It is not fine now that we
     # write in it: alias binding and the circuit frames are ours and live
     # there. A subprotocol negotiation test sat broken in that crate through a
     # rename because nothing ran it, so this job runs it.
-    name: vendored transport
+    #
+    # This job was called `transport`, and so was the one below it. YAML keeps
+    # the last of two identical keys, so **this one did not exist**: the file
+    # listed ten jobs and nine ran. The 117 tests of the crate that carries the
+    # relay wire format were not among them, in a repository whose README says
+    # every crate here has a CI job. A duplicate key is silent in exactly the
+    # way the jobs below exist to prevent.
+    name: relay protocol
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -196,6 +203,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: ./scripts/chain-test
 
+  timing:
+    # The codec has to fit in a fraction of one core or a call does not run.
+    # That bound cannot be asserted inside `cargo test --workspace`, which runs
+    # test binaries in parallel on purpose: the same gate measured 14.6% of its
+    # bound alone and 41% in a contended run. Resampling did not fix it in
+    # either direction, long or short.
+    #
+    # So it runs here, alone, with nothing else on the machine, and it is
+    # `#[ignore]` everywhere else. A gate that fails when the machine is busy
+    # gets ignored by people, which is worse than one that runs in one place
+    # and means it.
+    name: the codec fits in a fraction of a core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          # `release-test`, not `release`: the release profile is panic=abort
+          # and a test harness needs unwind. See the profile in Cargo.toml.
+          cargo test -p rotelyx-codec --profile release-test --lib -- \
+            --ignored --test-threads=1 --nocapture real_time
+
   lint:
     name: format and clippy
     runs-on: ubuntu-latest
@@ -206,15 +236,30 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
-      # Only our own crates. The vendored tree carries upstream's style and
-      # reformatting it would turn every future patch import into a conflict.
+      # Our own crates, asked for by name, with the names coming from cargo
+      # rather than from a list somebody has to remember to update.
+      #
+      # This used to name seven crates by hand and the list fell behind as the
+      # workspace grew. `--all` is not the fix: **`cargo fmt --all` reaches
+      # `crates/net`**, following the path dependency into the vendored tree,
+      # and reformatting upstream's style would turn every future patch import
+      # into a conflict. `cargo metadata --no-deps` lists workspace members
+      # only, and `crates/net` is excluded from membership, so this covers
+      # everything of ours and nothing of theirs by construction.
       - name: fmt
-        run: cargo fmt --check -p rotelyx-core -p rotelyx-crypto -p rotelyx-mailbox
-             -p rotelyx-net -p rotelyx-cli -p rotelyx-relay -p rotelyx-web
+        run: |
+          cargo fmt --check $(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[].name | "-p \(.)"')
 
+      # `--workspace` is safe here where `--all` was not: cargo's workspace is
+      # the nineteen members, and `crates/net` is excluded from it. That tree
+      # has its own jobs above.
+      #
+      # `--all-targets`, so tests are linted too. They were not, which is how a
+      # test whose whole body was `assert!(MAX_DEVICES > 0)` sat in the wake
+      # registry calling itself a bound.
       - name: clippy
-        run: cargo clippy -p rotelyx-core -p rotelyx-crypto -p rotelyx-mailbox
-             -p rotelyx-net -p rotelyx-relay -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   vectors:
     name: post quantum vectors reproduce

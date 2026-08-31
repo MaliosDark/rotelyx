@@ -24,6 +24,37 @@ names, and every one of them was invisible:
 Fixing those turned on 681 tests that were already written. 391 are the QUIC
 state machine; nothing in this tree had verified any of it.
 
+**A fifth one, found later and worse than the others**, because it reached the
+wire. The captive portal check is an exchange between two crates here: the
+transport sends a challenge header and the relay answers it. The rename moved
+the relay's copy to `X-Rotelyx-Challenge` and left the transport sending
+`X-Iroh-Challenge`.
+
+Nothing failed. The relay saw a header it did not recognise, answered 204 with
+no response header, and the transport read the missing header as evidence of a
+captive portal, which is precisely what a portal swallowing the exchange looks
+like. So **every fresh endpoint concluded it was behind a captive portal**,
+against Rotelyx's own relays, and the check could not return any other answer.
+It also sent `X-Iroh-` in cleartext HTTP on every first net report, which is
+upstream's name on traffic this project exists to keep unremarkable.
+
+The two constants now live in `rotelyx_relay_proto::http` and both sides import
+them, so they cannot drift again. The same file already held `CIRCUIT_KEY_PATH`
+for the same reason, with a comment saying a path written twice is two constants
+that can disagree. That comment was right and was not applied widely enough.
+
+**The lesson these five share:** a rename that touches a name used on both sides
+of a boundary will move one side. What survives it is a single definition, not a
+careful search.
+
+**And the claim above was false while it was written.** `ci.yml` had two jobs
+keyed `transport`, YAML keeps the last of two identical keys, and the one it
+dropped was this directory's `rotelyx-relay-proto` job. So the crate carrying
+the relay wire format had 117 tests and no CI running them, which is the same
+hole this section is about, one level up.
+`crates/rotelyx-net/tests/every_ci_job_exists.rs` refuses a duplicate job key
+now.
+
 ## What is here
 
 | Crate | Derived from | LOC | Role |

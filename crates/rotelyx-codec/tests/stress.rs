@@ -271,7 +271,9 @@ fn the_layered_codec_keeps_the_plosive_from_smearing_backwards() {
         let mut decoder = LayeredDecoder::new(bytes);
         let mut decoded = Vec::new();
         for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
-            let frame = encoder.encode(&signal[start..start + WINDOW]).expect("encode");
+            let frame = encoder
+                .encode(&signal[start..start + WINDOW])
+                .expect("encode");
             decoded.extend(decoder.decode(&frame).expect("decode"));
         }
 
@@ -308,7 +310,10 @@ fn a_fricative_keeps_its_level_even_when_it_loses_its_detail() {
         let decoded = round_trip(&signal, bytes);
         let from = FRAME;
         let level = rms(&decoded[from..]) / rms(&signal[from..decoded.len()]);
-        println!("  {bytes:>11}   {level:.2}  ({:+.1} dB)", 20.0 * level.log10());
+        println!(
+            "  {bytes:>11}   {level:.2}  ({:+.1} dB)",
+            20.0 * level.log10()
+        );
         if (level - 1.0).abs() > (worst - 1.0).abs() {
             worst = level;
         }
@@ -357,7 +362,11 @@ fn invented_texture_does_not_repeat_frame_to_frame() {
                 count += 1;
             }
         }
-        if count == 0 { 0.0 } else { total / count as f32 }
+        if count == 0 {
+            0.0
+        } else {
+            total / count as f32
+        }
     };
 
     let input = correlation(&signal);
@@ -373,7 +382,10 @@ fn invented_texture_does_not_repeat_frame_to_frame() {
              That is a tone at the frame rate rather than noise."
         );
     }
-    println!("  {:>11}   {input:+.3}  <- the input, which is real noise", "input");
+    println!(
+        "  {:>11}   {input:+.3}  <- the input, which is real noise",
+        "input"
+    );
 }
 
 /// A rate too low to carry the band energies is refused, not delivered quiet.
@@ -383,7 +395,10 @@ fn a_rate_that_cannot_carry_the_envelope_is_refused() {
 
     let signal = vowel(WINDOW * 2);
     let needed = minimum_bytes_per_frame(15);
-    assert!(needed > 15, "the test needs a rate that genuinely does not fit");
+    assert!(
+        needed > 15,
+        "the test needs a rate that genuinely does not fit"
+    );
 
     let mut encoder = TelyxEncoder::new(15);
     assert!(

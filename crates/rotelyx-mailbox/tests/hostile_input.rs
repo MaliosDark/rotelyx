@@ -34,7 +34,9 @@ fn specimen() -> Vec<u8> {
 /// Returning `bool` rather than the parsed value keeps the harness from having
 /// to name types that differ between parsers, and what is under test is whether
 /// the call returns at all.
-fn parsers() -> Vec<(&'static str, fn(&[u8]) -> bool)> {
+type Parser = (&'static str, fn(&[u8]) -> bool);
+
+fn parsers() -> Vec<Parser> {
     vec![
         ("Envelope::from_bytes", |b| Envelope::from_bytes(b).is_ok()),
         ("Tag::from_bytes", |b| Tag::from_bytes(b).is_ok()),
@@ -160,7 +162,10 @@ fn tag_equality_is_still_equality() {
         let mut bytes = [0x11u8; 32];
         bytes[position] = 0x12;
         let different = Tag::from_bytes(&bytes).expect("tag");
-        assert_ne!(a, different, "tags differing at byte {position} compared equal");
+        assert_ne!(
+            a, different,
+            "tags differing at byte {position} compared equal"
+        );
     }
 }
 

@@ -167,11 +167,17 @@ impl C {
     }
 
     fn add(self, o: C) -> C {
-        C { re: self.re + o.re, im: self.im + o.im }
+        C {
+            re: self.re + o.re,
+            im: self.im + o.im,
+        }
     }
 
     fn sub(self, o: C) -> C {
-        C { re: self.re - o.re, im: self.im - o.im }
+        C {
+            re: self.re - o.re,
+            im: self.im - o.im,
+        }
     }
 }
 
@@ -258,7 +264,10 @@ fn dct4(u: &[f32], out: &mut [f32]) {
 
     let mut folded = vec![C::ZERO; HALF];
     for l in 0..HALF {
-        let z = C { re: u[2 * l], im: u[n - 1 - 2 * l] };
+        let z = C {
+            re: u[2 * l],
+            im: u[n - 1 - 2 * l],
+        };
         folded[l] = z.mul(t.pre[l]);
     }
 
@@ -321,9 +330,7 @@ pub fn inverse(coefficients: &[f32], window: &[f32]) -> Vec<f32> {
     let mut out = vec![0.0f32; WINDOW];
 
     // The transpose of the forward fold: what was gathered is now scattered.
-    for n in 0..half {
-        out[n] = v[n + half];
-    }
+    out[..half].copy_from_slice(&v[half..half * 2]);
     for n in half..3 * half {
         out[n] = -v[3 * half - 1 - n];
     }
@@ -423,7 +430,8 @@ mod fast_tests {
                     .zip(window)
                     .enumerate()
                     .map(|(n, (x, w))| {
-                        let phase = std::f64::consts::PI / m * (n as f64 + 0.5 + m / 2.0)
+                        let phase = std::f64::consts::PI / m
+                            * (n as f64 + 0.5 + m / 2.0)
                             * (k as f64 + 0.5);
                         (*x as f64) * (*w as f64) * phase.cos()
                     })
@@ -441,7 +449,8 @@ mod fast_tests {
                     .iter()
                     .enumerate()
                     .map(|(k, c)| {
-                        let phase = std::f64::consts::PI / m * (n as f64 + 0.5 + m / 2.0)
+                        let phase = std::f64::consts::PI / m
+                            * (n as f64 + 0.5 + m / 2.0)
                             * (k as f64 + 0.5);
                         (*c as f64) * phase.cos()
                     })
@@ -660,7 +669,10 @@ mod tests {
 
         // And it landed where the tone actually is.
         let hz = peak as f32 * SAMPLE_RATE as f32 / (2.0 * FRAME as f32);
-        assert!((hz - 1000.0).abs() < 40.0, "the 1 kHz tone landed at {hz} Hz");
+        assert!(
+            (hz - 1000.0).abs() < 40.0,
+            "the 1 kHz tone landed at {hz} Hz"
+        );
     }
 
     /// A longer window resolves frequency more finely. This is the entire
@@ -676,6 +688,9 @@ mod tests {
             bin_hz < opus_like,
             "Telyx resolves {bin_hz} Hz per bin against {opus_like}, which is not finer"
         );
-        assert!((bin_hz - 25.0).abs() < 0.1, "expected 25 Hz per bin, got {bin_hz}");
+        assert!(
+            (bin_hz - 25.0).abs() < 0.1,
+            "expected 25 Hz per bin, got {bin_hz}"
+        );
     }
 }

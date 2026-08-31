@@ -7,7 +7,9 @@
 
 use std::time::Duration;
 
-use rotelyx_core::{Admission, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint, RotelyxId};
+use rotelyx_core::{
+    Admission, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint, RotelyxId,
+};
 use rotelyx_net::NetConfig;
 
 const EPOCH: u64 = 100;
@@ -50,12 +52,21 @@ async fn an_invited_caller_is_admitted() {
         });
 
         let session = caller
-            .connect_with(addr, &Admission::Invitation { proof, epoch: EPOCH })
+            .connect_with(
+                addr,
+                &Admission::Invitation {
+                    proof,
+                    epoch: EPOCH,
+                },
+            )
             .await
             .expect("connect");
         session.close().await;
 
-        assert!(accept.await.expect("join"), "a valid invitation was refused");
+        assert!(
+            accept.await.expect("join"),
+            "a valid invitation was refused"
+        );
         caller.close().await;
     })
     .await;
@@ -141,7 +152,13 @@ async fn a_revoked_invitation_is_refused_over_the_wire() {
         });
 
         let session = caller
-            .connect_with(addr, &Admission::Invitation { proof, epoch: EPOCH })
+            .connect_with(
+                addr,
+                &Admission::Invitation {
+                    proof,
+                    epoch: EPOCH,
+                },
+            )
             .await
             .expect("connect");
         session.close().await;
@@ -289,14 +306,27 @@ async fn a_caller_can_be_admitted_under_a_key_that_is_not_their_identity() {
         });
 
         let session = caller
-            .connect_with(addr, &Admission::Invitation { proof, epoch: EPOCH })
+            .connect_with(
+                addr,
+                &Admission::Invitation {
+                    proof,
+                    epoch: EPOCH,
+                },
+            )
             .await
             .expect("an invitation proved over the transport key was refused");
         session.close().await;
 
         let seen = accept.await.expect("join").expect("the host refused");
-        assert_eq!(seen, transport_id, "the host saw something other than the key used");
-        assert_ne!(seen, caller_id.id(), "the caller's identity reached the wire");
+        assert_eq!(
+            seen, transport_id,
+            "the host saw something other than the key used"
+        );
+        assert_ne!(
+            seen,
+            caller_id.id(),
+            "the caller's identity reached the wire"
+        );
 
         caller.close().await;
     })

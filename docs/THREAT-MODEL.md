@@ -87,7 +87,7 @@ hole-punch.
   beyond that one run. And the part that decides whether it is worth anything is
   not a software property at all: two operators who collude, or one person
   running both, hold exactly what one relay holds today, and **nothing here can
-  check whether two relays are run by the same person** — they are two addresses
+  check whether two relays are run by the same person**: they are two addresses
   and two keys, and that is all a client can see.
 - **What a name per contact does and does not change here.** The identity key
   never reaches the wire; each invitation carries a transport key of its own, so
@@ -133,6 +133,17 @@ read all stored envelopes, retain them past TTL, and correlate timing.
   problem from the mailbox recognising a token it has already served. **Design
   consequence:** paying for a tier costs the holder unlinkability at the
   mailbox, and that trade should be visible to whoever makes it.
+- **Not defended, and found while writing the issuer's contract down:
+  blind signing does not defeat timing.** The issuer knows a payment completed
+  at a moment. The mailbox knows a token was first presented at a moment. Bring
+  those two records together, and where purchases are rare the pair narrows to a
+  small set and sometimes to one. Nothing cryptographic fails on the way: the
+  token gives away nothing, and the whole correlation lives in the clocks.
+  What reduces it is more buyers, and a delay between buying and first use that
+  the buyer chooses. **Design consequence:** a client must be able to hold a
+  token rather than redeem it the moment it arrives, and must say so, because a
+  buyer who redeems immediately has decided something without being told there
+  was a decision. `docs/ISSUER.md` carries the contract this came out of.
 - **Partially defended:** A2: the recipient is addressed by a rotating
   pseudonymous tag rather than an identity key, and all envelopes are padded to
   fixed size buckets. A mailbox that logs everything can still perform timing

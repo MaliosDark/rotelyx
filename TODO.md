@@ -271,9 +271,20 @@ Everything needed for this is built.
       tests in `crates/net/rotelyx-transport/tests/patchbay.rs`, NATs of every
       hardness including hard against hard, in CI. **Real networks: not done**,
       and a simulation only says the code punches through the NATs somebody
-      wrote a model of. `rotelyx-cli probe` is the instrument and prints one
-      record per run; it needs two machines on different networks and enough
-      runs for a rate to mean something
+      wrote a model of.
+
+      **The instrument is finished; what is missing is a second network.**
+      `rotelyx-cli probe` prints one record per run and `scripts/measure-punching`
+      turns those into a rate: it appends every run to a file so a session cut
+      short is still data, counts a failed connection as a data point rather than
+      stopping, and pauses between runs so a NAT's mapping table is not measured
+      in the state the previous run left it.
+
+      The two machines here are on one LAN, and **a punch between them proves
+      nothing because there is no NAT between them**. A phone hotspot is the
+      cheapest second network and also the best one, carrier-grade NAT being the
+      hard case a simulation models worst. Deliberately not a CI job: it needs two
+      networks and a person, and a gate that cannot run is not a gate
 - [ ] Measure how often `PreferDirect` costs a connection that `Fastest` would
       have kept. **Not started, and deliberately behind the one above.** It
       needs the latency of both paths at the moment the choice is made, and the
@@ -1102,7 +1113,49 @@ wide margin the largest single task remaining in the project.
 - [ ] **A trained vector quantiser for the envelope**, which is the largest
       saving left. Codec 2 700C spends 18 bits on a K=20 mel-spaced envelope
       where Telyx spends about 100 on 24 bands. It needs a speech corpus and it
-      ships a codebook, which is why it is not done
+      ships a codebook, which is why it is not done.
+
+      **The licence question is settled and it was the cheap half.** A codebook
+      is derived from what it was trained on and it ships inside an AGPL
+      repository and inside store binaries, so the corpus has to permit both.
+      **Mozilla Common Voice is CC0**, which is public domain: no attribution to
+      carry into a mobile release, commercial use unrestricted, and multilingual,
+      which matters because an envelope codebook trained only on English is tuned
+      against every other language this carries. LibriSpeech, LibriTTS and VCTK
+      are CC BY 4.0 and are a real fallback at the cost of an attribution notice
+      somebody has to remember at every release. TIMIT is paid and is out. Written
+      up in `docs/PROVENANCE.md`.
+
+      **Measured, and the answer is no.** `examples/train-envelope` trains an
+      LBG codebook on four speakers and measures it on four others, against what
+      this codec spends today rather than against a paper:
+
+      | | bits | rms error, levels |
+      |---|---:|---:|
+      | today, fixed width | 120 | **0.74** |
+      | trained, 4096 entries | 12 | 11.22 |
+      | shape plus mean, 4096 | 18 | 10.76 |
+
+      At 18 bits, which is Codec 2 700C's figure, the envelope error is 10.76
+      levels: **5.4 dB rms against today's 0.37**. This codec's own note says
+      0.43 dB of gain error predicts 25.9 dB of SNR, so this is twelve times the
+      error it was designed around.
+
+      **Two things that were expected to matter did not.** Balancing the split by
+      sex moved 11.24 to 11.22, and removing the overall level before training,
+      which is what Codec 2 does and what the first attempt here missed, bought
+      half a level and cost six bits.
+
+      **What says it is not a data problem is the slope.** Sixty four entries to
+      four thousand, six bits to twelve, moves the error from 14.2 to 11.2. That
+      curve is nearly flat, and nothing at the end of it reaches 0.74.
+
+      **What would overturn this**, and what a fair attempt looks like: a
+      multi-stage quantiser rather than one stage, and roughly a hundred times
+      the training data, since 12,502 frames for 4,096 entries is three frames
+      an entry. `dev-clean` is 5.4 hours and `train-clean-360` is 360. If
+      somebody runs that and it lands near 0.74, this entry is wrong and should
+      be reopened
 - [x] **Analysis by synthesis in the residual quantiser.** Measured, and the
       answer moved most of the item somewhere else. The residual quantiser was
       already doing it: `rvq::encode` projects the residual onto each stage's
@@ -1548,6 +1601,97 @@ wide margin the largest single task remaining in the project.
       Bounded to two seconds, the same canceller removes 7. Nothing in
       `echo.rs` changed. The numbers at the top of this entry were taken with
       the unbounded search and are not comparable to anything measured now
+
+      **The estimate is now sharpened, and the fix was not the obvious one.**
+      `rotelyx_audio::align` replaces it, in the crate with ten tests rather
+      than beside the examples with none. The textbook answer for speech is the
+      phase transform, and applied at full strength it is **much worse**: on
+      24.6 s of the synthesised clips through a simulated room, against a delay of
+      3,120 samples, full whitening lands 92,879 samples out where plain
+      correlation lands 596 out. Three quarters of it lands 22 out, and that is
+      where the constant sits, pinned by a test against the sweep that chose it.
+
+      **No confidence measure survived.** Peak over the noise floor, and peak
+      over its nearest rival, were both built and both removed: under full
+      whitening the worst window of a run scored second highest of eight, and at
+      0.75 the correct windows and the wrong ones are separated by three
+      hundredths. Two unrelated recordings produce a delay and a good margin as
+      readily as two related ones. What works is structural: one coarse delay
+      from the whole recording, each window refining it inside a narrow band.
+      **Per-window spread goes from 471 ms to 13.**
+
+      A bug turned up on the way: the per-window realignment searched only
+      forward from the coarse delay, so a path drifting the other way clamped at
+      zero and reported no movement, which has the shape of an answer without
+      being one.
+
+      **The hardware run happened, and it found the estimator broken.** Played
+      through the real loudspeaker, the new estimator **refused**, reporting that
+      the microphone had heard nothing on a recording with an RMS of 2894 out of
+      32768. It took the whole reference it was handed rather than a window of
+      it, so 24.6 seconds of reference against 24.6 seconds of room left no lags
+      to search. **Ten unit tests passed through that**, because every one of
+      them passes a short window; the whole-recording call happens once, at the
+      top, on hardware. The window is taken inside the estimator now and that
+      shape has a test.
+
+      With it fixed, the coarse delay is right on hardware: 650, 612 and 642 ms
+      across three runs against a recording whose offset is about 650, where the
+      unbounded search used to answer 3,295.
+
+      **The per-window estimate is not better, and the first write-up of this
+      said it was.** The spread came back at 100 ms against a bound of 100, so
+      the bound was measured rather than the room. Run again at 400: the spread
+      is **800 ms**, the entire width of the search. It fills whatever room it is
+      given. The apparent improvement from 471 ms to 100 was the range shrinking
+      from two seconds to two hundred milliseconds.
+
+      **That is a result, not a dead end:** the per-window path cannot answer
+      this at any bound. Too narrow and it reports the bound, too wide and it
+      reports noise. The alignment has to come from something other than
+      realigning half-second windows of speech.
+
+      **And the question was wrong.** Seven runs on one machine in one
+      afternoon: the realigned figure repeats, 5.9 to 7.9 dB, and the continuous
+      one does not, +0.7 to -4.6, with **six of the seven negative**. This entry
+      was built on a documented +1.3 dB that was not reproduced once. Continuous
+      is the production configuration, so the number describing what a user gets
+      is the unstable one, and on today's mean the canceller **adds about 2 dB**.
+
+      Nobody had checked whether the two numbers repeat before three attempts
+      went into explaining the distance between them.
+
+      **That measurement was made, and the suspicion was backwards.**
+      `examples/acoustic-duplex` runs the same room through the `Capture` and
+      `Playback` a call opens. Six runs: continuous is **-8.8, -2.6, -7.1, -3.7,
+      -1.8, -7.0**, mean **-5.2 dB**, every one negative. Realigned is +8.0 and
+      steady. Taking both sides from one audio path does not recover the
+      decibels, it loses more of them than the two-stream harness did.
+
+      **That was a property of the clips, not of the canceller**, and it took
+      eight recorded people to see it. Every acoustic number here was measured
+      against six clips from one text to speech model. Cut to the same 24.6
+      seconds so only the voice differs, eight real speakers give a continuous
+      mean of **-0.9 dB, four positive and four negative**, against the
+      synthesised set's -5.2 with six of six negative. The synthesiser sits four
+      decibels at the pessimistic end.
+
+      **And the spread between speakers is 8.8 dB**, from +2.8 to -6.0. That is
+      larger than any effect this entry has ever argued about, which means a
+      single figure for what the canceller removes was never a meaningful
+      quantity, and three attempts went into explaining the distance between two
+      samples of a distribution nobody had looked at.
+
+      `scripts/make-speech-corpus` builds those clips from LibriSpeech, and
+      `examples/acoustic-duplex` takes one by name.
+
+      **The next question is what separates `m1272` at +2.8 from `f84` at -6.0**,
+      on the same hardware in the same minute
+
+      Continuous is 0.7 dB and realigned is 7.9 over 39 windows on this run. **The
+      gap is still not attributed.** What changed is that the instrument now
+      finds the right delay on hardware, which none of the earlier attempts could
+      rely on
 - [x] **Measured the noise suppressor against a real room.** It removes
       **12.9 dB** from synthetic hiss added to the clip and **4.8 dB** from a real
       one, stable across runs to a tenth of a decibel. `docs/ACOUSTIC.md`,
@@ -1567,6 +1711,86 @@ wide margin the largest single task remaining in the project.
       above the same room with nothing playing, so they are the noise floor with
       a little tail on top. The tool records the quiet room now and prints that
       number, because the story was good enough to have been believed
+- [x] **Two timing gates took one wall clock reading each, and one of them
+      failed on a busy machine.** `the_codec_runs_faster_than_real_time` came
+      out at 1.7 times its bound during a run with eight other tests saturating
+      the cores, and at 14.6% of the bound on its own a minute later. A single
+      reading on a shared machine measures the machine.
+
+      **Two attempts at resampling failed, and both are written down so they
+      are not tried again.** Cheapest of three long samples: the layered gate
+      then failed at 32% against a bound of 25. Cheapest of many short samples:
+      worse, 41% and 38%. A long sample overlaps contention that lasts the whole
+      run, and a short sample that is preempted mid-way charges the entire time
+      slice to the codec.
+
+      Neither is a sampling problem. The assertion is about **CPU cost**, and
+      wall clock is a different quantity that only agrees on an idle machine.
+      Measuring the right one needs a platform call, and `rotelyx-codec` has one
+      dependency and no dev-dependencies, which is worth more than this gate is.
+
+      So the two gates are `#[ignore]` and a CI job runs them alone, in
+      `release-test` because release is `panic = "abort"`. **In an optimised
+      build they cost 1.4% and 2.0% of real time against a bound of 25**, which
+      is the number that matters, because an optimised build is what ships. The
+      12 to 14% figures everything above argued over were debug builds.
+
+      Sabotage confirms the gate is still a gate: tighten the bound past what
+      the codec can do and both fail
+- [x] **The lint job checked five crates of nineteen, and the format check was
+      failing.** `cargo clippy` named five crates by hand and `cargo fmt` seven,
+      lists written when the workspace was smaller and never revisited. The
+      codec, the audio, the mailbox server, the capability tokens, the wasm
+      build and the mobile ABI were in neither.
+
+      Widening clippy found **71 warnings**, of which two were real. One was a
+      `MutexGuard` reported across an await and was a false positive. The other
+      is below.
+
+      **`--all` is the wrong way to widen `cargo fmt`.** It follows the path
+      dependency into `crates/net` and would reformat 71 files of vendored
+      upstream, which is what the original comment was guarding against and what
+      the first attempt at this did. The job now derives its package list from
+      `cargo metadata --no-deps`, which lists workspace members only, so it
+      covers everything of ours, nothing of theirs, and picks up a new crate
+      without anybody remembering this file. Clippy's `--workspace` was already
+      safe: cargo's workspace excludes `crates/net`, `cargo fmt`'s `--all` does
+      not.
+
+      **And the format check was red before any of this.** With no `rustfmt.toml`
+      anywhere, `cargo fmt --check` on the seven crates the job already named
+      reported 201 differences in files nobody had touched. Either the job has
+      been failing or the runner's rustfmt formats differently from a local one;
+      this repository is private and that cannot be checked from here. 588
+      differences across the nineteen crates are now closed and the check is
+      clean
+- [x] **A test called `the_registry_is_bounded` tested nothing.** Its whole body
+      was `assert!(MAX_DEVICES > 0)`. It carried the right comment, that without
+      a bound anything able to open a socket can make the server spend its life
+      calling Apple, and it asserted that a constant is positive: **the registry
+      could have grown without limit and it would still have passed.** It now
+      fills the registry to `MAX_DEVICES` and checks the next one does not land.
+      Found by clippy, which had never been pointed at that crate
+- [x] **An `#[allow]` was attached to the wrong item.**
+      `clippy::too_many_arguments` for `router_stateful` sat on the `Waking`
+      struct one line above, which takes no arguments at all. It silenced
+      nothing and clippy went on reporting the function, while the annotation
+      looked to a reader like the matter had been dealt with
+- [x] **`ci.yml` listed ten jobs and nine ran.** Two were keyed `transport`,
+      YAML keeps the last of two identical keys, and the one silently dropped
+      was `cargo test --all-features` on `rotelyx-relay-proto`: 117 tests on the
+      crate that carries the relay wire format, in a repository whose
+      `crates/net/README.md` said every crate there had a CI job.
+
+      Nothing could have reported it. A duplicate key produces no warning from
+      YAML, from GitHub, or from anything reading the file as a map, and the
+      file reads correctly to a person.
+
+      `crates/rotelyx-net/tests/every_ci_job_exists.rs` now refuses it, reading
+      the file as text rather than through a parser, because the failure being
+      caught is exactly that a parser accepts it and returns fewer jobs than are
+      written. A second test checks that the reader finds jobs at all, since a
+      scanner that finds none reports no duplicates just as confidently
 - [x] **The guard is bounded on both sides now, and the second side mattered
       more.** `a_voice_survives` asked only that more than 30 percent of the
       speech energy survived, while the suppressor keeps 56, which left room for
@@ -1704,6 +1928,68 @@ wide margin the largest single task remaining in the project.
 - [x] **Blind signature issuance.** RFC 9474 blind RSA, one key per tier so a
       blind issuer cannot be handed a tier it cannot read. Verified end to end:
       what the issuer sees during a sale does not appear in the token
+- [x] **The issuer's contract, written and executable.** `docs/ISSUER.md` has
+      the two routes a client needs, `GET /tiers` and `POST /issue`, what the
+      issuer must not keep beside a payment, and the rule that is not
+      cryptographic: **one payment reference signs exactly one blinded
+      message.** Without it a buyer who repeats the request gets a second token
+      for one payment and nothing downstream can tell, because the two tokens
+      are unlinkable by construction.
+
+      Two tests walk it against a fake issuer over real HTTP: read the key off
+      the wire, blind against it, take the signature back, unblind, and present
+      the result to a mailbox that never spoke to the issuer. Every piece had
+      unit tests already; the sequence had none, and a sequence is where formats
+      stop fitting.
+
+      **It also turned up a residual nobody had written down.** Blind signing
+      does not defeat timing: the issuer knows when a payment completed and the
+      mailbox knows when a token was first used, and where purchases are rare
+      those two records narrow to one. Recorded in `docs/THREAT-MODEL.md` under
+      ADV-4
+- [x] **A bought token could not be spent by anything.** Blind issuance was
+      finished on the server and had no client. Nothing in this repository sent
+      `authblind`: not the browser, which sent every token as `auth` and had the
+      blind kind refused, and not `rotelyx-mailbox-client`, which had **no auth
+      frame at all** and left the desktop permanently on the free tier. A tier
+      could be sold and not used, and nothing failed: every client worked, on
+      the free tier, exactly as if nobody had paid.
+
+      Both present one now. The frame is chosen by length, because the holder is
+      the side that knows what it holds and the mailbox refuses to guess on
+      purpose; `rotelyx_capability` has a test that fails if the two formats grow
+      close enough for that to become a guess.
+
+      **The token is held rather than presented.** ADV-4 says a token is a
+      stable pseudonym with a usage history, and an unauthenticated caller gets
+      a fresh capability per connection, so presenting one at connect ties every
+      conversation together permanently and does it for nothing on traffic the
+      free tier would have taken. `Mailbox::hold_token` keeps it and
+      `Mailbox::deposit` presents it only when a tier actually refuses
+      something, which the mailbox allows because `auth` upgrades a capability
+      mid-connection. The safe behaviour is the default rather than something a
+      caller has to remember.
+
+      Stored once per identity, sealed with the key the conversations already
+      use. The desktop exposes saving, forgetting and asking whether one is
+      held, and never reads one back into the window
+- [x] **The client and the server disagreed about the wire, and the test agreed
+      with the client.** `rotelyx-mailbox-client` declared its enums
+      `rename_all = "camelCase"` where the server declares `lowercase`. Those
+      agree for every variant of one word and differ for every other, and the
+      only one that mattered was `OverQuota`: the server sends `overquota`, the
+      client read `overQuota`, so a spent allowance arrived as an unknown tag,
+      was skipped, and `deposit` waited for a `stored` the server had already
+      decided not to send. **A deposit at the quota hung.**
+
+      That hang already had a fix, written with the wrong spelling, and a test
+      that fed the client a string in the client's own spelling and confirmed
+      the client could read it.
+
+      The convention is aligned now rather than patched variant by variant, and
+      the wire has one authority: `every_reply_is_spelled_the_way_a_client_reads_it`
+      in the mailbox server pins the exact bytes of every reply, and the clients
+      copy those literals
 - [ ] Payment gateway, talking only to the issuer and never to the mailbox
 - [x] Blind redemption in the browser: `TokenRequest` blinds, pays, unblinds.
       The page still takes a pasted token, since there is no store to buy from

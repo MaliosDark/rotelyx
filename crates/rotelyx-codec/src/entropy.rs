@@ -416,7 +416,11 @@ mod tests {
         let mut decoder = RangeDecoder::new(&bytes);
         let mut model = Model::new(8);
         for (i, &expected) in symbols.iter().enumerate() {
-            assert_eq!(decode_symbol(&mut decoder, &mut model), expected, "symbol {i}");
+            assert_eq!(
+                decode_symbol(&mut decoder, &mut model),
+                expected,
+                "symbol {i}"
+            );
         }
     }
 
@@ -446,7 +450,12 @@ mod tests {
                 v.extend(std::iter::repeat_n(7usize, 3_000));
                 v
             }),
-            ("alternating 0 and 7", (0..6_000).map(|i| if i % 2 == 0 { 0usize } else { 7 }).collect()),
+            (
+                "alternating 0 and 7",
+                (0..6_000)
+                    .map(|i| if i % 2 == 0 { 0usize } else { 7 })
+                    .collect(),
+            ),
         ] {
             let bytes = encoder_bytes(&symbols).len();
             println!(

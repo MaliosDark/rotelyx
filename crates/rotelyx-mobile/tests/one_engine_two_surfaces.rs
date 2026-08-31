@@ -223,8 +223,12 @@ fn every_operation_is_in_the_document() {
     let mut undocumented = Vec::new();
     for line in src.lines() {
         let t = line.trim();
-        let Some(rest) = t.strip_prefix('"') else { continue };
-        let Some((name, tail)) = rest.split_once('"') else { continue };
+        let Some(rest) = t.strip_prefix('"') else {
+            continue;
+        };
+        let Some((name, tail)) = rest.split_once('"') else {
+            continue;
+        };
         if !tail.trim_start().starts_with("=>") || !name.contains('.') {
             continue;
         }

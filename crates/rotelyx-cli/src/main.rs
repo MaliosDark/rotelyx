@@ -17,15 +17,15 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use rotelyx_audio::Call;
 use rotelyx_core::store::{self, Paths, StoredInvitation};
 use rotelyx_core::{
-    epoch_at, Admission, Frame, FrameKind, Gate, Invitation, ReachabilityPolicy, Session,
-    RotelyxEndpoint, RotelyxId,
+    epoch_at, Admission, Frame, FrameKind, Gate, Invitation, ReachabilityPolicy, RotelyxEndpoint,
+    RotelyxId, Session,
 };
 use rotelyx_crypto::{Conversation, Member, Received};
 use rotelyx_net::{EndpointAddr, NetConfig, PathPolicy, RelayPolicy, RelayUrl, SecretKey};
-use rotelyx_audio::Call;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Parser, Debug)]
 #[command(name = "rotelyx", about = "Rotelyx protocol harness")]
@@ -245,9 +245,9 @@ fn pick_invitation<'a>(
             });
     }
 
-    live.iter()
-        .find(|inv| inv.code() == which)
-        .ok_or_else(|| anyhow!("that is neither a number from `rotelyx invitations` nor a code this device issued"))
+    live.iter().find(|inv| inv.code() == which).ok_or_else(|| {
+        anyhow!("that is neither a number from `rotelyx invitations` nor a code this device issued")
+    })
 }
 
 /// The safety number, over the names the two sides use in this conversation.
@@ -265,7 +265,11 @@ fn pick_invitation<'a>(
 /// Read after the handshake rather than before it, which is later than a user
 /// might like and is the only point at which the number means anything.
 fn print_safety_number(my_name: RotelyxId, conversation: &Conversation) {
-    let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
+    let roster: Vec<Vec<u8>> = conversation
+        .roster()
+        .into_iter()
+        .map(|p| p.identity)
+        .collect();
 
     println!();
     // Both halves must be the names that are actually in the roster.
@@ -278,7 +282,10 @@ fn print_safety_number(my_name: RotelyxId, conversation: &Conversation) {
     match rotelyx_core::peer_identity(&roster, my_name) {
         Some(peer) => {
             println!("  peer          {peer}");
-            println!("  safety number {}", rotelyx_core::safety_number(&my_name, &peer));
+            println!(
+                "  safety number {}",
+                rotelyx_core::safety_number(&my_name, &peer)
+            );
             println!();
             println!("  Read those digits to your peer over a channel Rotelyx does not");
             println!("  control. If they differ, somebody is in the middle.");
@@ -327,7 +334,11 @@ fn start_call(conversation: &Conversation, me: &Member, paths: PathPolicy) -> Re
 /// share, which beats adding a negotiation that could disagree.
 fn sender_index(conversation: &Conversation, me: &Member) -> Result<u8> {
     let mine = me.signature_key();
-    let mut keys: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.signature_key).collect();
+    let mut keys: Vec<Vec<u8>> = conversation
+        .roster()
+        .into_iter()
+        .map(|p| p.signature_key)
+        .collect();
     keys.sort();
     let position = keys
         .iter()
@@ -335,7 +346,6 @@ fn sender_index(conversation: &Conversation, me: &Member) -> Result<u8> {
         .context("this member is not in the roster it belongs to")?;
     u8::try_from(position).context("more members than a sender index can hold")
 }
-
 
 async fn chat(
     session: Session,
@@ -367,7 +377,7 @@ async fn chat(
                     Some(text) if text.trim() == "/call" => {
                         match call {
                             Some(_) => println!("[already on a call: /hang to stop]"),
-                            None => match start_call(&conversation, &me, paths) {
+                            None => match start_call(&conversation, me, paths) {
                                 Ok(c) => {
                                     println!(
                                         "[call started: {} kbit/s, microphone is {}]",
@@ -394,7 +404,7 @@ async fn chat(
                     }
                     Some(text) => {
                         let ciphertext = conversation
-                            .send(&me, text.as_bytes())
+                            .send(me, text.as_bytes())
                             .context("encrypting")?;
                         Frame::new(FrameKind::Message, ciphertext)
                             .write(&mut send)
@@ -446,7 +456,7 @@ async fn chat(
                 };
                 match frame.kind {
                     FrameKind::Message => {
-                        match conversation.receive(&me, &frame.payload).context("decrypting")? {
+                        match conversation.receive(me, &frame.payload).context("decrypting")? {
                             Received::Message { bytes: plaintext, .. } => {
                                 println!("peer: {}", String::from_utf8_lossy(&plaintext));
                             }
@@ -492,7 +502,9 @@ async fn main() -> Result<()> {
     // with a message about a feature flag rather than about what the user
     // asked for.
     let _ = rustls::crypto::CryptoProvider::install_default(
-        rotelyx_relay_proto::tls::default_provider().as_ref().clone(),
+        rotelyx_relay_proto::tls::default_provider()
+            .as_ref()
+            .clone(),
     );
 
     tracing_subscriber::fmt()
@@ -530,8 +542,7 @@ async fn main() -> Result<()> {
                     println!("  the caller will reach you through {url}");
                     println!("  and their own relay, which is theirs to pick.");
                     println!();
-                    data_encoding::BASE64URL_NOPAD
-                        .encode(&invitation.code_with_exit(&exit)[..])
+                    data_encoding::BASE64URL_NOPAD.encode(&invitation.code_with_exit(&exit)[..])
                 }
             };
 
@@ -579,7 +590,10 @@ async fn main() -> Result<()> {
             if live.is_empty() {
                 println!("no live invitations. Run `rotelyx invite` to make one.");
             } else {
-                println!("{} live. Withdraw one with `rotelyx block <n>`.", live.len());
+                println!(
+                    "{} live. Withdraw one with `rotelyx block <n>`.",
+                    live.len()
+                );
                 println!();
                 for (n, inv) in live.iter().enumerate() {
                     // An epoch is an hour, so this is already hours.
@@ -789,8 +803,7 @@ async fn main() -> Result<()> {
                         .unwrap_or_default();
                     match Invitation::read_code(&bytes) {
                         Ok((secret, host)) => {
-                            let invitation =
-                                Invitation::from_parts(secret, [0u8; 32], u64::MAX);
+                            let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
                             let mut to = EndpointAddr::from(host.endpoint_id());
                             for url in config.relays().urls() {
                                 to.addrs
@@ -831,14 +844,15 @@ async fn main() -> Result<()> {
                 .map(|direct| !direct)
                 .unwrap_or(true);
 
-            println!("  connected in {:.2}s, waiting up to {wait}s for a direct path", 
-                started.elapsed().as_secs_f32());
+            println!(
+                "  connected in {:.2}s, waiting up to {wait}s for a direct path",
+                started.elapsed().as_secs_f32()
+            );
 
             // Polled rather than notified: `is_direct` is what the interface
             // shows a user, so measuring the same thing they would see keeps
             // the number honest.
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(wait);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait);
             let mut became_direct = None;
             while std::time::Instant::now() < deadline {
                 if endpoint.is_direct(peer).await == Some(true) {
@@ -868,7 +882,11 @@ async fn main() -> Result<()> {
             endpoint.close().await;
         }
 
-        Command::Connect { addr, invite, relay } => {
+        Command::Connect {
+            addr,
+            invite,
+            relay,
+        } => {
             let epoch = now_epoch()?;
 
             // A transport key for this call and nothing else.
@@ -1017,7 +1035,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Addresses are exchanged out of band, so they need a form a person can paste.
+// Addresses are exchanged out of band, so they need a form a person can paste.
 
 /// The network configuration for a session, and why it is one of two.
 ///
@@ -1163,9 +1181,7 @@ async fn relay_identity_at(url: &str) -> Result<(RotelyxId, Vec<u8>)> {
         .await
         .with_context(|| format!("asking {url} for its circuit key"))?
         .error_for_status()
-        .with_context(|| {
-            format!("{url} has no circuit key: it was started without --circuit-key")
-        })?
+        .with_context(|| format!("{url} has no circuit key: it was started without --circuit-key"))?
         .text()
         .await
         .context("reading the circuit key")?;
@@ -1341,7 +1357,9 @@ mod tests {
         let out = decoded(&encoded);
 
         assert!(
-            out.addrs.iter().any(|a| matches!(a, TransportAddr::Relay(_))),
+            out.addrs
+                .iter()
+                .any(|a| matches!(a, TransportAddr::Relay(_))),
             "a relay-only address named no relay, so nothing can reach it"
         );
     }

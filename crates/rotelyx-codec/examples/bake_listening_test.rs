@@ -88,7 +88,9 @@ fn round_trip(signal: &[f32], bytes: usize) -> Vec<f32> {
     let mut decoder = TelyxDecoder::new(bytes);
     let mut out = Vec::new();
     for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
-        let packet = encoder.encode(&signal[start..start + WINDOW]).expect("encode");
+        let packet = encoder
+            .encode(&signal[start..start + WINDOW])
+            .expect("encode");
         out.extend(decoder.decode(&packet).expect("decode"));
     }
     // The first frame is the overlap-add warming up and is not audio.
@@ -150,7 +152,11 @@ fn main() -> std::io::Result<()> {
         // nothing is distinguishable by length.
         let reference: Vec<f32> = samples[FRAME..].to_vec();
         let id = label(&format!("{name}/reference"));
-        write_wav(&out_dir.join(format!("{name}_{id}.wav")), &reference, 48_000)?;
+        write_wav(
+            &out_dir.join(format!("{name}_{id}.wav")),
+            &reference,
+            48_000,
+        )?;
         key.push(format!("{name}_{id}  reference (untouched)"));
 
         for (kbit, bytes) in [(12usize, 30usize), (16, 40), (24, 60)] {

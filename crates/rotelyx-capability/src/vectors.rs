@@ -13,7 +13,8 @@
 //!
 //! Regenerating them requires the issuer, and is therefore a deliberate act.
 
-pub const ED25519_PUBLIC_HEX: &str = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737";
+pub const ED25519_PUBLIC_HEX: &str =
+    "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737";
 pub const ED25519_TOKEN_FREE: &str = "BwcHBwcHBwcHBwcHBwcHBwDAhD0Aj_ENsO9_34yB68TZawIG1xqJNsYDhCOsOCXncTQUuSMmk7DH3h-Vwd5mzS4PpvTtIynsK2E7NIMaQD3u_ffJAw";
 pub const ED25519_TOKEN_PLUS: &str = "BwcHBwcHBwcHBwcHBwcHBwHAhD0AaWuDHm4oFD_1_HEX4pHx-A2n9oT_Qs9zSJrWdfMo825X1i8vBnvGh2r9ibHNe2CPBGw2o7FCJ-VJC00-BqdXCw";
 pub const ED25519_TOKEN_PLUSPLUS: &str = "BwcHBwcHBwcHBwcHBwcHBwLAhD0AKKaEIZyVL-CdGanNz2TPV2nEObyEgKWWYchmReObQz6ocLlYh90GTZX2bm_UX_XefKniat9XERSY7_yB9Om0DQ";

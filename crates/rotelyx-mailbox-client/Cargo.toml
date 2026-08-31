@@ -32,7 +32,12 @@ tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 tracing.workspace = true
 data-encoding.workspace = true
+# A token is a bearer credential: it is not left in freed memory.
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 data-encoding.workspace = true
+# The minter, so a test can present a token the server will actually accept.
+# Test-only: see rotelyx-capability/src/testing.rs.
+rotelyx-capability = { path = "../rotelyx-capability", features = ["testing"] }

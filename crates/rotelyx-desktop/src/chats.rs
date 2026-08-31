@@ -41,6 +41,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use rotelyx_wasm::{Session, SessionKey};
+use zeroize::Zeroizing;
 
 /// What the list shows for one conversation.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -141,6 +142,74 @@ pub fn key(identity: &Path, passphrase: &str) -> Result<SessionKey> {
     Ok(fresh)
 }
 
+/// Where a capability token lives, if this identity has bought one.
+///
+/// # One token, beside the identity, and not one per conversation
+///
+/// A token is a stable pseudonym at the mailbox: every deposit made under one is
+/// tied to every other. `docs/THREAT-MODEL.md` says so under ADV-4. So the
+/// number of tokens a person holds is a privacy decision, not a filing one, and
+/// the answer is one: a token per conversation would mean buying several, which
+/// is absurd, and would not even help, because the mailbox already sees them
+/// arrive from one address.
+///
+/// It is sealed with the same key the conversations are, which is derived once
+/// at the door. A token that needed its own derivation would cost another
+/// Argon2id pass at 64 MiB every time a conversation opened.
+fn token_file(identity: &Path) -> PathBuf {
+    dir(identity).join("token")
+}
+
+/// Keep a capability token for this identity, sealed.
+pub fn save_token(identity: &Path, key: &SessionKey, token: &str) -> Result<()> {
+    let directory = dir(identity);
+    std::fs::create_dir_all(&directory)
+        .with_context(|| format!("making {}", directory.display()))?;
+    restrict(&directory)?;
+
+    let sealed =
+        rotelyx_wasm::seal_blob(key, &data_encoding::BASE64.encode(token.trim().as_bytes()))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let path = token_file(identity);
+    std::fs::write(&path, sealed).with_context(|| format!("writing {}", path.display()))?;
+    restrict(&path)?;
+    Ok(())
+}
+
+/// The token this identity holds, if any.
+///
+/// `None` rather than an error when there is nothing there, because having no
+/// token is the ordinary state and not a failure. A token that is there and
+/// cannot be opened **is** an error, and it is returned as one: silently
+/// carrying on unauthenticated would turn a wrong passphrase into a mysterious
+/// refusal at the next large message.
+pub fn load_token(identity: &Path, key: &SessionKey) -> Result<Option<Zeroizing<String>>> {
+    let path = token_file(identity);
+    let Ok(sealed) = std::fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+
+    let opened = rotelyx_wasm::open_blob(key, sealed.trim())
+        .map_err(|e| anyhow::anyhow!("the stored token could not be opened: {e}"))?;
+    let bytes = data_encoding::BASE64
+        .decode(opened.as_bytes())
+        .context("the stored token is not base64")?;
+    let token = String::from_utf8(bytes).context("the stored token is not text")?;
+
+    Ok(Some(Zeroizing::new(token)))
+}
+
+/// Forget the token, so this identity goes back to the free tier.
+pub fn forget_token(identity: &Path) -> Result<()> {
+    let path = token_file(identity);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("removing {}", path.display())),
+    }
+}
+
 /// A conversation's name on disk.
 ///
 /// Taken from the group id, so the same conversation keeps the same file across
@@ -148,10 +217,12 @@ pub fn key(identity: &Path, passphrase: &str) -> Result<SessionKey> {
 /// the moment two people chose the same one, and a name taken from the meeting
 /// code would be a name for something already spent.
 pub fn id_of(session: &Session) -> Result<String> {
-    let id = session
-        .group_id()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(id.chars().filter(|c| c.is_ascii_alphanumeric()).take(32).collect())
+    let id = session.group_id().map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(32)
+        .collect())
 }
 
 /// Write a conversation down, replacing whatever was there.

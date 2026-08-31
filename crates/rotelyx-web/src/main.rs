@@ -19,7 +19,7 @@ mod resume;
 mod session;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -29,10 +29,10 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
-use tokio::sync::mpsc;
 use rotelyx_core::store;
 use rotelyx_core::{epoch_at, Identity, Invitation};
 use rotelyx_net::EndpointAddr;
+use tokio::sync::mpsc;
 
 use session::{Command, Driver, Event};
 
@@ -78,7 +78,7 @@ fn load_identity(path: &PathBuf) -> Result<Identity> {
         Ok(Identity::from_bytes(key))
     } else {
         let identity = Identity::generate();
-        std::fs::write(path, &*identity.to_storage_bytes())
+        std::fs::write(path, *identity.to_storage_bytes())
             .with_context(|| format!("writing {}", path.display()))?;
         #[cfg(unix)]
         {
@@ -97,7 +97,7 @@ fn load_identity(path: &PathBuf) -> Result<Identity> {
 /// gives every contact the same name to compare. Sharing the store also means
 /// a code issued here is a code the terminal client accepts, and the other way
 /// round, which was not true while the two wrote different things.
-fn load_invitations(path: &PathBuf, epoch: u64) -> Result<Vec<store::StoredInvitation>> {
+fn load_invitations(path: &Path, epoch: u64) -> Result<Vec<store::StoredInvitation>> {
     Ok(store::load_invitations(path, epoch)?)
 }
 
@@ -217,10 +217,7 @@ async fn api_withdraw(
     Ok(Json(WithdrawResponse { withdrawn }))
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| drive(socket, state))
 }
 

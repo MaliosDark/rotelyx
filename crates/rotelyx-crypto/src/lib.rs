@@ -27,17 +27,17 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
-pub mod group;
 pub mod circuit;
+pub mod group;
 pub mod hybrid;
 
-pub use group::{
-    MembershipChange, MemberState, Participant, Received,
-    deserialize_key_package, serialize_key_package, Conversation, GroupError, Member, CIPHERSUITE,
-};
 pub use circuit::{circuit_binding, Hop, SealedHop, SEALED_HOP_LEN};
+pub use group::{
+    deserialize_key_package, serialize_key_package, Conversation, GroupError, Member, MemberState,
+    MembershipChange, Participant, Received, CIPHERSUITE,
+};
 pub use hybrid::{
-    WrappedPqSecret, WRAPPED_SECRET_LEN,
-    derive_psk, psk_binding,
-    HybridCiphertext, HybridError, HybridKem, HybridPublicKey, HybridSecretKey, PqSecret,
-    CIPHERTEXT_LEN, PUBLIC_KEY_LEN, SECRET_KEY_LEN, PqBinding};
+    derive_psk, psk_binding, HybridCiphertext, HybridError, HybridKem, HybridPublicKey,
+    HybridSecretKey, PqBinding, PqSecret, WrappedPqSecret, CIPHERTEXT_LEN, PUBLIC_KEY_LEN,
+    SECRET_KEY_LEN, WRAPPED_SECRET_LEN,
+};

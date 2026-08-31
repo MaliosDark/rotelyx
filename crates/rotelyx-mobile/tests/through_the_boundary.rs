@@ -18,7 +18,10 @@ fn call(request: Value) -> Result<Value, String> {
     assert!(!response.is_null(), "a response is always returned");
 
     let reply: Value = unsafe {
-        let s = CStr::from_ptr(response).to_str().expect("UTF-8").to_string();
+        let s = CStr::from_ptr(response)
+            .to_str()
+            .expect("UTF-8")
+            .to_string();
         rotelyx_mobile::rotelyx_string_free(response);
         serde_json::from_str(&s).expect("the reply is JSON")
     };
@@ -69,7 +72,10 @@ fn two_people_pair_and_talk() {
         "op": "session.invite", "handle": ana, "keyPackage": package
     }));
     let welcome = invitation["welcome"].as_str().expect("welcome").to_string();
-    let tree = invitation["ratchetTree"].as_str().expect("tree").to_string();
+    let tree = invitation["ratchetTree"]
+        .as_str()
+        .expect("tree")
+        .to_string();
 
     ok(json!({
         "op": "session.join", "handle": beto,
@@ -106,9 +112,18 @@ fn two_people_pair_and_talk() {
         ok(json!({"op": "session.epoch", "handle": ana})),
         ok(json!({"op": "session.epoch", "handle": beto})),
     );
-    assert_eq!(ana_epoch, beto_epoch, "the two sides are in different epochs");
-    assert_eq!(ok(json!({"op": "session.memberCount", "handle": ana})), json!(2));
-    assert_eq!(ok(json!({"op": "session.memberCount", "handle": beto})), json!(2));
+    assert_eq!(
+        ana_epoch, beto_epoch,
+        "the two sides are in different epochs"
+    );
+    assert_eq!(
+        ok(json!({"op": "session.memberCount", "handle": ana})),
+        json!(2)
+    );
+    assert_eq!(
+        ok(json!({"op": "session.memberCount", "handle": beto})),
+        json!(2)
+    );
 
     // The safety number is what a person reads aloud to check for a middle.
     let ana_safety = text(json!({"op": "session.safetyNumber", "handle": ana}));
@@ -210,7 +225,10 @@ fn a_wrapper_cannot_crash_this() {
         let mut response = std::ptr::null_mut();
         let code = unsafe { rotelyx_mobile::rotelyx_call(c.as_ptr(), &mut response) };
         assert_eq!(code, -1, "malformed input must fail");
-        assert!(!response.is_null(), "even a failure returns a string to free");
+        assert!(
+            !response.is_null(),
+            "even a failure returns a string to free"
+        );
         unsafe { rotelyx_mobile::rotelyx_string_free(response) };
     }
 
@@ -380,8 +398,13 @@ fn the_audio_path_refuses_bad_buffers() {
     unsafe {
         // A call that does not exist.
         assert!(
-            rotelyx_call_capture(1, pcm.as_ptr(), ROTELYX_FRAME_SAMPLES, buf.as_mut_ptr(), 1200)
-                < 0
+            rotelyx_call_capture(
+                1,
+                pcm.as_ptr(),
+                ROTELYX_FRAME_SAMPLES,
+                buf.as_mut_ptr(),
+                1200
+            ) < 0
         );
         assert!(rotelyx_call_deliver(1, buf.as_ptr(), 10, 0) < 0);
         assert!(rotelyx_call_playback(1, pcm.as_mut_ptr(), ROTELYX_FRAME_SAMPLES) < 0);
@@ -389,11 +412,30 @@ fn the_audio_path_refuses_bad_buffers() {
         // Null pointers and wrong lengths, on a handle that also does not exist:
         // the argument checks must happen before the lookup, or a valid handle
         // with a null buffer would dereference it.
-        assert!(rotelyx_call_capture(1, std::ptr::null(), ROTELYX_FRAME_SAMPLES, buf.as_mut_ptr(), 1200) < 0);
+        assert!(
+            rotelyx_call_capture(
+                1,
+                std::ptr::null(),
+                ROTELYX_FRAME_SAMPLES,
+                buf.as_mut_ptr(),
+                1200
+            ) < 0
+        );
         assert!(rotelyx_call_capture(1, pcm.as_ptr(), 480, buf.as_mut_ptr(), 1200) < 0);
-        assert!(rotelyx_call_capture(1, pcm.as_ptr(), ROTELYX_FRAME_SAMPLES, std::ptr::null_mut(), 1200) < 0);
+        assert!(
+            rotelyx_call_capture(
+                1,
+                pcm.as_ptr(),
+                ROTELYX_FRAME_SAMPLES,
+                std::ptr::null_mut(),
+                1200
+            ) < 0
+        );
         assert!(rotelyx_call_deliver(1, std::ptr::null(), 10, 0) < 0);
         assert!(rotelyx_call_playback(1, std::ptr::null_mut(), ROTELYX_FRAME_SAMPLES) < 0);
-        assert!(rotelyx_call_playback(1, pcm.as_mut_ptr(), 100) < 0, "too small a buffer");
+        assert!(
+            rotelyx_call_playback(1, pcm.as_mut_ptr(), 100) < 0,
+            "too small a buffer"
+        );
     }
 }

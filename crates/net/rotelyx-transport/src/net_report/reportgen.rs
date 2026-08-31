@@ -617,24 +617,33 @@ async fn check_captive_portal(
         .build()
         .map_err(|err| e!(CaptivePortalError::CreateReqwestClient, err))?;
 
-    // Note: the set of valid characters in a challenge and the total
-    // length is limited; see is_challenge_char in bin/rotelyx_transport-relay for more
-    // details.
+    // The header names, the path and the challenge format all come from
+    // `rotelyx_relay_proto::http`, which is the crate that answers them. They
+    // used to be literals here, and the rename away from upstream's names moved
+    // the relay's copy and left these behind: this sent `X-Iroh-Challenge` to a
+    // relay reading `X-Rotelyx-Challenge`, so the answer never matched and every
+    // fresh endpoint decided it was behind a captive portal. Nothing failed
+    // loudly, because a missing header reads exactly like a portal swallowing
+    // it.
+    use rotelyx_relay_proto::http::{
+        challenge_for, challenge_response, CAPTIVE_PORTAL_PATH, CHALLENGE_HEADER,
+        CHALLENGE_RESPONSE_HEADER,
+    };
 
     let host_name = url.host_str().unwrap_or_default();
-    let challenge = format!("ts_{host_name}");
-    let portal_url = format!("http://{host_name}/generate_204");
+    let challenge = challenge_for(host_name);
+    let portal_url = format!("http://{host_name}{CAPTIVE_PORTAL_PATH}");
     let res = client
         .request(reqwest::Method::GET, portal_url)
-        .header("X-Iroh-Challenge", &challenge)
+        .header(CHALLENGE_HEADER, &challenge)
         .send()
         .await
         .map_err(|err| e!(CaptivePortalError::HttpRequest, err))?;
 
-    let expected_response = format!("response {challenge}");
+    let expected_response = challenge_response(&challenge);
     let is_valid_response = res
         .headers()
-        .get("X-Iroh-Response")
+        .get(CHALLENGE_RESPONSE_HEADER)
         .map(|s| s.to_str().unwrap_or_default())
         == Some(&expected_response);
 

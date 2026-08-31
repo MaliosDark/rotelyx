@@ -38,10 +38,10 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use zeroize::Zeroizing;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use zeroize::Zeroizing;
 
 use anyhow::{bail, Context, Result};
 use axum::{
@@ -101,7 +101,11 @@ const MAX_TAGS_PER_CONNECTION: usize = 256;
 const MAX_FRAME_BYTES: usize = 12 * 1024 * 1024;
 
 #[derive(Parser)]
-#[command(name = "rotelyx-mailbox-server", version, about = "Rotelyx blind mailbox")]
+#[command(
+    name = "rotelyx-mailbox-server",
+    version,
+    about = "Rotelyx blind mailbox"
+)]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
@@ -605,7 +609,11 @@ enum Reply {
 
     /// The period's allowance is spent.
     #[serde(rename = "overquota")]
-    OverQuota { limit: u64, used: u64, tier: &'static str },
+    OverQuota {
+        limit: u64,
+        used: u64,
+        tier: &'static str,
+    },
 
     /// Something was wrong with the request. The connection stays open: a
     /// malformed frame is a client bug, not grounds to drop a conversation.
@@ -653,8 +661,14 @@ async fn handle_socket(mut socket: WebSocket, server: Arc<Server>) {
     let mut wake = server.wake.subscribe();
     let mut subscribed: HashSet<Tag> = HashSet::new();
     let me = server.next_connection.fetch_add(1, Ordering::Relaxed);
-    server.counters.connections_total.fetch_add(1, Ordering::Relaxed);
-    server.counters.connections_open.fetch_add(1, Ordering::Relaxed);
+    server
+        .counters
+        .connections_total
+        .fetch_add(1, Ordering::Relaxed);
+    server
+        .counters
+        .connections_open
+        .fetch_add(1, Ordering::Relaxed);
     // Decremented on the way out, whichever way out that is: a guard rather
     // than a line at the end, because a socket can leave through an error path
     // and an open count that only ever rises is not a count.
@@ -786,7 +800,11 @@ async fn handle_request(
             }
         }
 
-        Request::RegisterWake { token, kind, secret } => {
+        Request::RegisterWake {
+            token,
+            kind,
+            secret,
+        } => {
             if !server.pushers.any() {
                 return Some(Reply::Error {
                     message: "this server cannot wake anyone: it was started with neither \
@@ -967,7 +985,6 @@ async fn handle_request(
         // `max_fanout` stays in the capability limits. Tokens are signed by an
         // issuer outside this tree and changing what they carry invalidates
         // every one already minted.
-
         Request::Deposit { envelope } => {
             let bytes = match BASE64.decode(envelope.trim().as_bytes()) {
                 Ok(b) => b,
@@ -997,12 +1014,11 @@ async fn handle_request(
                 });
             }
 
-            if let Charge::OverQuota { limit, used } = server
-                .meter
-                .lock()
-                .await
-                .charge(cap, envelope.payload().len() as u64, now_seconds() / 3600)
-            {
+            if let Charge::OverQuota { limit, used } = server.meter.lock().await.charge(
+                cap,
+                envelope.payload().len() as u64,
+                now_seconds() / 3600,
+            ) {
                 server.counters.refused.fetch_add(1, Ordering::Relaxed);
                 return Some(Reply::OverQuota {
                     limit,
@@ -1027,7 +1043,10 @@ async fn handle_request(
             // A send error means nobody is subscribed, which is the normal case
             // for a recipient who is offline. The envelope is already stored
             // and will be delivered when they subscribe.
-            let _ = server.wake.send(Wake { tag, from: connection });
+            let _ = server.wake.send(Wake {
+                tag,
+                from: connection,
+            });
 
             server.counters.deposits.fetch_add(1, Ordering::Relaxed);
             Some(Reply::Stored)
@@ -1039,15 +1058,15 @@ async fn handle_request(
 // Routes
 // ---------------------------------------------------------------------------
 
-/// How many sockets this server will hold open at once, and how many one
-/// address may have of them, live in `limits`.
-///
-/// This used to be a bare total here, with a comment saying per-address limits
-/// belong in a reverse proxy. They do belong there and they were never there:
-/// the control panel rejected the directives twice and a proxy is not present
-/// in every deployment anyway. A limit most operators will never configure is a
-/// limit most deployments do not have, so it moved into the only place that is
-/// always running.
+// How many sockets this server will hold open at once, and how many one
+// address may have of them, live in `limits`.
+//
+// This used to be a bare total here, with a comment saying per-address limits
+// belong in a reverse proxy. They do belong there and they were never there:
+// the control panel rejected the directives twice and a proxy is not present
+// in every deployment anyway. A limit most operators will never configure is a
+// limit most deployments do not have, so it moved into the only place that is
+// always running.
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -1061,9 +1080,7 @@ async fn ws_handler(
     let address = limits::client_address(
         peer.ip(),
         &server.trusted_proxies,
-        headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok()),
+        headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
     );
 
     let slot = match server.limits.admit(address) {
@@ -1234,7 +1251,6 @@ fn router_full(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Everything the wake schedule needs, bundled so `router_stateful` does not
 /// grow four more positional parameters that are easy to pass in the wrong
 /// order.
@@ -1258,6 +1274,20 @@ impl Default for Waking {
     }
 }
 
+/// Every knob the server has, in one place.
+///
+/// # Why the argument list is allowed to be this long
+///
+/// It is eleven, and four of them were already folded into [`Waking`] for
+/// exactly the reason clippy is raising. The rest are independent settings that
+/// tests set one at a time, and grouping them further would mean building a
+/// config struct at every call site to change one field.
+///
+/// The `#[allow]` for this used to sit on `Waking`, one item above, where it
+/// silenced nothing: an attribute applies to the item it is attached to, and
+/// clippy went on reporting this function while the annotation looked like it
+/// had been dealt with.
+#[allow(clippy::too_many_arguments)]
 fn router_stateful(
     ttl_seconds: u64,
     keepalive: Duration,
@@ -1352,7 +1382,10 @@ fn router_stateful(
                     registry.forget_token(token);
                 }
                 drop(registry);
-                info!(gone = dead.len(), "forgot devices Apple says no longer exist");
+                info!(
+                    gone = dead.len(),
+                    "forgot devices Apple says no longer exist"
+                );
                 waker.save_wake().await;
             }
         });
@@ -1382,7 +1415,10 @@ fn blind_request(public: &Path, state: &Path) -> Result<()> {
 
     println!("{blinded}");
     eprintln!();
-    eprintln!("Send that to the issuer once payment clears. Keep {} until the", state.display());
+    eprintln!(
+        "Send that to the issuer once payment clears. Keep {} until the",
+        state.display()
+    );
     eprintln!("signature comes back: whoever holds it can finish the token.");
     Ok(())
 }
@@ -1403,8 +1439,6 @@ fn blind_redeem(public: &Path, state: &Path, signature: &str) -> Result<()> {
     Ok(())
 }
 
-
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -1418,17 +1452,18 @@ async fn main() -> Result<()> {
 
     match args.command {
         Some(Command::BlindRequest { public, state }) => return blind_request(&public, &state),
-        Some(Command::BlindRedeem { public, state, signature }) => {
-            return blind_redeem(&public, &state, &signature)
-        }
+        Some(Command::BlindRedeem {
+            public,
+            state,
+            signature,
+        }) => return blind_redeem(&public, &state, &signature),
         None => {}
     }
 
     STATUS.started_now();
     if let Some(path) = args.status.clone() {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .with_context(|| format!("creating {}", dir.display()))?;
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         info!(path = %path.display(), "recording availability");
         STATUS.record_at(path);
@@ -1472,13 +1507,11 @@ async fn main() -> Result<()> {
     // line: an argument is visible in `ps` to every user on the machine.
     let mailbox_state = match args.mailbox_state.as_ref() {
         Some(path) => {
-            let passphrase = Zeroizing::new(
-                std::env::var("ROTELYX_MAILBOX_PASSPHRASE").context(
-                    "--mailbox-state needs ROTELYX_MAILBOX_PASSPHRASE. Persisting \
+            let passphrase = Zeroizing::new(std::env::var("ROTELYX_MAILBOX_PASSPHRASE").context(
+                "--mailbox-state needs ROTELYX_MAILBOX_PASSPHRASE. Persisting \
                      undelivered envelopes in the clear would hand a seized disk the \
                      routing metadata the whole design exists to hide",
-                )?,
-            );
+            )?);
             Some((path.clone(), passphrase))
         }
         None => {
@@ -1647,11 +1680,11 @@ async fn main() -> Result<()> {
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            info!("shutting down");
-        })
-        .await
-        .context("serving")?;
+        let _ = tokio::signal::ctrl_c().await;
+        info!("shutting down");
+    })
+    .await
+    .context("serving")?;
 
     server.save_meter().await;
     server.save_mailbox().await;
@@ -1739,7 +1772,9 @@ mod tests {
             Waking::default(),
             Vec::new(),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move {
             axum::serve(
@@ -1784,7 +1819,9 @@ mod tests {
             },
             Vec::new(),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move {
             axum::serve(
@@ -1901,7 +1938,10 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             ))
             .await
             .expect("registerWake");
-        assert_eq!(recv_step(&mut owner, "wakeRegistered").await["op"], "wakeRegistered");
+        assert_eq!(
+            recv_step(&mut owner, "wakeRegistered").await["op"],
+            "wakeRegistered"
+        );
 
         // An attacker who has learned the token, and nothing else.
         let mut attacker = connect(&url).await;
@@ -1964,7 +2004,8 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
         client
             .send(WsMessage::text(
-                serde_json::json!({"op": "revokeWake", "secret": "44".repeat(32).as_str()}).to_string(),
+                serde_json::json!({"op": "revokeWake", "secret": "44".repeat(32).as_str()})
+                    .to_string(),
             ))
             .await
             .expect("revokeWake");
@@ -2227,7 +2268,8 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .await
             .expect("bind");
         let addr = listener.local_addr().expect("addr");
-        let (app, server) = router_full(DEFAULT_TTL_SECONDS, KEEPALIVE, None, Meter::default(), None);
+        let (app, server) =
+            router_full(DEFAULT_TTL_SECONDS, KEEPALIVE, None, Meter::default(), None);
         tokio::spawn(async move {
             let _ = axum::serve(
                 listener,
@@ -2334,7 +2376,9 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert_eq!(ready["waiting"], 0, "nothing should be waiting yet");
 
         // Alice encrypts, seals and deposits.
-        let ciphertext = a.send(&alice, b"hello by way of the mailbox").expect("send");
+        let ciphertext = a
+            .send(&alice, b"hello by way of the mailbox")
+            .expect("send");
         let envelope = Envelope::seal(tag, &ciphertext).expect("seal");
 
         let mut sender = connect(&url).await;
@@ -2584,50 +2628,100 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         }
 
         // ---- the founding pair ----
-        deposit(&mut guest_ws, seal_under(&meeting, &b64(serde_json::json!({
-            "t": "hello",
-            "keyPackage": guest.key_package().expect("kp"),
-            "hybridPublicKey": guest.hybrid_public_key(),
-        }))).expect("seal")).await;
+        deposit(
+            &mut guest_ws,
+            seal_under(
+                &meeting,
+                &b64(serde_json::json!({
+                    "t": "hello",
+                    "keyPackage": guest.key_package().expect("kp"),
+                    "hybridPublicKey": guest.hybrid_public_key(),
+                })),
+            )
+            .expect("seal"),
+        )
+        .await;
         assert_eq!(recv_step(&mut guest_ws, "#1").await["op"], "stored");
 
-        let knock = unb64(&open_under(
-            recv_step(&mut host_ws, "#2").await["envelope"].as_str().unwrap(),
-            &meeting,
-        ).expect("open"));
+        let knock = unb64(
+            &open_under(
+                recv_step(&mut host_ws, "#2").await["envelope"]
+                    .as_str()
+                    .unwrap(),
+                &meeting,
+            )
+            .expect("open"),
+        );
 
-        let inv = host.invite(knock["keyPackage"].as_str().unwrap()).expect("invite");
+        let inv = host
+            .invite(knock["keyPackage"].as_str().unwrap())
+            .expect("invite");
         let pq = host
             .encapsulate_to(knock["hybridPublicKey"].as_str().unwrap())
             .expect("encapsulate");
 
-        deposit(&mut host_ws, seal_under(&meeting, &b64(serde_json::json!({
-            "t": "welcome",
-            "welcome": inv.welcome,
-            "ratchetTree": inv.ratchet_tree,
-            "pqCiphertext": pq,
-        }))).expect("seal")).await;
+        deposit(
+            &mut host_ws,
+            seal_under(
+                &meeting,
+                &b64(serde_json::json!({
+                    "t": "welcome",
+                    "welcome": inv.welcome,
+                    "ratchetTree": inv.ratchet_tree,
+                    "pqCiphertext": pq,
+                })),
+            )
+            .expect("seal"),
+        )
+        .await;
         assert_eq!(recv_step(&mut host_ws, "#3").await["op"], "stored");
 
-        deposit(&mut host_ws, seal_under(&meeting, &b64(serde_json::json!({
-            "t": "commit", "commit": host.commit_pq().expect("commit"),
-        }))).expect("seal")).await;
+        deposit(
+            &mut host_ws,
+            seal_under(
+                &meeting,
+                &b64(serde_json::json!({
+                    "t": "commit", "commit": host.commit_pq().expect("commit"),
+                })),
+            )
+            .expect("seal"),
+        )
+        .await;
         assert_eq!(recv_step(&mut host_ws, "#4").await["op"], "stored");
 
-        let welcome = unb64(&open_under(
-            recv_step(&mut guest_ws, "#5").await["envelope"].as_str().unwrap(),
-            &meeting,
-        ).expect("open"));
+        let welcome = unb64(
+            &open_under(
+                recv_step(&mut guest_ws, "#5").await["envelope"]
+                    .as_str()
+                    .unwrap(),
+                &meeting,
+            )
+            .expect("open"),
+        );
         guest
-            .join(welcome["welcome"].as_str().unwrap(), welcome["ratchetTree"].as_str().unwrap())
+            .join(
+                welcome["welcome"].as_str().unwrap(),
+                welcome["ratchetTree"].as_str().unwrap(),
+            )
             .expect("join");
-        guest.open_pq(welcome["pqCiphertext"].as_str().unwrap()).expect("stage");
+        guest
+            .open_pq(welcome["pqCiphertext"].as_str().unwrap())
+            .expect("stage");
 
-        let commit = unb64(&open_under(
-            recv_step(&mut guest_ws, "#6").await["envelope"].as_str().unwrap(),
-            &meeting,
-        ).expect("open"));
-        assert!(!is_message(&guest.receive(commit["commit"].as_str().unwrap()).expect("apply")));
+        let commit = unb64(
+            &open_under(
+                recv_step(&mut guest_ws, "#6").await["envelope"]
+                    .as_str()
+                    .unwrap(),
+                &meeting,
+            )
+            .expect("open"),
+        );
+        assert!(!is_message(
+            &guest
+                .receive(commit["commit"].as_str().unwrap())
+                .expect("apply")
+        ));
 
         // The guest leaves the meeting place and listens on its own tags. The
         // host stays, so people can still arrive.
@@ -2644,41 +2738,75 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         subscribe(&mut third_ws, vec![meeting.clone()]).await;
         assert_eq!(recv_step(&mut third_ws, "#10").await["op"], "ready");
 
-        deposit(&mut third_ws, seal_under(&meeting, &b64(serde_json::json!({
-            "t": "hello",
-            "keyPackage": carol.key_package().expect("kp"),
-            "hybridPublicKey": carol.hybrid_public_key(),
-        }))).expect("seal")).await;
+        deposit(
+            &mut third_ws,
+            seal_under(
+                &meeting,
+                &b64(serde_json::json!({
+                    "t": "hello",
+                    "keyPackage": carol.key_package().expect("kp"),
+                    "hybridPublicKey": carol.hybrid_public_key(),
+                })),
+            )
+            .expect("seal"),
+        )
+        .await;
         assert_eq!(recv_step(&mut third_ws, "#11").await["op"], "stored");
 
         // The host must be the one who hears it, not the guest.
-        let knock = unb64(&open_under(
-            recv_step(&mut host_ws, "#12").await["envelope"].as_str().unwrap(),
-            &meeting,
-        ).expect("open"));
+        let knock = unb64(
+            &open_under(
+                recv_step(&mut host_ws, "#12").await["envelope"]
+                    .as_str()
+                    .unwrap(),
+                &meeting,
+            )
+            .expect("open"),
+        );
 
-        let inv = host.invite(knock["keyPackage"].as_str().unwrap()).expect("invite");
+        let inv = host
+            .invite(knock["keyPackage"].as_str().unwrap())
+            .expect("invite");
 
-        deposit(&mut host_ws, seal_under(&meeting, &b64(serde_json::json!({
-            "t": "welcome",
-            "welcome": inv.welcome,
-            "ratchetTree": inv.ratchet_tree,
-        }))).expect("seal")).await;
+        deposit(
+            &mut host_ws,
+            seal_under(
+                &meeting,
+                &b64(serde_json::json!({
+                    "t": "welcome",
+                    "welcome": inv.welcome,
+                    "ratchetTree": inv.ratchet_tree,
+                })),
+            )
+            .expect("seal"),
+        )
+        .await;
         assert_eq!(recv_step(&mut host_ws, "#13").await["op"], "stored");
 
-        for envelope in host.seal_commit_for_group(&inv.commit, slot).expect("seal commit") {
+        for envelope in host
+            .seal_commit_for_group(&inv.commit, slot)
+            .expect("seal commit")
+        {
             deposit(&mut host_ws, envelope).await;
             assert_eq!(recv_step(&mut host_ws, "#14").await["op"], "stored");
         }
         subscribe(&mut host_ws, host.my_polling_tags(slot, 2).expect("tags")).await;
         assert_eq!(recv_step(&mut host_ws, "#15").await["op"], "ready");
 
-        let welcome = unb64(&open_under(
-            recv_step(&mut third_ws, "#16").await["envelope"].as_str().unwrap(),
-            &meeting,
-        ).expect("open"));
+        let welcome = unb64(
+            &open_under(
+                recv_step(&mut third_ws, "#16").await["envelope"]
+                    .as_str()
+                    .unwrap(),
+                &meeting,
+            )
+            .expect("open"),
+        );
         carol
-            .join(welcome["welcome"].as_str().unwrap(), welcome["ratchetTree"].as_str().unwrap())
+            .join(
+                welcome["welcome"].as_str().unwrap(),
+                welcome["ratchetTree"].as_str().unwrap(),
+            )
             .expect("join");
         subscribe(&mut third_ws, carol.my_polling_tags(slot, 2).expect("tags")).await;
         assert_eq!(recv_step(&mut third_ws, "#17").await["op"], "ready");
@@ -2696,7 +2824,10 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         // listening on the previous epoch's tags while everyone addresses it at
         // the new one, and no error is raised anywhere.
         subscribe(&mut guest_ws, guest.my_polling_tags(slot, 2).expect("tags")).await;
-        assert_eq!(recv_step(&mut guest_ws, "guest resubscribe").await["op"], "ready");
+        assert_eq!(
+            recv_step(&mut guest_ws, "guest resubscribe").await["op"],
+            "ready"
+        );
 
         assert_eq!(host.member_count(), 3);
         assert_eq!(host.epoch(), guest.epoch(), "host and guest agree");
@@ -2729,8 +2860,82 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         }
     }
 
+    /// Every reply, serialised, pinned to the exact bytes that go on the wire.
+    ///
+    /// # Why the wire needs a test of its own
+    ///
+    /// There are three clients: `site/chat.html`, `rotelyx-mailbox-client` for
+    /// the terminal, the desktop and the phone, and this crate's own tests.
+    /// Each of them describes the wire separately, and one of them was wrong
+    /// for as long as it existed.
+    ///
+    /// `OverQuota` is renamed here to `overquota`, all lowercase, while the Rust
+    /// client's enum carried `rename_all = "camelCase"` and no rename, making
+    /// `overQuota`. The browser had it right. The Rust client did not, so a
+    /// spent allowance arrived as an unknown tag, was skipped, and `deposit`
+    /// waited for a `stored` this server had already decided not to send: **a
+    /// deposit at the quota hung** on the desktop, the terminal and the phone.
+    ///
+    /// The fix for that hang had already been written, and written with the
+    /// wrong spelling. The test guarding it fed the client a string the client
+    /// itself had produced, so it agreed with itself and could not disagree with
+    /// this.
+    ///
+    /// This test is the authority. The literals here are what a client copies,
+    /// and a change to any of them fails here first with the old and new bytes
+    /// side by side.
+    #[test]
+    fn every_reply_is_spelled_the_way_a_client_reads_it() {
+        let cases: Vec<(Reply, &str)> = vec![
+            (Reply::Ready { waiting: 3 }, r#"{"op":"ready","waiting":3}"#),
+            (Reply::Stored, r#"{"op":"stored"}"#),
+            (
+                Reply::Error {
+                    message: "no".into(),
+                },
+                r#"{"op":"error","message":"no"}"#,
+            ),
+            (
+                Reply::OverQuota {
+                    limit: 67_108_864,
+                    used: 67_108_900,
+                    tier: "free",
+                },
+                r#"{"op":"overquota","limit":67108864,"used":67108900,"tier":"free"}"#,
+            ),
+            (
+                Reply::Error {
+                    // The refusal a client reads to decide whether presenting a
+                    // token would help. Pinned because a client matches on it:
+                    // see `TIER_REFUSAL` in `rotelyx-mailbox-client`.
+                    message: format!(
+                        "the {} tier allows at most {} bytes per envelope",
+                        "free", 65_536
+                    ),
+                },
+                r#"{"op":"error","message":"the free tier allows at most 65536 bytes per envelope"}"#,
+            ),
+            (
+                Reply::Tier {
+                    tier: "plus",
+                    max_fanout: 256,
+                    max_payload: 8_388_608,
+                    retention_days: 30,
+                    bytes_remaining: 8_589_934_592,
+                },
+                r#"{"op":"tier","tier":"plus","maxFanout":256,"maxPayload":8388608,"retentionDays":30,"bytesRemaining":8589934592}"#,
+            ),
+        ];
 
-
+        for (reply, expected) in cases {
+            let written = serde_json::to_string(&reply).expect("a reply serialises");
+            assert_eq!(
+                written, expected,
+                "the wire changed. Every client that reads this reply has to change with \
+                 it: `crates/rotelyx-mailbox-client/src/lib.rs` and `site/chat.html`"
+            );
+        }
+    }
 
     /// The key the paid-tier tests mint with. Not an issuer: minting here is
     /// `rotelyx_capability::testing`, a test fixture. The issuer itself is a
@@ -2740,12 +2945,13 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     /// Start a server that accepts tokens, and return its URL plus the key that
     /// server trusts.
     async fn spawn_paid_server() -> (String, &'static str) {
-        let verifier = Verifier::from_public_hex(
-            &rotelyx_capability::testing::public_hex(TEST_KEY),
-        )
-        .expect("verifier");
+        let verifier =
+            Verifier::from_public_hex(&rotelyx_capability::testing::public_hex(TEST_KEY))
+                .expect("verifier");
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("addr");
         let app = router_with(DEFAULT_TTL_SECONDS, KEEPALIVE, Some(verifier));
         tokio::spawn(async move {
@@ -2761,13 +2967,278 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     async fn auth(client: &mut Client, token: &str) -> serde_json::Value {
         client
             .send(WsMessage::Text(
-                serde_json::json!({"op": "auth", "token": token}).to_string().into(),
+                serde_json::json!({"op": "auth", "token": token})
+                    .to_string()
+                    .into(),
             ))
             .await
             .expect("auth");
         recv_json(client).await
     }
 
+    // -----------------------------------------------------------------------
+    // Buying, end to end, against a fake issuer speaking `docs/ISSUER.md`
+    // -----------------------------------------------------------------------
+
+    /// A stand-in for the issuing service, which is not in this repository.
+    ///
+    /// It serves the two routes in `docs/ISSUER.md` and enforces the one rule
+    /// that is not cryptographic: **a payment reference signs exactly one
+    /// blinded message.** Without that a buyer who repeats the request gets a
+    /// second token for one payment, and it cannot be detected afterwards,
+    /// because the two tokens are unlinkable by construction. That is the
+    /// property being paid for and it is also what hides the abuse of it.
+    async fn spawn_fake_issuer(
+        issuer: Arc<rotelyx_capability::testing::BlindIssuer>,
+        price_cents: u64,
+    ) -> String {
+        use axum::extract::State;
+        use axum::routing::{get, post};
+        use axum::Json;
+
+        #[derive(Clone)]
+        struct Issuer {
+            keys: Arc<rotelyx_capability::testing::BlindIssuer>,
+            price: u64,
+            spent: Arc<Mutex<std::collections::HashSet<String>>>,
+        }
+
+        let state = Issuer {
+            keys: issuer,
+            price: price_cents,
+            spent: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        };
+
+        let tiers = |State(s): State<Issuer>| async move {
+            Json(serde_json::json!({
+                "tiers": [{
+                    "name": "plus",
+                    "key": data_encoding::BASE64URL_NOPAD.encode(s.keys.public_der()),
+                    "price": { "amount": s.price, "currency": "USD" },
+                    "period_days": 30,
+                }]
+            }))
+        };
+
+        let issue = |State(s): State<Issuer>, Json(body): Json<serde_json::Value>| async move {
+            let tier = body["tier"].as_str().unwrap_or_default();
+            let blinded = body["blinded"].as_str().unwrap_or_default();
+            let payment = body["payment"].as_str().unwrap_or_default().to_string();
+
+            if tier != "plus" {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "tier"})),
+                );
+            }
+            if payment.is_empty() {
+                return (
+                    StatusCode::PAYMENT_REQUIRED,
+                    Json(serde_json::json!({"error": "payment"})),
+                );
+            }
+            // One signature per payment, checked before signing. After signing
+            // there is nothing left to check it against.
+            {
+                let mut spent = s.spent.lock().await;
+                if !spent.insert(payment) {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({"error": "spent"})),
+                    );
+                }
+            }
+            match s.keys.blind_sign(blinded) {
+                Some(signature) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({"signature": signature})),
+                ),
+                None => (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "blinded"})),
+                ),
+            }
+        };
+
+        let app = Router::new()
+            .route("/tiers", get(tiers))
+            .route("/issue", post(issue))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    /// A mailbox that trusts one blind key for `plus`.
+    async fn spawn_blind_server(public_der: &[u8]) -> String {
+        let blind = rotelyx_capability::blind::BlindVerifier::new()
+            .with_tier(Tier::Plus, public_der)
+            .expect("blind key");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (app, _server) = router_stateful(
+            DEFAULT_TTL_SECONDS,
+            KEEPALIVE,
+            None,
+            Meter::default(),
+            None,
+            Mailbox::new(DEFAULT_TTL_SECONDS),
+            None,
+            blind,
+            false,
+            Waking::default(),
+            Vec::new(),
+        );
+        tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await;
+        });
+        format!("ws://{addr}/mailbox")
+    }
+
+    /// The whole purchase, from what is for sale to a mailbox honouring it.
+    ///
+    /// # Why this is worth a test when every piece already has one
+    ///
+    /// The blinding has unit tests, the verifier has unit tests, and the
+    /// mailbox has tests for tokens minted by a fixture. What none of them
+    /// covered is the **sequence**: read the key off the wire, blind against
+    /// that key, hand the blinded message to a server, take the signature back,
+    /// unblind, and present the result to a mailbox that was configured
+    /// separately. Every step in that chain passes something to the next in a
+    /// format, and formats are where the pieces stop fitting.
+    ///
+    /// It is also the executable half of `docs/ISSUER.md`. A contract nobody
+    /// runs is a document.
+    #[tokio::test]
+    async fn a_token_can_be_bought_and_then_spent() {
+        let issuer = Arc::new(rotelyx_capability::testing::BlindIssuer::generate());
+        let issuer_url = spawn_fake_issuer(Arc::clone(&issuer), 400).await;
+        let mailbox_url = spawn_blind_server(issuer.public_der()).await;
+
+        let http = reqwest::Client::new();
+
+        // What is for sale. The client learns the key here rather than being
+        // built with it.
+        // `reqwest` here is built without its `json` feature, which is a
+        // production dependency choice and not one a test should widen.
+        let catalogue: serde_json::Value = serde_json::from_str(
+            &http
+                .get(format!("{issuer_url}/tiers"))
+                .send()
+                .await
+                .expect("tiers")
+                .text()
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+
+        let offer = &catalogue["tiers"][0];
+        assert_eq!(offer["name"], "plus");
+        assert_eq!(offer["price"]["amount"], 400);
+        let der = data_encoding::BASE64URL_NOPAD
+            .decode(offer["key"].as_str().expect("key").as_bytes())
+            .expect("the published key is base64url DER");
+
+        // Blind against the key that was published, not one held locally. This
+        // is the step that fails if the encoding on either side is wrong.
+        let (redeemer, blinded) = rotelyx_capability::blind::Redeemer::begin(&der).expect("begin");
+
+        let paid = "payment-reference-0001";
+        let order = serde_json::json!({
+            "tier": "plus", "blinded": blinded, "payment": paid,
+        })
+        .to_string();
+
+        let answer = http
+            .post(format!("{issuer_url}/issue"))
+            .header("content-type", "application/json")
+            .body(order.clone())
+            .send()
+            .await
+            .expect("issue");
+        assert_eq!(answer.status(), reqwest::StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_str(&answer.text().await.expect("body")).expect("json");
+        let signature = body["signature"].as_str().expect("a signature").to_string();
+
+        let token = redeemer.finish(&der, &signature).expect("unblind");
+
+        // And the mailbox, which never spoke to the issuer, honours it.
+        let mut client = connect(&mailbox_url).await;
+        let granted = client_authblind(&mut client, &token).await;
+        assert_ne!(
+            granted["op"], "error",
+            "the mailbox refused a bought token: {granted}"
+        );
+        assert_eq!(
+            granted["tier"], "plus",
+            "a token signed by the plus key granted something else: {granted}"
+        );
+
+        // One payment, one token. The second attempt is refused, and it has to
+        // be refused here because nothing downstream can tell the difference.
+        let again = http
+            .post(format!("{issuer_url}/issue"))
+            .header("content-type", "application/json")
+            .body(order)
+            .send()
+            .await
+            .expect("issue again");
+        assert_eq!(
+            again.status(),
+            reqwest::StatusCode::CONFLICT,
+            "one payment reference signed twice"
+        );
+    }
+
+    /// A token from a key the mailbox does not know is refused by name.
+    #[tokio::test]
+    async fn a_token_from_another_issuer_is_refused() {
+        let ours = rotelyx_capability::testing::BlindIssuer::generate();
+        let theirs = rotelyx_capability::testing::BlindIssuer::generate();
+
+        // The mailbox trusts ours. The buyer bought from theirs.
+        let mailbox_url = spawn_blind_server(ours.public_der()).await;
+        let (redeemer, blinded) =
+            rotelyx_capability::blind::Redeemer::begin(theirs.public_der()).expect("begin");
+        let signature = theirs.blind_sign(&blinded).expect("sign");
+        let token = redeemer
+            .finish(theirs.public_der(), &signature)
+            .expect("unblind");
+
+        let mut client = connect(&mailbox_url).await;
+        let answer = client_authblind(&mut client, &token).await;
+        assert_eq!(
+            answer["op"], "error",
+            "a mailbox accepted a token signed by a key it was never given: {answer}"
+        );
+    }
+
+    async fn client_authblind(client: &mut Client, token: &str) -> serde_json::Value {
+        client
+            .send(WsMessage::Text(
+                serde_json::json!({"op": "authblind", "token": token})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("authblind");
+        recv_json(client).await
+    }
 
     /// The whole point of a paid tier: an unpaid client must not be able to do
     /// the things that are sold, and no amount of reconnecting changes that.
@@ -2790,7 +3261,10 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
 
         // Reconnecting does not help: these are checked per request.
         let mut again = connect(&url).await;
-        assert_eq!(try_deposit(&mut again, free.max_payload * 16).await["op"], "error");
+        assert_eq!(
+            try_deposit(&mut again, free.max_payload * 16).await["op"],
+            "error"
+        );
 
         // With a token, the same requests succeed.
         let token = rotelyx_capability::testing::mint(
@@ -2808,18 +3282,17 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert_eq!(granted["maxFanout"], Tier::Plus.limits().max_fanout);
 
         let allowed = try_deposit(&mut paid, free.max_payload * 16).await;
-        assert_eq!(allowed["op"], "stored", "a paid client must be allowed, got {allowed}");
+        assert_eq!(
+            allowed["op"], "stored",
+            "a paid client must be allowed, got {allowed}"
+        );
     }
 
     /// Deposit one envelope of a given size and return whatever came back.
     async fn try_deposit(client: &mut Client, payload_len: usize) -> serde_json::Value {
         let tag = rotelyx_mailbox::Tag::from_bytes(&[9u8; 32]).expect("tag");
         let envelope = Envelope::seal(tag, &vec![0u8; payload_len]).expect("seal");
-        deposit(
-            client,
-            data_encoding::BASE64.encode(&envelope.to_bytes()),
-        )
-        .await;
+        deposit(client, data_encoding::BASE64.encode(&envelope.to_bytes())).await;
         serde_json::from_str(&recv(client).await).expect("a reply")
     }
 
@@ -2828,8 +3301,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     #[tokio::test]
     async fn a_bad_token_grants_nothing() {
         let (url, _) = spawn_paid_server().await;
-        const OTHER_KEY: &str =
-            "1111111111111111111111111111111111111111111111111111111111111111";
+        const OTHER_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
         let forged = rotelyx_capability::testing::mint(
             OTHER_KEY,
             [2u8; 16],
@@ -2853,8 +3325,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     #[tokio::test]
     async fn a_server_without_an_issuer_refuses_tokens() {
         let url = spawn_server().await;
-        const SOME_KEY: &str =
-            "7777777777777777777777777777777777777777777777777777777777777777";
+        const SOME_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
         let token = rotelyx_capability::testing::mint(
             SOME_KEY,
             [3u8; 16],
@@ -2868,7 +3339,6 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert_eq!(reply["op"], "error");
         assert!(reply["message"].as_str().unwrap().contains("no tokens"));
     }
-
 
     /// A client that unsubscribes must stop consuming envelopes.
     ///

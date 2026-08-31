@@ -213,9 +213,9 @@ mod tests {
                     s += gain * (2.0 * PI * f * t).sin();
                 }
                 // 0.25 rather than 0.3: at 0.3 this peaked at 1.113, which is
-            // not audio. No device can represent a sample past full scale, and
-            // measuring a codec on a signal that clips measures the clipping.
-            s * 0.25 * (0.5 + 0.5 * (2.0 * PI * 4.0 * t).sin())
+                // not audio. No device can represent a sample past full scale, and
+                // measuring a codec on a signal that clips measures the clipping.
+                s * 0.25 * (0.5 + 0.5 * (2.0 * PI * 4.0 * t).sin())
             })
             .collect()
     }
@@ -225,7 +225,10 @@ mod tests {
         let mut groups = Vec::new();
 
         for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
-            if let Some(g) = encoder.push(&signal[start..start + WINDOW]).expect("encode") {
+            if let Some(g) = encoder
+                .push(&signal[start..start + WINDOW])
+                .expect("encode")
+            {
                 groups.push(g);
             }
         }
@@ -247,7 +250,10 @@ mod tests {
             out.extend(decoder.decode(g).expect("decode"));
         }
 
-        assert_eq!(out.len(), groups.iter().map(|g| g.frames.len()).sum::<usize>() * FRAME);
+        assert_eq!(
+            out.len(),
+            groups.iter().map(|g| g.frames.len()).sum::<usize>() * FRAME
+        );
 
         // And it is audio rather than noise: the level tracks the input.
         let from = FRAME;
@@ -285,7 +291,9 @@ mod tests {
         let mut counted = 0usize;
 
         for start in (0..signal.len().saturating_sub(WINDOW)).step_by(FRAME) {
-            let (levels, _) = shapes.encode_shapes(&signal[start..start + WINDOW]).expect("encode");
+            let (levels, _) = shapes
+                .encode_shapes(&signal[start..start + WINDOW])
+                .expect("encode");
             let mut stream = RangeEncoder::new();
             layered::write_levels(&mut stream, &levels, &mut models);
             per_frame_bytes += stream.finish().len();

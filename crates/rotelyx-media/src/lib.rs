@@ -689,7 +689,7 @@ impl Receiver {
             let mut value = if i >= words { self.seen[i - words] } else { 0 };
             if bits > 0 {
                 value <<= bits;
-                if i >= words + 1 {
+                if i > words {
                     value |= self.seen[i - words - 1] >> (64 - bits);
                 }
             }
@@ -716,7 +716,7 @@ impl Receiver {
             self.highest = counter;
         } else {
             let behind = self.highest - counter;
-            if behind >= 1 && behind < REPLAY_WINDOW {
+            if (1..REPLAY_WINDOW).contains(&behind) {
                 self.mark_seen(behind);
             }
         }
@@ -726,7 +726,6 @@ impl Receiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// A fixed binding for tests that are not about the binding.
     ///
@@ -780,14 +779,18 @@ mod tests {
             let mut tampered = protected.clone();
             tampered[byte] ^= 0xff;
 
-            let mut fresh = Receiver::new(SenderKeys::derive(&[7u8; 32], 3, &test_call())).expect("receiver");
+            let mut fresh =
+                Receiver::new(SenderKeys::derive(&[7u8; 32], 3, &test_call())).expect("receiver");
             assert!(
                 fresh.unprotect(&tampered).is_err(),
                 "flipping byte {byte} was accepted"
             );
         }
 
-        assert!(receiver.unprotect(&protected).is_ok(), "the original still works");
+        assert!(
+            receiver.unprotect(&protected).is_ok(),
+            "the original still works"
+        );
     }
 
     /// Packets arrive out of order on every real network. Refusing them would
@@ -913,7 +916,8 @@ mod tests {
     fn one_sender_cannot_forge_another() {
         let base = [7u8; 32];
         let mut alice = Sender::new(SenderKeys::derive(&base, 1, &test_call())).expect("sender");
-        let mut listening_for_bob = Receiver::new(SenderKeys::derive(&base, 2, &test_call())).expect("receiver");
+        let mut listening_for_bob =
+            Receiver::new(SenderKeys::derive(&base, 2, &test_call())).expect("receiver");
 
         let from_alice = alice.protect(b"pretending to be bob").expect("protect");
 
@@ -941,7 +945,12 @@ mod tests {
     fn a_sender_beyond_the_header_is_refused() {
         let base = [7u8; 32];
 
-        assert!(Sender::new(SenderKeys::derive(&base, MAX_SENDERS as u8 - 1, &test_call())).is_ok());
+        assert!(Sender::new(SenderKeys::derive(
+            &base,
+            MAX_SENDERS as u8 - 1,
+            &test_call()
+        ))
+        .is_ok());
         assert!(matches!(
             Sender::new(SenderKeys::derive(&base, MAX_SENDERS as u8, &test_call())),
             Err(MediaError::SenderOutOfRange { id }) if id == MAX_SENDERS as u8
@@ -966,7 +975,8 @@ mod tests {
             assert_eq!(id, 1);
             assert_eq!(read_back, counter, "the counter did not survive encoding");
 
-            let mut fresh = Receiver::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("receiver");
+            let mut fresh =
+                Receiver::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("receiver");
             assert_eq!(fresh.unprotect(&protected).expect("unprotect"), b"hello");
         }
         let _ = &mut receiver;
@@ -988,8 +998,10 @@ mod tests {
     /// what makes a media key die with the epoch it came from.
     #[test]
     fn a_key_from_another_epoch_does_not_work() {
-        let mut sender = Sender::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("sender");
-        let mut next_epoch = Receiver::new(SenderKeys::derive(&[8u8; 32], 1, &test_call())).expect("receiver");
+        let mut sender =
+            Sender::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("sender");
+        let mut next_epoch =
+            Receiver::new(SenderKeys::derive(&[8u8; 32], 1, &test_call())).expect("receiver");
 
         let frame = sender.protect(b"this epoch only").expect("protect");
         assert_eq!(next_epoch.unprotect(&frame), Err(MediaError::BadTag));
@@ -1011,17 +1023,24 @@ mod tests {
 
         // And far apart, where a naive construction would wrap.
         for counter in [u64::MAX, u64::MAX - 1, 1 << 40, 1 << 63] {
-            assert!(seen.insert(keys.nonce(counter)), "counter {counter} collided");
+            assert!(
+                seen.insert(keys.nonce(counter)),
+                "counter {counter} collided"
+            );
         }
     }
 
     /// Running out of counters must stop the sender rather than wrap it.
     #[test]
     fn an_exhausted_counter_refuses_to_wrap() {
-        let mut sender = Sender::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("sender");
+        let mut sender =
+            Sender::new(SenderKeys::derive(&[7u8; 32], 1, &test_call())).expect("sender");
         sender.counter = u64::MAX;
 
-        assert!(sender.protect(b"last").is_ok(), "the final counter is usable");
+        assert!(
+            sender.protect(b"last").is_ok(),
+            "the final counter is usable"
+        );
         assert_eq!(
             sender.protect(b"one too many"),
             Err(MediaError::CounterExhausted),
@@ -1043,7 +1062,9 @@ mod tests {
 
         assert_eq!(receiver.unprotect(&forged), Err(MediaError::BadTag));
         assert_eq!(
-            receiver.unprotect(&real).expect("the real frame still works"),
+            receiver
+                .unprotect(&real)
+                .expect("the real frame still works"),
             b"the real frame"
         );
     }
@@ -1143,8 +1164,8 @@ mod tests {
     fn without_padding_the_sizes_say_everything() {
         let (mut sender, _) = pair(1);
 
-        let loud = sender.protect(&vec![9u8; 120]).expect("protect").len();
-        let quiet = sender.protect(&vec![3u8; 24]).expect("protect").len();
+        let loud = sender.protect(&[9u8; 120]).expect("protect").len();
+        let quiet = sender.protect(&[3u8; 24]).expect("protect").len();
         assert!(
             loud > quiet,
             "this test no longer measures what it claims to"
@@ -1176,7 +1197,13 @@ mod tests {
 
         // And it grows only as the counter does. At fifty frames a second these
         // are the whole life of a call.
-        for (counter, expected) in [(0u64, 19usize), (255, 19), (256, 20), (65_536, 21), (1 << 24, 22)] {
+        for (counter, expected) in [
+            (0u64, 19usize),
+            (255, 19),
+            (256, 20),
+            (65_536, 21),
+            (1 << 24, 22),
+        ] {
             sender.counter = counter;
             let protected = sender.protect(&frame).expect("protect");
             assert_eq!(

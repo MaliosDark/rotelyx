@@ -234,7 +234,11 @@ mod tests {
         let strip = s.strip();
 
         assert_eq!(count(&strip, "part"), 1, "the bucket in progress");
-        assert_eq!(count(&strip, "down"), 0, "no record, so no outage may be drawn");
+        assert_eq!(
+            count(&strip, "down"),
+            0,
+            "no record, so no outage may be drawn"
+        );
         assert_eq!(
             count(&strip, "up") + count(&strip, "part") + count(&strip, "unknown"),
             BUCKETS
@@ -259,7 +263,11 @@ mod tests {
         buckets.sort_unstable();
         std::fs::write(
             &path,
-            buckets.iter().map(u64::to_string).collect::<Vec<_>>().join("\n"),
+            buckets
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
         )
         .expect("write");
 
@@ -269,10 +277,16 @@ mod tests {
         let strip = s.strip();
 
         assert_eq!(count(&strip, "up"), 12, "the twelve recorded buckets");
-        assert_eq!(count(&strip, "down"), 8, "the gap, measured rather than assumed");
+        assert_eq!(
+            count(&strip, "down"),
+            8,
+            "the gap, measured rather than assumed"
+        );
         assert_eq!(count(&strip, "part"), 1);
         assert_eq!(
-            count(&strip, "up") + count(&strip, "down") + count(&strip, "part")
+            count(&strip, "up")
+                + count(&strip, "down")
+                + count(&strip, "part")
                 + count(&strip, "unknown"),
             BUCKETS
         );
@@ -295,7 +309,11 @@ mod tests {
             s.heartbeat();
         }
         let text = std::fs::read_to_string(&path).expect("written");
-        assert_eq!(text.lines().count(), 1, "five beats in one bucket is one line");
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "five beats in one bucket is one line"
+        );
         assert_eq!(s.recorded_count(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);

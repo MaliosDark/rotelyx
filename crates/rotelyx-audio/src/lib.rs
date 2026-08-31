@@ -9,6 +9,7 @@
 //! already worked out, because how those are derived is the caller's business
 //! and every caller does it from something different.
 
+pub mod align;
 pub mod device;
 
 pub mod denoise;
@@ -22,8 +23,8 @@ use anyhow::{bail, Context, Result};
 use rotelyx_codec::layered::{LayeredDecoder, LayeredEncoder, LayeredFrame};
 use rotelyx_codec::mdct::{FRAME, SAMPLE_RATE, WINDOW};
 
-use rotelyx_media::transport::{MediaIn, MediaOut};
 use rotelyx_media::jitter::Playout;
+use rotelyx_media::transport::{MediaIn, MediaOut};
 use rotelyx_media::{CallBinding, SenderKeys};
 
 /// Re-exported because every caller of [`Call::start`] has to name one, and
@@ -164,12 +165,7 @@ impl Call {
     /// Without it the keys would be a function of the MLS epoch alone, and two
     /// calls inside one epoch would repeat every nonce. See
     /// [`rotelyx_media::CallBinding`].
-    pub fn start(
-        base: [u8; 32],
-        index: u8,
-        call: CallBinding,
-        paths: PathPolicy,
-    ) -> Result<Self> {
+    pub fn start(base: [u8; 32], index: u8, call: CallBinding, paths: PathPolicy) -> Result<Self> {
         // Refused before a device is opened, so a user on a direct session does
         // not get a microphone light and then an error.
         if paths.permits_direct() {
@@ -435,24 +431,24 @@ impl Call {
                     }
 
                     match LayeredFrame::from_bytes(&payload) {
-                    Ok(parsed) => match decoder.decode(&parsed) {
-                        Ok(audio) => {
-                            self.frames_in += 1;
-                            audio
-                        }
-                        // Authenticated and undecodable is not a gap in the
-                        // network, it is a frame this decoder cannot use.
-                        // Concealing it keeps the voice continuous rather than
-                        // punching a hole for a fault on this side.
+                        Ok(parsed) => match decoder.decode(&parsed) {
+                            Ok(audio) => {
+                                self.frames_in += 1;
+                                audio
+                            }
+                            // Authenticated and undecodable is not a gap in the
+                            // network, it is a frame this decoder cannot use.
+                            // Concealing it keeps the voice continuous rather than
+                            // punching a hole for a fault on this side.
+                            Err(_) => {
+                                self.frames_concealed += 1;
+                                decoder.conceal()
+                            }
+                        },
                         Err(_) => {
                             self.frames_concealed += 1;
                             decoder.conceal()
                         }
-                    },
-                    Err(_) => {
-                        self.frames_concealed += 1;
-                        decoder.conceal()
-                    }
                     }
                 }
                 // The frame did not arrive in time for its slot. This is the
@@ -472,7 +468,6 @@ impl Call {
         }
     }
 }
-
 
 /// Add samples into a mix at an offset, growing it as needed.
 ///

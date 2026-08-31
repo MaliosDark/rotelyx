@@ -219,11 +219,7 @@ impl Limits {
 /// The socket's peer, unless it is a proxy the operator named, in which case the
 /// address that proxy says it is forwarding for. Never the header on its own:
 /// see the module note.
-pub fn client_address(
-    peer: IpAddr,
-    trusted_proxies: &[IpAddr],
-    forwarded: Option<&str>,
-) -> IpAddr {
+pub fn client_address(peer: IpAddr, trusted_proxies: &[IpAddr], forwarded: Option<&str>) -> IpAddr {
     if !trusted_proxies.contains(&peer) {
         return peer;
     }

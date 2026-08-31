@@ -21,7 +21,9 @@ async fn connect() -> rotelyx_relay_proto::client::Client {
         .client_config(rotelyx_relay_proto::tls::default_provider())
         .expect("a tls config");
     ClientBuilder::new(
-        setting("CHAIN_FIRST_URL").parse::<rotelyx_net::RelayUrl>().expect("a relay url"),
+        setting("CHAIN_FIRST_URL")
+            .parse::<rotelyx_net::RelayUrl>()
+            .expect("a relay url"),
         SecretKey::generate(),
         rotelyx_discovery::dns::DnsResolver::new(),
     )

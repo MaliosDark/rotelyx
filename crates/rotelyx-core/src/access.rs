@@ -52,11 +52,7 @@ pub enum AccessError {
     WrongTarget,
 
     #[error("proof of work is for epoch {got}, current window is {want}±{tolerance}")]
-    StaleProof {
-        got: u64,
-        want: u64,
-        tolerance: u64,
-    },
+    StaleProof { got: u64, want: u64, tolerance: u64 },
 
     #[error("proof of work does not meet difficulty {required}")]
     InsufficientWork { required: u8 },
@@ -66,7 +62,6 @@ pub enum AccessError {
 
     #[error("invitation expired at epoch {expired_at}")]
     ExpiredInvitation { expired_at: u64 },
-
 
     /// A code that is not the right length, or whose address half is not a
     /// point on the curve. Said the same way for both, because telling a caller
@@ -628,7 +623,6 @@ mod tests {
     use super::*;
     use crate::identity::Identity;
 
-
     /// Two invitations from one identity are answered at two addresses, and
     /// neither is the identity.
     ///
@@ -642,8 +636,16 @@ mod tests {
         let b = Invitation::issue(100);
 
         assert_ne!(a.address(), b.address(), "two invitations share an address");
-        assert_ne!(a.address(), me.id(), "an invitation is answered on the identity");
-        assert_ne!(b.address(), me.id(), "an invitation is answered on the identity");
+        assert_ne!(
+            a.address(),
+            me.id(),
+            "an invitation is answered on the identity"
+        );
+        assert_ne!(
+            b.address(),
+            me.id(),
+            "an invitation is answered on the identity"
+        );
     }
 
     /// The code carries both halves and survives the round trip.
@@ -669,9 +671,17 @@ mod tests {
 
         let long = inv.code_with_exit(&exit);
         let read = Invitation::read_code_full(&long[..]).expect("a code we just made");
-        assert_eq!(read.secret, *inv.secret_bytes(), "the secret did not survive");
+        assert_eq!(
+            read.secret,
+            *inv.secret_bytes(),
+            "the secret did not survive"
+        );
         assert_eq!(read.address, inv.address(), "the address did not survive");
-        assert_eq!(read.exit.as_ref(), Some(&exit), "the exit relay did not survive");
+        assert_eq!(
+            read.exit.as_ref(),
+            Some(&exit),
+            "the exit relay did not survive"
+        );
 
         // The form handed out before chaining is still a code, and says it
         // carries no exit relay rather than failing.
@@ -711,7 +721,10 @@ mod tests {
         // And a key of a different length, which is what a relay answering
         // with something else would most likely be.
         assert!(!exit.accepts(&[]), "an empty key was accepted");
-        assert!(!exit.accepts(&vec![0x41u8; 1215]), "a short key was accepted");
+        assert!(
+            !exit.accepts(&vec![0x41u8; 1215]),
+            "a short key was accepted"
+        );
     }
 
     /// The fingerprint is not a bare hash of the key.
@@ -787,7 +800,10 @@ mod tests {
             .expect("the exit relay opens its own layer");
         assert_eq!(hop.destination, *destination.as_bytes());
         assert_eq!(hop.return_key, *return_key.as_bytes());
-        assert!(hop.next_relay.is_none(), "the circuit was told to go further");
+        assert!(
+            hop.next_relay.is_none(),
+            "the circuit was told to go further"
+        );
 
         // And cannot read the first relay's, so it never learns which relay
         // carried this to it from the descriptor.
@@ -802,9 +818,7 @@ mod tests {
         // Neither address is readable in what travels.
         for wire in [&outer, &inner] {
             assert!(
-                !wire
-                    .windows(32)
-                    .any(|w| w == destination.as_bytes()),
+                !wire.windows(32).any(|w| w == destination.as_bytes()),
                 "the destination is readable in a descriptor"
             );
         }
@@ -837,12 +851,13 @@ mod tests {
     #[test]
     fn an_exit_relay_address_that_is_not_text_is_refused() {
         let inv = Invitation::issue(100);
-        let mut code = inv.code_with_exit(&ExitRelay {
-            relay: address_of(&[7u8; 32]),
-            key_hash: [9u8; 32],
-            url: "https://relay.example.invalid".to_owned(),
-        })
-        .to_vec();
+        let mut code = inv
+            .code_with_exit(&ExitRelay {
+                relay: address_of(&[7u8; 32]),
+                key_hash: [9u8; 32],
+                url: "https://relay.example.invalid".to_owned(),
+            })
+            .to_vec();
         // A byte no UTF-8 sequence may begin with.
         code.truncate(128);
         code.push(0xFF);
@@ -885,7 +900,10 @@ mod tests {
     #[test]
     fn a_malformed_code_is_refused_and_never_panics() {
         for len in [0usize, 1, 31, 32, 63, 65, 128, 4096] {
-            assert!(Invitation::read_code(&vec![0x41; len]).is_err(), "accepted {len} bytes");
+            assert!(
+                Invitation::read_code(&vec![0x41; len]).is_err(),
+                "accepted {len} bytes"
+            );
         }
 
         // Exhaustive over one byte at every position of a real code, which is
@@ -1088,7 +1106,6 @@ mod tests {
         ));
     }
 
-
     /// A permission is for one address, and worthless at any other.
     ///
     /// # The hole this closes
@@ -1117,7 +1134,8 @@ mod tests {
         let evidence = Admission::Invitation { proof, epoch: 100 };
 
         assert!(
-            gate.admit(&caller, &me, &evidence, 100, Some(at_mine)).is_ok(),
+            gate.admit(&caller, &me, &evidence, 100, Some(at_mine))
+                .is_ok(),
             "the address this invitation is answered at must admit its holder",
         );
         assert!(
@@ -1150,7 +1168,6 @@ mod tests {
         assert!(gate.admit(&caller, &me, &evidence, 100, None).is_ok());
     }
 
-
     /// Revocation is the answer to a leaked invitation. Expiry is a promise
     /// about the future; a leak is a problem now.
     #[test]
@@ -1163,12 +1180,24 @@ mod tests {
         let mut gate = Gate::invitation_only();
         gate.add_invitation(inv);
         assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
+            .admit(
+                &caller,
+                &me,
+                &Admission::Invitation { proof, epoch: 100 },
+                100,
+                None
+            )
             .is_ok());
 
         assert_eq!(gate.revoke(&secret), 1);
         assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
+            .admit(
+                &caller,
+                &me,
+                &Admission::Invitation { proof, epoch: 100 },
+                100,
+                None
+            )
             .is_err());
     }
 
@@ -1188,7 +1217,13 @@ mod tests {
         assert_eq!(gate.revoke(&drop_secret), 1);
         assert_eq!(gate.invitation_count(), 1);
         assert!(gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
+            .admit(
+                &caller,
+                &me,
+                &Admission::Invitation { proof, epoch: 100 },
+                100,
+                None
+            )
             .is_ok());
     }
 
@@ -1222,7 +1257,13 @@ mod tests {
 
         let pow_gate = Gate::new(ReachabilityPolicy::ProofOfWork { difficulty: 8 });
         assert!(pow_gate
-            .admit(&caller, &me, &Admission::Invitation { proof, epoch: 100 }, 100, None)
+            .admit(
+                &caller,
+                &me,
+                &Admission::Invitation { proof, epoch: 100 },
+                100,
+                None
+            )
             .is_err());
 
         let mut inv_gate = Gate::invitation_only();
@@ -1233,15 +1274,20 @@ mod tests {
             .is_err());
     }
 
-
     // --- admission wire format ---
 
     #[test]
     fn admission_encodings_roundtrip() {
         for evidence in [
             Admission::None,
-            Admission::Invitation { proof: [7u8; 32], epoch: 42 },
-            Admission::ProofOfWork(ContactProof { nonce: 99, epoch: 42 }),
+            Admission::Invitation {
+                proof: [7u8; 32],
+                epoch: 42,
+            },
+            Admission::ProofOfWork(ContactProof {
+                nonce: 99,
+                epoch: 42,
+            }),
         ] {
             let bytes = evidence.to_bytes();
             assert_eq!(Admission::from_bytes(&bytes).expect("decode"), evidence);
@@ -1260,7 +1306,11 @@ mod tests {
         assert!(Admission::from_bytes(&[0, 0]).is_err());
 
         // Every prefix of a valid encoding.
-        let valid = Admission::Invitation { proof: [1u8; 32], epoch: 5 }.to_bytes();
+        let valid = Admission::Invitation {
+            proof: [1u8; 32],
+            epoch: 5,
+        }
+        .to_bytes();
         for cut in 0..valid.len() {
             let _ = Admission::from_bytes(&valid[..cut]);
         }
@@ -1338,7 +1388,6 @@ impl Gate {
         self.invitations.len()
     }
 
-
     /// Decide whether `caller` may open a session.
     ///
     /// The blocklist is checked **first**, before any verification work. A
@@ -1411,7 +1460,14 @@ impl Gate {
             (ReachabilityPolicy::InvitationOnly, _) => Err(AccessError::BadInvitation),
 
             (ReachabilityPolicy::ProofOfWork { difficulty }, Admission::ProofOfWork(proof)) => {
-                verify_proof(proof, caller, me, current_epoch, *difficulty, self.tolerance)
+                verify_proof(
+                    proof,
+                    caller,
+                    me,
+                    current_epoch,
+                    *difficulty,
+                    self.tolerance,
+                )
             }
             (ReachabilityPolicy::ProofOfWork { difficulty }, _) => {
                 Err(AccessError::InsufficientWork {

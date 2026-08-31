@@ -262,7 +262,6 @@ pub struct EchoCanceller {
     leak: f32,
     /// The suppression gain actually applied, smoothed so it cannot jump.
     gain: f32,
-
 }
 
 impl Default for EchoCanceller {
@@ -359,8 +358,8 @@ impl EchoCanceller {
         // convolving with the whole filter would be in the time domain.
         let mut y = [C::ZERO; FFT_LEN];
         for p in 0..PARTITIONS {
-            for k in 0..FFT_LEN {
-                y[k] = y[k].add(self.filter[p][k].mul(self.far[p][k]));
+            for (k, bin) in y.iter_mut().enumerate() {
+                *bin = bin.add(self.filter[p][k].mul(self.far[p][k]));
             }
         }
         fft(&mut y, true);
@@ -410,8 +409,8 @@ impl EchoCanceller {
             // one step one step.
             let mut power = [0.0f32; FFT_LEN];
             for p in 0..PARTITIONS {
-                for k in 0..FFT_LEN {
-                    power[k] += self.far[p][k].norm_sq();
+                for (k, total) in power.iter_mut().enumerate() {
+                    *total += self.far[p][k].norm_sq();
                 }
             }
 
@@ -546,7 +545,9 @@ impl EchoCanceller {
     /// speakerphone: it says whether the room is being cancelled or merely
     /// endured.
     pub fn loss_db(&self) -> f32 {
-        10.0 * (self.heard_energy / self.left_energy.max(FLOOR)).max(1.0).log10()
+        10.0 * (self.heard_energy / self.left_energy.max(FLOOR))
+            .max(1.0)
+            .log10()
     }
 }
 
@@ -616,7 +617,10 @@ mod tests {
         let after = energy(&cleaned[tail..]);
         let db = 10.0 * (before / after.max(1e-12)).log10();
 
-        println!("  echo removed: {db:.1} dB, reported {:.1} dB", aec.loss_db());
+        println!(
+            "  echo removed: {db:.1} dB, reported {:.1} dB",
+            aec.loss_db()
+        );
         assert!(
             db > 20.0,
             "only {db:.1} dB of echo was removed, which the other end still hears"

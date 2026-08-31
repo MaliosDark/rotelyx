@@ -565,7 +565,10 @@ mod tests {
             jb.push(n, n * FRAME_MS as u64, frame(n));
         }
         let calm = jb.target_ms();
-        assert_eq!(calm, MIN_DELAY_MS, "a clean network needs no depth beyond one frame");
+        assert_eq!(
+            calm, MIN_DELAY_MS,
+            "a clean network needs no depth beyond one frame"
+        );
 
         // Now a network that jitters by 60 ms either way.
         let mut arrival = 40 * FRAME_MS as u64;

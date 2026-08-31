@@ -33,15 +33,21 @@ use webpki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 /// The default `http_bind_port` when using `--dev`.
 const DEV_MODE_HTTP_PORT: u16 = 3340;
 /// The header name for setting the endpoint id in HTTP auth requests.
-const X_IROH_ENDPOINT_ID: &str = "X-Iroh-NodeId";
+///
+/// Renamed with the rest of them. This binary is upstream's standalone relay
+/// and Rotelyx deploys `crates/rotelyx-relay` instead, so nothing here reaches
+/// a wire this project operates. It is renamed anyway: a repository that is
+/// going to be read carries upstream's name in whatever is left of it, and
+/// "it is not deployed" is a fact about today.
+const X_ENDPOINT_ID: &str = "X-Rotelyx-Endpoint-Id";
 /// Environment variable to read a bearer token for HTTP auth requests from.
-const ENV_HTTP_BEARER_TOKEN: &str = "IROH_RELAY_HTTP_BEARER_TOKEN";
+const ENV_HTTP_BEARER_TOKEN: &str = "ROTELYX_RELAY_HTTP_BEARER_TOKEN";
 /// Environment variable to verify relay access (without an external auth service)
-const ENV_RELAY_ACCESS_TOKEN: &str = "IROH_RELAY_ACCESS_TOKEN";
+const ENV_RELAY_ACCESS_TOKEN: &str = "ROTELYX_RELAY_ACCESS_TOKEN";
 /// Environment variable to override the ACME directory URL.
-const ENV_ACME_URL: &str = "IROH_RELAY_ACME_URL";
+const ENV_ACME_URL: &str = "ROTELYX_RELAY_ACME_URL";
 /// Environment variable to trust an additional CA for the ACME server's TLS certificate.
-const ENV_ACME_CA: &str = "IROH_RELAY_ACME_CA";
+const ENV_ACME_CA: &str = "ROTELYX_RELAY_ACME_CA";
 
 /// A relay server for rotelyx_transport.
 #[derive(Parser, Debug, Clone)]
@@ -167,7 +173,7 @@ enum AccessConfig {
     Denylist(Vec<EndpointId>),
     /// Performs a HTTP POST request to determine access for each endpoint that connects to the relay.
     ///
-    /// The request will have a header `X-Iroh-Endpoint-Id` set to the hex-encoded endpoint id attempting
+    /// The request will have a header `X-Rotelyx-Endpoint-Id` set to the hex-encoded endpoint id attempting
     /// to connect to the relay.
     ///
     /// To grant access, the HTTP endpoint must return a `200` response with `true` as the response text.
@@ -180,7 +186,7 @@ enum AccessConfig {
     /// or from the `?token=` URL query parameter as a fallback.
     /// All other connections are denied.
     ///
-    /// The token list can also be overridden by the `IROH_RELAY_ACCESS_TOKEN` environment
+    /// The token list can also be overridden by the `ROTELYX_RELAY_ACCESS_TOKEN` environment
     /// variable, which sets a single allowed token and takes precedence over the config
     /// file value. A single value is used (rather than a comma-separated list) to avoid
     /// restricting the character set of tokens.
@@ -203,7 +209,7 @@ struct HttpAccessConfig {
     /// Optional bearer token for authorizing to the HTTP endpoint.
     ///
     /// If set, an `Authorization: Bearer {token}` header will be set on the HTTP request.
-    /// The bearer token can also be set via the `IROH_RELAY_HTTP_BEARER_TOKEN` environment variable.
+    /// The bearer token can also be set via the `ROTELYX_RELAY_HTTP_BEARER_TOKEN` environment variable.
     /// If both the config and the environment variable are set, the value from the environment variable
     /// is used.
     bearer_token: Option<String>,
@@ -316,7 +322,7 @@ async fn http_access_check_inner(
 ) -> Result<()> {
     let mut request = client
         .post(config.url.clone())
-        .header(X_IROH_ENDPOINT_ID, endpoint_id.to_string());
+        .header(X_ENDPOINT_ID, endpoint_id.to_string());
     if let Some(token) = config.bearer_token.as_ref() {
         request = request.header(http::header::AUTHORIZATION, format!("Bearer {token}"));
     }
@@ -659,9 +665,9 @@ async fn load_cert_config(tls: &TlsConfig) -> Result<relay::CertConfig> {
             // publicly trusted CA.
             if let Ok(ca_path) = std::env::var(ENV_ACME_CA) {
                 let extra_roots = CertificateDer::pem_file_iter(&ca_path)
-                    .std_context("failed to read IROH_RELAY_ACME_CA")?
+                    .std_context("failed to read ROTELYX_RELAY_ACME_CA")?
                     .collect::<Result<Vec<_>, _>>()
-                    .std_context("failed to parse IROH_RELAY_ACME_CA")?;
+                    .std_context("failed to parse ROTELYX_RELAY_ACME_CA")?;
                 acme_config =
                     acme_config.tls_config(CaTlsConfig::default().with_extra_roots(extra_roots));
             }

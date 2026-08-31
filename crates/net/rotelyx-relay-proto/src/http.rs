@@ -24,6 +24,63 @@ pub const RELAY_PROBE_PATH: &str = "/ping";
 /// two constants that can disagree.
 pub const CIRCUIT_KEY_PATH: &str = "/circuit-key";
 
+/// The HTTP path a captive portal check probes, expecting 204 No Content.
+///
+/// Here for the same reason as [`CIRCUIT_KEY_PATH`]: the side that asks is the
+/// transport crate and the side that answers is this crate's server, and they
+/// are not built together.
+pub const CAPTIVE_PORTAL_PATH: &str = "/generate_204";
+
+/// The header a captive portal check sends, and the one the relay answers with.
+///
+/// # Why these are here and not two literals
+///
+/// They were two literals, on opposite sides of a crate boundary, and **the
+/// rename away from upstream's names moved only one of them.** The relay was
+/// renamed to `X-Rotelyx-Challenge`; the client went on sending
+/// `X-Iroh-Challenge` and went on looking for `X-Iroh-Response`.
+///
+/// Nothing failed loudly. The relay saw a header it did not recognise, answered
+/// 204 with no response header, and the client read the missing header as proof
+/// of a captive portal. So every fresh endpoint concluded it was behind one,
+/// against Rotelyx's own relays, and the check could never return any other
+/// answer. It also put `X-Iroh-` on the wire in cleartext, which is upstream's
+/// name on traffic this project does not want carrying it.
+///
+/// One definition, used by both sides, cannot drift like that.
+pub const CHALLENGE_HEADER: &str = "X-Rotelyx-Challenge";
+
+/// The header the relay answers a valid challenge with. See [`CHALLENGE_HEADER`].
+pub const CHALLENGE_RESPONSE_HEADER: &str = "X-Rotelyx-Response";
+
+/// The challenge a client sends for `host`.
+///
+/// **Predictable on purpose, and worth knowing.** It is derived from the host
+/// rather than drawn at random, which upstream chose and this keeps, so a
+/// captive portal that knows this protocol can answer correctly and go
+/// undetected. The check is a hint about hotel wifi, not a security boundary,
+/// and treating its answer as one would be a mistake.
+///
+/// The characters have to survive the relay's own filter, which accepts ASCII
+/// letters, digits, `.`, `-` and `_`, and the whole thing has to stay under 64
+/// bytes.
+pub fn challenge_for(host: &str) -> String {
+    let host: String = host
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect();
+    let mut challenge = format!("rx_{host}");
+    challenge.truncate(63);
+    challenge
+}
+
+/// What a relay answers a valid challenge with, and what a client compares to.
+///
+/// The format was written twice as well, once on each side.
+pub fn challenge_response(challenge: &str) -> String {
+    format!("response {challenge}")
+}
+
 /// The HTTP header name for relay client authentication
 pub const CLIENT_AUTH_HEADER: HeaderName = HeaderName::from_static("x-rotelyx-relay-client-auth-v1");
 

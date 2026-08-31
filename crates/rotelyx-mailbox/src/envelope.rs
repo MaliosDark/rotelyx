@@ -118,20 +118,8 @@ impl Bucket {
 
     /// Every size, ascending.
     pub const SIZES: [usize; 14] = [
-        1_024,
-        2_048,
-        4_096,
-        8_192,
-        16_384,
-        32_768,
-        65_536,
-        131_072,
-        262_144,
-        524_288,
-        1_048_576,
-        2_097_152,
-        4_194_304,
-        8_388_608,
+        1_024, 2_048, 4_096, 8_192, 16_384, 32_768, 65_536, 131_072, 262_144, 524_288, 1_048_576,
+        2_097_152, 4_194_304, 8_388_608,
     ];
 
     pub const fn size(self) -> usize {
@@ -446,8 +434,8 @@ impl PayloadKey {
         getrandom::fill(&mut nonce).map_err(|_| EnvelopeError::NoRandomness)?;
 
         let aad = Self::aad(tag);
-        let cipher = XChaCha20Poly1305::new_from_slice(&self.0[..])
-            .map_err(|_| EnvelopeError::Sealing)?;
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(&self.0[..]).map_err(|_| EnvelopeError::Sealing)?;
         let sealed = cipher
             .encrypt(
                 &XNonce::try_from(&nonce[..]).expect("NONCE_LEN bytes, just built"),
@@ -508,11 +496,12 @@ impl PayloadKey {
             return Err(EnvelopeError::NotSealed);
         }
 
-        let cipher = XChaCha20Poly1305::new_from_slice(&self.0[..])
-            .map_err(|_| EnvelopeError::Sealing)?;
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(&self.0[..]).map_err(|_| EnvelopeError::Sealing)?;
         cipher
             .decrypt(
-                &XNonce::try_from(&sealed[1..1 + NONCE_LEN]).expect("NONCE_LEN bytes, length checked above"),
+                &XNonce::try_from(&sealed[1..1 + NONCE_LEN])
+                    .expect("NONCE_LEN bytes, length checked above"),
                 Payload {
                     msg: &sealed[1 + NONCE_LEN..],
                     aad: &Self::aad(tag),
@@ -523,8 +512,7 @@ impl PayloadKey {
 }
 
 /// What the operator stores: a tag, and a bucket-sized opaque payload.
-#[derive(Clone, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Envelope {
     tag: Tag,
     payload: Vec<u8>,
@@ -661,7 +649,9 @@ mod tests {
         let here = Tag::from_bytes(&[1u8; 32]).expect("tag");
         let there = Tag::from_bytes(&[2u8; 32]).expect("tag");
 
-        let sealed = key.seal(Some(here), b"addressed to one place").expect("seal");
+        let sealed = key
+            .seal(Some(here), b"addressed to one place")
+            .expect("seal");
         assert!(key.open(Some(here), &sealed).is_ok());
         assert!(
             key.open(Some(there), &sealed).is_err(),

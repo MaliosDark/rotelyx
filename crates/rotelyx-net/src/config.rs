@@ -54,7 +54,6 @@ impl RelayPolicy {
     }
 }
 
-
 /// Whether the endpoint publishes its address anywhere discoverable.
 ///
 /// Upstream's default publishes the endpoint's public key and reachability to
@@ -149,10 +148,7 @@ mod tests {
     #[test]
     fn self_hosted_relays_are_the_only_permitted_hosts() {
         let url: RelayUrl = "https://relay.example.internal".parse().unwrap();
-        let cfg = NetConfig::new(
-            RelayPolicy::SelfHosted(vec![url]),
-            PathPolicy::PreferDirect,
-        );
+        let cfg = NetConfig::new(RelayPolicy::SelfHosted(vec![url]), PathPolicy::PreferDirect);
         assert_eq!(cfg.permitted_hosts(), vec!["relay.example.internal"]);
     }
 

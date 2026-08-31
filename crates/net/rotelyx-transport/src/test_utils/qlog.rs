@@ -32,7 +32,7 @@ impl QlogFileGroup {
     /// The qlog files will be written to `CARGO_MANIFEST_DIR/qlog`.
     ///
     /// The [`QlogFileGroup`] can be used independent of feature flags, but it will only emit qlog files
-    /// if the "qlog" feature is enabled and the environment variable IROH_TEST_QLOG is set to 1.
+    /// if the "qlog" feature is enabled and the environment variable ROTELYX_TEST_QLOG is set to 1.
     pub fn from_env(title: impl ToString) -> Self {
         let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("qlog");
         Self::new(directory, title)
@@ -41,7 +41,7 @@ impl QlogFileGroup {
     /// Creates a new [`QlogFileGroup`] that writes qlog files to the specified directory.
     ///
     /// The [`QlogFileGroup`] can be used independent of feature flags, but it will only emit qlog files
-    /// if the "qlog" feature is enabled and the environment variable IROH_TEST_QLOG is set to 1.
+    /// if the "qlog" feature is enabled and the environment variable ROTELYX_TEST_QLOG is set to 1.
     pub fn new(directory: impl AsRef<Path>, title: impl ToString) -> Self {
         #[cfg(not(feature = "qlog"))]
         let this = {
@@ -61,7 +61,7 @@ impl QlogFileGroup {
 
     /// Creates a [`QuicTransportConfig`] that emits qlog files, if enabled.
     ///
-    /// If the "qlog" feature is enabled, and the environment variable IROH_TEST_QLOG is set,
+    /// If the "qlog" feature is enabled, and the environment variable ROTELYX_TEST_QLOG is set,
     /// this returns a transport config that writes qlog configs to the configured output directory.
     /// Otherwise, a default transport config is returned.
     pub fn create(&self, name: impl ToString) -> Result<QuicTransportConfig> {
@@ -74,7 +74,7 @@ impl QlogFileGroup {
         {
             let mut builder = QuicTransportConfig::builder();
 
-            if std::env::var("IROH_TEST_QLOG").is_ok() {
+            if std::env::var("ROTELYX_TEST_QLOG").is_ok() {
                 let prefix = format!("{}.{}", self.title, name.to_string());
                 let factory = QlogFileFactory::new(self.directory.clone())
                     .with_prefix(prefix)

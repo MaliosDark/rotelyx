@@ -37,7 +37,8 @@ use crate::hybrid::{HybridCiphertext, HybridKem, HybridPublicKey, HybridSecretKe
 /// Note the `128`: the OpenMLS RustCrypto provider offers no 256-bit suite, so
 /// the classical security level is fixed here. The long-term margin comes from
 /// the hybrid post-quantum PSK below, not from this line.
-pub const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
+pub const CIPHERSUITE: Ciphersuite =
+    Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
 
 /// Plaintext is padded to a multiple of this before encryption.
 ///
@@ -370,7 +371,10 @@ pub fn serialize_key_package(kp: &KeyPackage) -> Result<Vec<u8>, GroupError> {
 pub fn deserialize_key_package(bytes: &[u8]) -> Result<KeyPackage, GroupError> {
     let msg = KeyPackageIn::tls_deserialize(&mut &bytes[..]).map_err(codec)?;
     let validated = msg
-        .validate(OpenMlsRustCrypto::default().crypto(), ProtocolVersion::Mls10)
+        .validate(
+            OpenMlsRustCrypto::default().crypto(),
+            ProtocolVersion::Mls10,
+        )
         .map_err(mls)?;
 
     if validated.ciphersuite() != CIPHERSUITE {
@@ -684,12 +688,7 @@ impl Conversation {
     pub fn mailbox_tag_key(&self, member: &Member) -> Result<[u8; 32], GroupError> {
         let bytes = self
             .group
-            .export_secret(
-                member.provider.crypto(),
-                MAILBOX_TAG_KEY_LABEL,
-                &[],
-                32,
-            )
+            .export_secret(member.provider.crypto(), MAILBOX_TAG_KEY_LABEL, &[], 32)
             .map_err(mls)?;
 
         bytes
@@ -734,11 +733,7 @@ impl Conversation {
     ///
     /// Must be called while still at the pre-commit epoch, since the binding
     /// commits to it.
-    pub fn stage_pq_secret(
-        &self,
-        member: &Member,
-        secret: &PqSecret,
-    ) -> Result<(), GroupError> {
+    pub fn stage_pq_secret(&self, member: &Member, secret: &PqSecret) -> Result<(), GroupError> {
         let binding = self.psk_binding();
         let psk_bytes = secret.to_psk_bytes(&binding);
 
@@ -914,13 +909,9 @@ impl Conversation {
             .padding_size(PADDING_SIZE)
             .build();
 
-        let staged = StagedWelcome::new_from_welcome(
-            &joiner.provider,
-            &join_config,
-            welcome,
-            Some(tree),
-        )
-        .map_err(mls)?;
+        let staged =
+            StagedWelcome::new_from_welcome(&joiner.provider, &join_config, welcome, Some(tree))
+                .map_err(mls)?;
 
         let group = staged.into_group(&joiner.provider).map_err(mls)?;
         Ok(Self {
@@ -966,7 +957,9 @@ impl Conversation {
             .into_contents();
 
         let out = commit.tls_serialize_detached().map_err(codec)?;
-        self.group.merge_pending_commit(&member.provider).map_err(mls)?;
+        self.group
+            .merge_pending_commit(&member.provider)
+            .map_err(mls)?;
         self.restored_needs_rekey = false;
         Ok(out)
     }
@@ -1014,7 +1007,9 @@ impl Conversation {
             .tls_serialize_detached()
             .map_err(codec)?;
 
-        self.group.merge_pending_commit(&member.provider).map_err(mls)?;
+        self.group
+            .merge_pending_commit(&member.provider)
+            .map_err(mls)?;
         Ok(out)
     }
 
@@ -1037,11 +1032,7 @@ impl Conversation {
     /// Application messages return their plaintext. Commits are applied and
     /// return `None`: the caller must treat that as "the group changed" and
     /// re-read [`Conversation::member_count`].
-    pub fn receive(
-        &mut self,
-        receiver: &Member,
-        bytes: &[u8],
-    ) -> Result<Received, GroupError> {
+    pub fn receive(&mut self, receiver: &Member, bytes: &[u8]) -> Result<Received, GroupError> {
         let msg = MlsMessageIn::tls_deserialize(&mut &bytes[..]).map_err(codec)?;
         let protocol = msg.try_into_protocol_message().map_err(mls)?;
 
@@ -1141,7 +1132,11 @@ mod tests {
         assert_eq!(b.member_count(), 2);
 
         let ct = a.send(&alice, b"nadie mas puede leer esto").expect("send");
-        let pt = b.receive(&bob, &ct).expect("receive").message().expect("application");
+        let pt = b
+            .receive(&bob, &ct)
+            .expect("receive")
+            .message()
+            .expect("application");
         assert_eq!(pt, b"nadie mas puede leer esto");
     }
 
@@ -1189,7 +1184,10 @@ mod tests {
                     Err(_) => {}
                     Ok(other) => assert_ne!(
                         other,
-                        Received::Message { sender: None, bytes: plaintext.to_vec() },
+                        Received::Message {
+                            sender: None,
+                            bytes: plaintext.to_vec()
+                        },
                         "a message with byte {position} altered was accepted as the original"
                     ),
                 }
@@ -1372,7 +1370,8 @@ mod tests {
         let (alice, bob, mut a, mut b) = conversation_of_two();
 
         let before = a.send(&alice, b"sent before the reinstall").expect("send");
-        b.receive(&bob, &before).expect("the original device gets it");
+        b.receive(&bob, &before)
+            .expect("the original device gets it");
 
         // The same person, a fresh install: new key package, new join.
         let reinstalled = Member::new(b"bob-device-1").expect("bob again");
@@ -1497,13 +1496,15 @@ mod tests {
             .invite(&alice_phone, bob.key_package().expect("kp").key_package())
             .expect("invite bob");
         let _ = commit;
-        let mut bobs =
-            Conversation::join(&bob, &welcome, &phone.ratchet_tree().expect("tree"))
-                .expect("bob joins");
+        let mut bobs = Conversation::join(&bob, &welcome, &phone.ratchet_tree().expect("tree"))
+            .expect("bob joins");
 
         // Alice adds her laptop as its own leaf.
         let (commit, _welcome) = phone
-            .invite(&alice_phone, alice_laptop.key_package().expect("kp").key_package())
+            .invite(
+                &alice_phone,
+                alice_laptop.key_package().expect("kp").key_package(),
+            )
             .expect("add the laptop");
         let outcome = bobs.receive(&bob, &commit).expect("bob sees the add");
         let change = outcome.membership_change().expect("bob was not told");
@@ -1514,11 +1515,12 @@ mod tests {
 
         // Two leaves, one person, and Bob can tell.
         let roster = bobs.roster();
-        let alices: Vec<&Participant> = roster
-            .iter()
-            .filter(|p| p.identity == b"alice")
-            .collect();
-        assert_eq!(alices.len(), 2, "the two devices did not read as one person");
+        let alices: Vec<&Participant> = roster.iter().filter(|p| p.identity == b"alice").collect();
+        assert_eq!(
+            alices.len(),
+            2,
+            "the two devices did not read as one person"
+        );
         assert!(alices[0].same_person_as(alices[1]));
         assert_ne!(
             alices[0].signature_key, alices[1].signature_key,
@@ -1724,8 +1726,7 @@ mod tests {
 
         // Mallory holds a valid identity but was never added.
         assert!(
-            Conversation::join(&mallory, &welcome, &tree).is_err()
-                || b.receive(&bob, &ct).is_ok()
+            Conversation::join(&mallory, &welcome, &tree).is_err() || b.receive(&bob, &ct).is_ok()
         );
     }
 
@@ -1795,17 +1796,28 @@ mod tests {
         b.stage_pq_secret(&bob, &bob_secret).expect("stage");
 
         let commit = a.commit_pq_secret(&alice, &alice_secret).expect("commit");
-        assert!(b.receive(&bob, &commit).expect("process commit")
+        assert!(b
+            .receive(&bob, &commit)
+            .expect("process commit")
             .message()
             .is_none());
 
-        assert!(a.epoch() > epoch_before, "the PSK commit advances the epoch");
+        assert!(
+            a.epoch() > epoch_before,
+            "the PSK commit advances the epoch"
+        );
         assert_eq!(a.epoch(), b.epoch(), "both landed on the same epoch");
 
         // And the conversation still works, now with post-quantum material
         // mixed into the key schedule.
-        let msg = a.send(&alice, b"protegido post-cuanticamente").expect("send");
-        let got = b.receive(&bob, &msg).expect("receive").message().expect("application");
+        let msg = a
+            .send(&alice, b"protegido post-cuanticamente")
+            .expect("send");
+        let got = b
+            .receive(&bob, &msg)
+            .expect("receive")
+            .message()
+            .expect("application");
         assert_eq!(got, b"protegido post-cuanticamente");
     }
 

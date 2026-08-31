@@ -37,66 +37,14 @@ pub fn read_wav(path: &str) -> Vec<f32> {
     std::process::exit(1);
 }
 
-/// The furthest the played signal can plausibly sit inside the recording.
-///
-/// # Why the search is bounded, and what it cost not to be
-///
-/// It was not, and it found 3295 ms with a correlation of 0.29 on a recording
-/// that could not have been offset by more than a fraction of a second: the
-/// harness starts recording, waits 0.4 s, then plays. A search over the whole
-/// recording had twenty four seconds of speech to find a false peak in, and it
-/// found one. Everything downstream was then aligned to a delay that does not
-/// exist, and the canceller, fed a reference that has nothing to do with what
-/// the microphone heard, adapted to noise and **added** 7 dB of echo.
-///
-/// The real budget: 0.4 s of deliberate offset, plus whatever the sound card
-/// buffers on each side, plus the flight time across a room, which is under a
-/// hundredth of a second for any room somebody is in. Two seconds is generous
-/// for all of it and excludes a peak three seconds out.
-///
-/// A search that cannot find the answer says so. A search that finds the wrong
-/// answer confidently is worse, and that is what this was.
-pub const MAX_PLAUSIBLE_DELAY: usize = RATE as usize * 2;
-
-/// Where the played signal sits inside the recording, by correlation.
-///
-/// A real path has a delay nobody controls: the sound card buffers, the speaker
-/// is a distance away, the microphone buffers again, and the recording started
-/// at a moment nobody chose. Measuring it is the first thing any of this needs.
-///
-/// Bounded by [`MAX_PLAUSIBLE_DELAY`]. Returns the correlation alongside the
-/// delay so a caller can refuse a weak answer rather than align to it.
-pub fn best_delay(played: &[f32], heard: &[f32]) -> Option<(usize, f32)> {
-    let window = (RATE / 2).min(played.len()).min(heard.len());
-    if window < RATE / 10 {
-        return None;
-    }
-    let furthest = MAX_PLAUSIBLE_DELAY.min(heard.len().saturating_sub(window));
-
-    let played_energy: f32 = played[..window].iter().map(|s| s * s).sum();
-    if played_energy <= 1e-9 {
-        return None;
-    }
-
-    let mut best = (0usize, 0.0f32);
-    // Every 32 samples: the peak of a correlation this broad is not sharp, and
-    // a sample-exact answer is not needed by anything downstream.
-    let mut offset = 0;
-    while offset <= furthest {
-        let slice = &heard[offset..offset + window];
-        let energy: f32 = slice.iter().map(|s| s * s).sum();
-        if energy > 1e-9 {
-            let dot: f32 = played[..window].iter().zip(slice).map(|(a, b)| a * b).sum();
-            let normalised = dot / (played_energy.sqrt() * energy.sqrt());
-            if normalised > best.1 {
-                best = (offset, normalised);
-            }
-        }
-        offset += 32;
-    }
-
-    (best.1 > 0.0).then_some(best)
-}
+// The delay estimator that used to live here now lives in the crate, in
+// `rotelyx_audio::align`, with tests.
+//
+// It moved because it is an instrument and it had none. Two confident wrong
+// answers came out of it, an unbounded search that found a peak 3295 ms out on
+// a recording offset by 650, and a per-window estimate that reported -2024 ppm
+// of clock drift on one run and -4210 on the next. Neither was caught by
+// anything here, because there was nothing here to catch them.
 
 pub fn energy(x: &[f32]) -> f64 {
     x.iter().map(|s| (*s as f64) * (*s as f64)).sum::<f64>() / x.len().max(1) as f64

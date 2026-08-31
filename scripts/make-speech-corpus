@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# Build measurement clips from real recorded people, rather than from a
+# synthesiser.
+#
+#   scripts/make-speech-corpus <path to LibriSpeech> [speakers]
+#
+# # Why this exists beside scripts/make-speech
+#
+# `make-speech` builds six clips with a neural text to speech model, and says at
+# the top what they are not: nothing in them has been near a microphone or a
+# room. They are a model's idea of a voice, and every acoustic and codec number
+# in this repository has been measured against them.
+#
+# One model's idea of a voice is one voice. It has one way of placing a vowel,
+# one glottal behaviour, one prosody, and a pitch range narrower than a room full
+# of people. A codec tuned against that is tuned against a sample of one.
+#
+# These are eight readers from LibriSpeech dev-clean, four women and four men,
+# reading different passages. They were recorded by people with their own
+# microphones in their own rooms, which is also the point: a corpus that is
+# uniformly clean is another way of being a sample of one.
+#
+# # Licence
+#
+# LibriSpeech is CC BY 4.0. That permits commercial use and derivatives and
+# **carries an attribution obligation into anything that ships them**. These
+# clips are for measurement and are not in git, so nothing ships. A codebook
+# trained on them would ship, and `docs/PROVENANCE.md` explains why Common Voice
+# and its CC0 is the better answer for that.
+#
+# # Getting the corpus
+#
+#     curl -O https://www.openslr.org/resources/12/dev-clean.tar.gz
+#     tar xzf dev-clean.tar.gz
+#
+# 337 MB, no account, from OpenSLR.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+CORPUS="${1:-}"
+if [ -z "$CORPUS" ] || [ ! -d "$CORPUS/dev-clean" ]; then
+    sed -n '2,38p' "$0" | sed 's/^# \?//'
+    exit 2
+fi
+
+command -v gst-launch-1.0 >/dev/null || {
+    echo "needs gst-launch-1.0 (gstreamer1.0-tools) to decode FLAC" >&2; exit 1; }
+
+OUT="crates/rotelyx-codec/tests/speech-corpus"
+mkdir -p "$OUT"
+
+# Four women and four men, picked from dev-clean for range rather than at
+# random: a measurement wants the ends of the pitch distribution in it, not the
+# middle sampled eight times.
+SPEAKERS="${2:-84 1462 1673 1988 174 251 652 1272}"
+
+echo
+echo "  building clips from $CORPUS"
+
+for id in $SPEAKERS; do
+    sex=$(awk -F'|' -v want="$id" '
+        { gsub(/ /,"",$1); gsub(/ /,"",$2) }
+        $1 == want { print $2; exit }' "$CORPUS/SPEAKERS.TXT")
+    [ -n "$sex" ] || sex="?"
+
+    # Several utterances joined, because one is a few seconds and a measurement
+    # of a canceller needs enough for a filter to converge in.
+    files=$(find "$CORPUS/dev-clean/$id" -name '*.flac' | sort | head -8)
+    [ -n "$files" ] || { echo "  no audio for speaker $id"; continue; }
+
+    target="$OUT/${sex,,}${id}.wav"
+    tmp=$(mktemp -d)
+    n=0
+    for f in $files; do
+        gst-launch-1.0 -q filesrc location="$f" ! flacparse ! flacdec \
+            ! audioconvert ! audioresample \
+            ! "audio/x-raw,rate=48000,channels=1,format=S16LE" \
+            ! wavenc ! filesink location="$tmp/$(printf '%03d' $n).wav"
+        n=$((n + 1))
+    done
+
+    scripts/wav-join "$target" "$tmp"/*.wav >/dev/null
+    rm -rf "$tmp"
+
+    seconds=$(python3 -c "
+import wave,sys
+w=wave.open('$target'); print(f'{w.getnframes()/w.getframerate():.1f}')
+" 2>/dev/null || echo "?")
+    echo "  $(basename "$target")  $sex  ${seconds}s  from $n utterances"
+done
+
+echo
+echo "  These are people, under CC BY 4.0, and they are not in git."
+echo "  docs/PROVENANCE.md carries the licence reasoning."

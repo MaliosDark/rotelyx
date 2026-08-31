@@ -210,8 +210,18 @@ mod tests {
         const SLOW: u128 = 500;
 
         for (direct, relayed, expected, why) in [
-            (Some(FAST), Some(SLOW), Choice::Relayed, "a fast direct path on offer"),
-            (Some(FAST), None, Choice::KeepCurrent, "only a direct path on offer"),
+            (
+                Some(FAST),
+                Some(SLOW),
+                Choice::Relayed,
+                "a fast direct path on offer",
+            ),
+            (
+                Some(FAST),
+                None,
+                Choice::KeepCurrent,
+                "only a direct path on offer",
+            ),
             (None, Some(SLOW), Choice::Relayed, "only a relay"),
             (None, None, Choice::KeepCurrent, "nothing"),
         ] {
@@ -244,7 +254,10 @@ mod tests {
             PathPolicy::PreferDirect,
             PathPolicy::DirectOnceAvailable,
         ] {
-            assert!(policy.permits_direct(), "{policy:?} must allow a direct path");
+            assert!(
+                policy.permits_direct(),
+                "{policy:?} must allow a direct path"
+            );
         }
     }
 
@@ -252,11 +265,35 @@ mod tests {
     #[test]
     fn chaining_never_goes_direct() {
         for (direct, relayed, currently, expected, why) in [
-            (Some(FAST), Some(SLOW), false, Choice::Relayed, "a fast direct path is still refused"),
-            (Some(FAST), None, false, Choice::KeepCurrent, "no relay means no path, not a direct one"),
-            (None, Some(SLOW), false, Choice::Relayed, "a relay is the only thing it will take"),
+            (
+                Some(FAST),
+                Some(SLOW),
+                false,
+                Choice::Relayed,
+                "a fast direct path is still refused",
+            ),
+            (
+                Some(FAST),
+                None,
+                false,
+                Choice::KeepCurrent,
+                "no relay means no path, not a direct one",
+            ),
+            (
+                None,
+                Some(SLOW),
+                false,
+                Choice::Relayed,
+                "a relay is the only thing it will take",
+            ),
             (None, None, false, Choice::KeepCurrent, "nothing on offer"),
-            (Some(FAST), Some(SLOW), true, Choice::Relayed, "already direct is not a reason to stay"),
+            (
+                Some(FAST),
+                Some(SLOW),
+                true,
+                Choice::Relayed,
+                "already direct is not a reason to stay",
+            ),
         ] {
             assert_eq!(
                 decide(PathPolicy::Chained, direct, relayed, currently),
@@ -324,7 +361,12 @@ mod tests {
     #[test]
     fn direct_once_available_upgrades_to_direct_as_soon_as_one_appears() {
         assert_eq!(
-            decide(PathPolicy::DirectOnceAvailable, Some(SLOW), Some(FAST), false),
+            decide(
+                PathPolicy::DirectOnceAvailable,
+                Some(SLOW),
+                Some(FAST),
+                false
+            ),
             Choice::Direct
         );
     }

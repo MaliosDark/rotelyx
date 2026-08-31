@@ -200,13 +200,14 @@ async fn main() -> Result<()> {
     // library asks first. The HTTP client that reads another relay's circuit
     // key is built with no provider of its own and would fail without this.
     let _ = rustls::crypto::CryptoProvider::install_default(
-        rotelyx_relay_proto::tls::default_provider().as_ref().clone(),
+        rotelyx_relay_proto::tls::default_provider()
+            .as_ref()
+            .clone(),
     );
 
     if let Some(path) = cli.status.clone() {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .with_context(|| format!("creating {}", dir.display()))?;
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         tracing::info!(path = %path.display(), "recording availability");
         rotelyx_relay_proto::server::record_status_at(path);
@@ -246,7 +247,10 @@ async fn main() -> Result<()> {
         let ids = read_allowlist(path)?;
         if ids.is_empty() {
             // Falling open on an empty file is the failure nobody notices.
-            bail!("{} contains no endpoint ids; refusing to start", path.display());
+            bail!(
+                "{} contains no endpoint ids; refusing to start",
+                path.display()
+            );
         }
         tracing::info!(count = ids.len(), "serving an allowlist");
         let limited = limits::Limited::new(access::Allowlist::new(ids));
@@ -259,11 +263,9 @@ async fn main() -> Result<()> {
     // ciphertext, so this bounds what one connection can push through without
     // getting in the way of a call: 512 KiB/s is far above a voice stream and
     // far below a link somebody is using as free transit.
-    relay.limits.client_rx = Some(
-        rotelyx_relay_proto::server::ClientRateLimit::new(
-            std::num::NonZeroU32::new(512 * 1024).expect("non-zero"),
-        ),
-    );
+    relay.limits.client_rx = Some(rotelyx_relay_proto::server::ClientRateLimit::new(
+        std::num::NonZeroU32::new(512 * 1024).expect("non-zero"),
+    ));
 
     let identity = match cli.identity.as_ref() {
         Some(path) => Some(dial::load_or_create_identity(path)?),
@@ -355,7 +357,9 @@ async fn main() -> Result<()> {
         });
     }
 
-    tokio::signal::ctrl_c().await.context("waiting for ctrl-c")?;
+    tokio::signal::ctrl_c()
+        .await
+        .context("waiting for ctrl-c")?;
     if let Some(counters) = counters {
         let (rate, concurrent, total) = counters.refusals();
         tracing::info!(rate, concurrent, total, "admission refusals at shutdown");

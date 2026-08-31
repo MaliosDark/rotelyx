@@ -202,8 +202,8 @@ impl Filter {
 /// pole it places moves fast as `|k|` approaches the unit circle. Uniform steps
 /// in angle rather than in `k` put the resolution where it changes the sound.
 fn quantise(k: f64) -> i8 {
-    let scaled = (k.clamp(-0.999, 0.999).asin() / (std::f64::consts::PI / 2.0))
-        * (MAX_INDEX as f64 + 0.5);
+    let scaled =
+        (k.clamp(-0.999, 0.999).asin() / (std::f64::consts::PI / 2.0)) * (MAX_INDEX as f64 + 0.5);
     (scaled.round() as i32).clamp(-MAX_INDEX, MAX_INDEX) as i8
 }
 
@@ -391,7 +391,8 @@ mod tests {
         let mut working = original.clone();
         filter.apply(&mut working);
         assert_ne!(
-            working[START + 20], original[START + 20],
+            working[START + 20],
+            original[START + 20],
             "the filter did nothing, so the inverse proves nothing"
         );
 

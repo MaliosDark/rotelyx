@@ -17,8 +17,8 @@
 
 use std::time::Duration;
 
-use tokio::io::AsyncWriteExt as _;
 use rotelyx_net::{NetConfig, NetEndpoint, SecretKey};
+use tokio::io::AsyncWriteExt as _;
 
 const ALPN: &[u8] = b"rotelyx/test-connect/1";
 
@@ -63,7 +63,11 @@ async fn two_endpoints_exchange_bytes_over_quic() {
                     .expect("read");
             }
 
-            session.send_stream().write_all(b"pong!").await.expect("write");
+            session
+                .send_stream()
+                .write_all(b"pong!")
+                .await
+                .expect("write");
             // Without this the session drops, the stream resets, and "pong!"
             // is discarded even though write_all reported success.
             session.finish().await.expect("finish");
@@ -71,10 +75,7 @@ async fn two_endpoints_exchange_bytes_over_quic() {
             (peer, buf)
         });
 
-        let mut session = dialer
-            .connect(listener_addr, ALPN)
-            .await
-            .expect("connect");
+        let mut session = dialer.connect(listener_addr, ALPN).await.expect("connect");
 
         assert_eq!(
             session.peer(),
@@ -83,7 +84,11 @@ async fn two_endpoints_exchange_bytes_over_quic() {
         );
 
         {
-            session.send_stream().write_all(b"ping!").await.expect("write");
+            session
+                .send_stream()
+                .write_all(b"ping!")
+                .await
+                .expect("write");
             session.send_stream().flush().await.expect("flush");
         }
 
@@ -127,7 +132,11 @@ async fn a_live_direct_only_endpoint_never_acquires_a_relay() {
         let accept = tokio::spawn(async move {
             let mut session = listener.accept().await.expect("accept");
             let mut buf = [0u8; 2];
-            session.recv_stream().read_exact(&mut buf).await.expect("read");
+            session
+                .recv_stream()
+                .read_exact(&mut buf)
+                .await
+                .expect("read");
             assert!(
                 listener.active_relay_hosts().is_empty(),
                 "a relay appeared on a direct-only endpoint"

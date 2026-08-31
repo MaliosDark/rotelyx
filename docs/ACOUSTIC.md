@@ -244,6 +244,235 @@ The order of work is settled even though the cause is not. **Sharpen the delay
 estimate first.** Until a half-second window aligns to the same place twice,
 nothing measured through it separates drift from convergence.
 
+### A fifth attempt: the estimate is sharpened, and it was not the phase transform
+
+`rotelyx_audio::align` replaces the correlation that lived beside these
+examples. It moved into the crate because it is an instrument and it had no
+tests, which is how it produced two confident wrong answers without anything
+noticing.
+
+**The obvious fix was tried first and it is wrong.** Speech has almost no
+autocorrelation to find, so the textbook answer is GCC-PHAT: divide the cross
+spectrum by its own magnitude and correlate two whitened signals instead. Full
+whitening makes this **much worse**. Measured on 24.6 s of the synthesised clips
+through a simulated room, against a delay of 3,120 samples:
+
+| whitening | global estimate | error, samples |
+|---|---:|---:|
+| 0.00, plain correlation | 3,716 | 596 |
+| 0.50 | 3,323 | 203 |
+| **0.75** | **3,142** | **22** |
+| 1.00, full phase transform | 95,999 | 92,879 |
+
+Speech leaves most of a 24 kHz band empty, and dividing an empty bin by its own
+magnitude promotes the noise floor in it to a full vote. Three quarters removes
+enough of the room's colouring to find the direct arrival and leaves enough
+magnitude weighting that the empty bins stay quiet. The constant is set from
+that sweep and a test fails if it stops being the value the sweep prefers.
+
+**No confidence measure works, and that is the more useful finding.** Two were
+built and both were removed. Peak over the noise floor: under full whitening the
+worst window of a run, ninety three thousand samples from the truth, scored the
+**second highest of eight**. Peak over its nearest rival: at 0.75 the correct
+windows span 1.07 to 2.37 and the two wrong ones both score 1.04, which is three
+hundredths of separation from a wrong population of two. Two entirely unrelated
+recordings also produce a delay, a respectable margin, and no sign at all that
+they have nothing to do with each other.
+
+So `Alignment` carries no `is_confident`. It reports its numbers and says in its
+own documentation that none of them licenses believing the answer.
+
+**What closes the gap is structural.** One coarse delay from the whole
+recording, where there is far more evidence to take it from, and each window
+allowed only to refine it inside a narrow band. Per-window spread on that speech
+goes from **471 ms to 13 ms**, and the one window that still fails pins itself
+to the edge of its search, which is the single thing that is detectable: a
+maximum at a boundary means the correlation was still climbing when the search
+ran out of room.
+
+**And a bug found on the way.** The per-window realignment searched only forward
+from the coarse delay, so a path drifting the other way clamped at zero and
+reported no movement. That has the shape of an answer without being one, which
+is the failure mode this whole section is about. The search is now centred on
+the coarse delay rather than starting at it.
+
+**What the clips are, said before the numbers get quoted elsewhere.** They come
+from `scripts/make-speech`, which is a neural text to speech model, and that
+script says plainly that nothing in them has been near a microphone or a room.
+They are a model's idea of a voice. That is the right signal for this
+measurement, because what defeats a correlation is the spectral shape of speech
+and its stretches of near silence and a synthesiser produces both, and it is not
+grounds for claiming the numbers hold for people.
+
+**They are also not in the repository**, being 2.3 MB of regenerable binary, so
+every measurement that wants them skips itself on a clean clone. The whitening
+constant is therefore pinned by a test that does not run in CI. A corpus that
+could ship would turn it into a real gate, which is the same open question as
+the trained codebook.
+
+**The five decibels are still open.** Nothing above re-measures them: that needs
+the loudspeaker and the microphone, not a simulation. What it provides is an
+alignment that repeats, which is what the previous section said had to come
+first.
+
+### Measured against the room, with the new estimator
+
+The first run of the rebuilt estimator against the actual loudspeaker and
+microphone, which is also the run that found it was broken.
+
+**It refused, and said the microphone had heard nothing.** The recording was not
+silent: an RMS of 2894 out of 32768. The estimator took the whole reference it
+was handed instead of a window of it, so a 24.6 second reference against a 24.6
+second recording left no lags to search at all. Ten unit tests passed through
+that, because every one of them passes a short window, which is what a
+per-window measurement does. The call at the top of the harness passes the whole
+recording and happens only on hardware.
+
+The window is taken inside the estimator now. With that fixed, on the same
+machine and the same room:
+
+| | Before | Now |
+|---|---:|---:|
+| Delay found | 3,295 ms unbounded, then 650 bounded | **650 ms**, margin 1.32 |
+| Continuous cancellation | 1.3 dB | 0.7 dB |
+| Realigned windows | 6.1 dB | 7.9 dB over 39 windows |
+| Per-window spread | 471 ms | 100 ms, **and that number is worthless** |
+| Line fit | 0.10 | 0.02 |
+
+**The coarse delay is right, and the per-window estimate is no better than it
+was.** Those are two different claims and the first version of this section made
+only the first while implying the second.
+
+The coarse delay is a real result: 650, 612 and 642 ms across three runs against
+a recording whose offset is about 650, where the unbounded search used to return
+3,295 and the whole-reference version refused outright.
+
+**The 100 ms spread was the bound, not a measurement**, and one run said so:
+
+| Search bound | Spread that came back |
+|---|---:|
+| plus or minus 100 ms | 100 ms |
+| plus or minus 400 ms | **800 ms** |
+
+800 ms is the entire width of a search bounded at 400 either side. The per-window
+alignment fills whatever room it is given. So the improvement from 471 ms to 100
+was the range shrinking from two seconds to two hundred milliseconds, and
+nothing about the estimate got sharper. At 400 ms the slope reads +5,421 ppm
+against a true 341, with a fit of 0.09, which is the same nothing said louder.
+
+**That closes a line of attack rather than leaving it open.** The per-window
+path cannot answer what the seven decibels are, in this form, at any bound: too
+narrow and it reports the bound, too wide and it reports noise. Something other
+than realigning half-second windows of speech has to produce the alignment, and
+until it does, the gap between 0.7 dB continuous and 7.9 dB realigned stays
+unattributed.
+
+### Measured through the devices a call opens, the canceller makes echo worse
+
+`scripts/measure-echo` plays with `paplay` and records with `parecord`, two
+streams with clocks of their own. A call is not that: `Call::start` opens one
+`Capture` and one `Playback` through `cpal` and runs them together. The bottom of
+that script has carried the suspicion since it was written, that the difference
+between continuous and realigned might be the two clocks and not the canceller.
+
+`cargo run -p rotelyx-audio --example acoustic-duplex` measures the same room
+through those same devices. Six runs:
+
+| | Continuous | Realigned windows |
+|---|---|---|
+| Runs | -8.8, -2.6, -7.1, -3.7, -1.8, -7.0 | 7.5, 7.4, 7.9, 8.6, 8.2, 8.5 |
+| Mean | **-5.2 dB** | **+8.0 dB** |
+
+**Every continuous run is negative, and the suspicion was backwards.** Taking
+both sides from the audio path a call uses does not recover the lost decibels; it
+loses more of them. The two-clock harness averages -2.0 dB and the single-path
+one averages -5.2.
+
+**That looked like a finding and it was a property of the clips.** It is
+written out here rather than deleted, because the correction is the useful part.
+
+Every acoustic number in this document, and this one, was measured against six
+clips from one text to speech model. Eight recorded people, truncated to the same
+24.6 seconds so that only the voice differs:
+
+| Voice | Continuous | Realigned |
+|---|---:|---:|
+| f1462 | +1.1 | 8.7 |
+| f1673 | +0.1 | 6.4 |
+| f1988 | -4.6 | 2.4 |
+| f84 | -6.0 | 7.0 |
+| m1272 | +2.8 | 7.0 |
+| m174 | +2.2 | 7.7 |
+| m251 | -3.2 | 7.9 |
+| m652 | +0.2 | 4.8 |
+| **Mean** | **-0.9** | **6.5** |
+
+Against the synthesised set at the same length: **-5.2 dB, six runs, all
+negative**. Against people: -0.9, four positive and four negative.
+
+**Three things follow, and the third is the one that matters.**
+
+The canceller does not add five decibels of echo. It is roughly break-even
+continuous on real speech and the synthesised clips sit at the pessimistic end of
+the distribution by about four decibels.
+
+The duration was a confound and was tested: these clips are 49 to 102 seconds
+long and were cut to 24.6 before this table, so the difference is the speaker and
+not the time the filter had to converge.
+
+And **the spread between speakers is 8.8 dB**, which is larger than any effect
+this document has ever argued about. A single figure for what the canceller
+removes was never a meaningful quantity. Three attempts went into explaining a
+five decibel gap between two numbers, and the honest reading is that both numbers
+were samples from a distribution nobody had looked at.
+
+**What this does not say.** One machine, one room, one loudspeaker, one
+microphone, and that pair is 341 ppm apart. It does not say the canceller is
+right either: `f84` loses six decibels and `f1988` loses nearly five, and
+whatever is happening to those two voices is real and unexplained.
+
+**What it makes the next question.** Not "where did five decibels go". It is
+what separates `m1272` at +2.8 from `f84` at -6.0, measured on the same hardware
+in the same minute.
+
+### Seven runs, and the number this document was built on does not repeat
+
+Nobody had asked whether the two numbers being compared are reproducible. Three
+attempts went into explaining the difference between them first.
+
+Seven runs, one machine, one room, one afternoon:
+
+| | Continuous | Realigned windows |
+|---|---|---|
+| Runs | +0.7, -4.6, -1.8, -1.0, -2.8, -2.3, -1.9 | 7.9, 7.7, 7.3, 6.5, 6.7, 5.9, 7.2 |
+| Mean | **-2.0 dB** | **+7.0 dB** |
+| Range | 5.3 dB | 2.0 dB |
+
+**The realigned figure repeats and the continuous one does not.** Worse than
+that: six of seven continuous runs are **negative**, meaning the canceller adds
+echo. This document records +1.3 dB for that case and today it was not
+reproduced once.
+
+**Continuous is the production configuration.** A call runs the canceller
+straight through; nothing in a call realigns half-second windows, which is a
+thing this harness does and a client cannot. So the number that describes what a
+user gets is the unstable, mostly negative one, and the comfortable number is
+the artificial one.
+
+**What this does not establish.** This harness plays through `paplay` and
+records through `parecord`, which are two streams with independent clocks, and
+production takes both sides from one audio path. That has been written at the
+bottom of `scripts/measure-echo` since it was first written, as a suspicion.
+It is now the next measurement rather than a note, because there is a reason to
+make it: if a shared clock turns -2.0 dB into something positive, the canceller
+is fine and this harness was the problem. If it does not, a call on this hardware
+is worse with the canceller than without it.
+
+**And the framing this replaces.** "Five decibels between continuous and
+realigned" compared a stable measurement against an unstable one and took a
+single favourable run as the baseline. The distance is about nine on today's
+means, and arguing about its size was never the useful question.
+
 ### The search had no bound, and that was worth more than the gap
 
 The estimate searched the whole recording for its peak. On a twenty-four second

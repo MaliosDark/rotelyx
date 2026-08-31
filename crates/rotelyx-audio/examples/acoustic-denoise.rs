@@ -29,7 +29,8 @@ use rotelyx_audio::denoise::Denoiser;
 
 #[path = "common/mod.rs"]
 mod common;
-use common::{best_delay, db, energy, read_wav, RATE};
+use common::{db, energy, read_wav, RATE};
+use rotelyx_audio::align::{align, MAX_PLAUSIBLE_DELAY};
 
 const BLOCK: usize = 960;
 
@@ -65,14 +66,15 @@ fn main() {
     }
 
     // --- the room ---
-    let Some((delay, correlation)) = best_delay(&played, &heard) else {
+    let Some(found) = align(&played, &heard, MAX_PLAUSIBLE_DELAY) else {
         println!("  the microphone did not hear the speaker at all.");
         std::process::exit(1);
     };
+    let delay = found.delay;
     println!(
-        "  the speaker reaches the microphone {:.0} ms later, correlation {:.2}",
+        "  the speaker reaches the microphone {:.0} ms later, margin {:.2}",
         delay as f32 * 1000.0 / RATE as f32,
-        correlation
+        found.margin
     );
 
     // What a gap in a room actually contains.

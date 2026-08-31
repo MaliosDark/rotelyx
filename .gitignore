@@ -91,3 +91,13 @@ fuzz/target/
 # Python leaves these beside any module it imports, and the version in the name
 # changes with the interpreter, so name the directory rather than the file.
 __pycache__/
+
+# Measurements from scripts/measure-punching. One machine, one pair of networks,
+# not a fact about the software.
+punching-*.tsv
+
+# Clips built from LibriSpeech by scripts/make-speech-corpus. Real people under
+# CC BY 4.0, hundreds of megabytes, and regenerable from the corpus.
+crates/rotelyx-codec/tests/speech-corpus/
+
+crates/rotelyx-codec/tests/speech-corpus-short/

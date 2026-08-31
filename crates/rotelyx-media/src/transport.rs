@@ -383,7 +383,10 @@ mod tests {
                 ),
                 "{policy:?} was accepted for a call"
             );
-            assert!(MediaIn::new(policy, keys(0)).is_err(), "{policy:?} on the way in");
+            assert!(
+                MediaIn::new(policy, keys(0)).is_err(),
+                "{policy:?} on the way in"
+            );
         }
 
         assert!(MediaOut::new(PathPolicy::RelayOnly, keys(0)).is_ok());
@@ -560,13 +563,10 @@ mod tests {
             }
 
             // Play out whatever is ready.
-            loop {
-                match incoming.play() {
-                    Playout::Frame(audio) => heard.push(audio),
-                    // Waiting and Starved both mean "not yet", which in this
-                    // mode is a promise rather than a failure.
-                    _ => break,
-                }
+            // Waiting and Starved both mean "not yet", which in this mode is
+            // a promise rather than a failure, so the loop ends on either.
+            while let Playout::Frame(audio) = incoming.play() {
+                heard.push(audio);
             }
         }
 
@@ -633,7 +633,10 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(gaps > 10, "the loss should be audible here, and it is what it is");
+        assert!(
+            gaps > 10,
+            "the loss should be audible here, and it is what it is"
+        );
     }
 
     /// Where "nothing is cut off" stops being true.
@@ -682,7 +685,9 @@ mod tests {
                     incoming.accept(&datagram, arrival);
                 }
 
-                for counter in incoming.to_recover_between(out.oldest_recoverable(), out.frames_sent() - 1) {
+                for counter in
+                    incoming.to_recover_between(out.oldest_recoverable(), out.frames_sent() - 1)
+                {
                     if lost(()) {
                         continue;
                     }
@@ -721,7 +726,9 @@ mod tests {
                 .iter()
                 .map(|a| String::from_utf8_lossy(a).parse().unwrap_or(u64::MAX))
                 .collect();
-            let missing: Vec<u64> = (0..spoken.len() as u64).filter(|n| !got.contains(n)).collect();
+            let missing: Vec<u64> = (0..spoken.len() as u64)
+                .filter(|n| !got.contains(n))
+                .collect();
 
             println!(
                 "  {percent:>3}%   {:>4}/{:<4}      {:>6}        {:>5} ms   missing: {:?}",
@@ -741,7 +748,10 @@ mod tests {
                 &missing[..missing.len().min(15)]
             );
         }
-        println!("\n  History is {HISTORY} frames, which at 20 ms each is {} ms of", HISTORY * 20);
+        println!(
+            "\n  History is {HISTORY} frames, which at 20 ms each is {} ms of",
+            HISTORY * 20
+        );
         println!("  room for retransmission. That, not the loss rate, is the limit.");
     }
 
@@ -753,9 +763,7 @@ mod tests {
     /// falls over.
     #[test]
     fn the_loss_it_survives_is_measured() {
-        for (drop_one_in, expect_perfect) in
-            [(10u64, true), (5, true), (3, true), (2, true)]
-        {
+        for (drop_one_in, expect_perfect) in [(10u64, true), (5, true), (3, true), (2, true)] {
             let mut out =
                 MediaOut::with_mode(PathPolicy::RelayOnly, keys(1), Mode::Fidelity).expect("out");
             let mut incoming =

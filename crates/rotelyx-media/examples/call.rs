@@ -22,8 +22,8 @@
 use rotelyx_codec::mdct::{FRAME, WINDOW};
 use rotelyx_codec::{TelyxDecoder, TelyxEncoder};
 use rotelyx_media::transport::{MediaIn, MediaOut};
-use rotelyx_media::{Mode, Playout};
 use rotelyx_media::SenderKeys;
+use rotelyx_media::{Mode, Playout};
 use rotelyx_path::PathPolicy;
 use std::collections::VecDeque;
 
@@ -31,7 +31,6 @@ use std::collections::VecDeque;
 fn test_call() -> rotelyx_media::CallBinding {
     rotelyx_media::CallBinding::new(b"a-test-call-0001").expect("long enough")
 }
-
 
 const BYTES_PER_FRAME: usize = 60; // 24 kbit/s
 const FRAME_MS: u64 = 20;
@@ -157,7 +156,11 @@ fn main() {
     }
     let loss: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
     let fidelity = args.get(4).map(|s| s == "fidelity").unwrap_or(false);
-    let mode = if fidelity { Mode::Fidelity } else { Mode::Conversational };
+    let mode = if fidelity {
+        Mode::Fidelity
+    } else {
+        Mode::Conversational
+    };
 
     let audio = match read_wav(&args[1]) {
         Ok(a) => a,
@@ -222,7 +225,9 @@ fn main() {
         // because a frame recovered after its slot has played is a frame that
         // delays everything behind it for nothing.
         if fidelity {
-            for counter in inbound.to_recover_between(out.oldest_recoverable(), sent.saturating_sub(1)) {
+            for counter in
+                inbound.to_recover_between(out.oldest_recoverable(), sent.saturating_sub(1))
+            {
                 if let Some(again) = out.resend(counter) {
                     wire.send(now_ms, again);
                 }
@@ -257,7 +262,11 @@ fn main() {
     println!("  {} -> {}", args[1], args[2]);
     println!(
         "  {loss}% loss, 30 ms each way plus up to 25 ms of jitter, {} mode",
-        if fidelity { "fidelity" } else { "conversational" }
+        if fidelity {
+            "fidelity"
+        } else {
+            "conversational"
+        }
     );
     println!();
     println!("  frames sent        {sent}");

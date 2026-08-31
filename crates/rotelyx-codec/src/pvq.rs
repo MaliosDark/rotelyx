@@ -74,9 +74,8 @@ fn build_table() -> Vec<Vec<u64>> {
     for row in v.iter_mut() {
         row[0] = 1; // one vector has norm zero: all zeroes
     }
-    for k in 1..=MAX_K {
-        v[0][k] = 0; // no positions, no pulses
-    }
+    // No positions, no pulses.
+    v[0][1..=MAX_K].fill(0);
 
     for n in 1..=MAX_N {
         for k in 1..=MAX_K {
@@ -239,7 +238,7 @@ pub fn deindex(n: usize, k: usize, mut i: u64) -> Vec<i32> {
     let mut y = vec![0i32; n];
     let mut k = k;
 
-    for position in 0..n {
+    for (position, slot) in y.iter_mut().enumerate() {
         let remaining = n - position - 1;
 
         let mut magnitude = 0usize;
@@ -249,11 +248,11 @@ pub fn deindex(n: usize, k: usize, mut i: u64) -> Vec<i32> {
 
             if i < block {
                 if magnitude == 0 {
-                    y[position] = 0;
+                    *slot = 0;
                 } else if i < ways {
-                    y[position] = -(magnitude as i32);
+                    *slot = -(magnitude as i32);
                 } else {
-                    y[position] = magnitude as i32;
+                    *slot = magnitude as i32;
                     // The positive half sits after the negative one, and
                     // `index` adds that offset. Failing to take it back here
                     // leaves the index misaligned for every position after
@@ -273,7 +272,7 @@ pub fn deindex(n: usize, k: usize, mut i: u64) -> Vec<i32> {
             }
         }
 
-        k -= y[position].unsigned_abs() as usize;
+        k -= slot.unsigned_abs() as usize;
     }
     y
 }
@@ -389,7 +388,9 @@ mod tests {
             vec![0.5, -0.5, 0.5, -0.5],
             vec![3.0, 0.1, -0.2, 0.05, 0.0, 0.0, 0.0, 1.5],
             vec![0.0; 16],
-            (0..32).map(|i| ((i * 37 % 19) as f32 - 9.0) / 9.0).collect(),
+            (0..32)
+                .map(|i| ((i * 37 % 19) as f32 - 9.0) / 9.0)
+                .collect(),
         ];
 
         for target in &targets {
@@ -403,7 +404,10 @@ mod tests {
                     "search for {k} pulses in {} dimensions produced norm {norm}",
                     target.len()
                 );
-                assert!(index(&y) < count(target.len(), k), "the index is outside its codebook");
+                assert!(
+                    index(&y) < count(target.len(), k),
+                    "the index is outside its codebook"
+                );
             }
         }
     }

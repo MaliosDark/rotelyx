@@ -210,7 +210,8 @@ mod tests {
     fn keys(id: u8) -> (Sender, Receiver) {
         let base = [7u8; 32];
         let sender = Sender::new(SenderKeys::derive(&base, id, &test_call())).expect("sender");
-        let receiver = Receiver::new(SenderKeys::derive(&base, id, &test_call())).expect("receiver");
+        let receiver =
+            Receiver::new(SenderKeys::derive(&base, id, &test_call())).expect("receiver");
         (sender, receiver)
     }
 

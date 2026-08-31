@@ -50,10 +50,7 @@ fn hour() -> u64 {
 }
 
 /// Connects to a relay as an ordinary client.
-async fn connect_to(
-    url: &str,
-    key: SecretKey,
-) -> rotelyx_relay_proto::client::Client {
+async fn connect_to(url: &str, key: SecretKey) -> rotelyx_relay_proto::client::Client {
     let tls = rotelyx_relay_proto::tls::CaTlsConfig::default()
         .client_config(rotelyx_relay_proto::tls::default_provider())
         .expect("a tls config");
@@ -156,7 +153,10 @@ async fn a_circuit_opens_through_two_relays() {
 
     match answer {
         Some(Ok(RelayToClientMsg::CircuitOpened { circuit })) => {
-            assert_eq!(circuit, 1, "the relay answered about a circuit nobody asked for");
+            assert_eq!(
+                circuit, 1,
+                "the relay answered about a circuit nobody asked for"
+            );
         }
         Some(Ok(RelayToClientMsg::CircuitClosed { reason, .. })) => {
             panic!("the chain was refused, reason {reason}");
@@ -192,7 +192,11 @@ async fn a_circuit_opens_through_two_relays() {
             remote_endpoint_id,
             datagrams,
         })) => {
-            assert_eq!(datagrams.contents, &data[..], "the payload changed on the way");
+            assert_eq!(
+                datagrams.contents,
+                &data[..],
+                "the payload changed on the way"
+            );
             // The whole point of the return key. The destination must see the
             // name the caller sealed in, not the relay the traffic came from
             // and not the caller's own connection to its first relay.
@@ -230,7 +234,11 @@ async fn a_circuit_opens_through_two_relays() {
     match came_back {
         Some(Ok(RelayToClientMsg::CircuitDatagrams { circuit, datagrams })) => {
             assert_eq!(circuit, 1, "the reply came back on the wrong circuit");
-            assert_eq!(datagrams.contents, &reply[..], "the reply changed on the way");
+            assert_eq!(
+                datagrams.contents,
+                &reply[..],
+                "the reply changed on the way"
+            );
         }
         other => panic!("expected the reply on the circuit, got {other:?}"),
     }

@@ -170,6 +170,13 @@ pub async fn resume(
         .await
         .with_context(|| format!("the mailbox at {mailbox_url} did not answer"))?;
 
+    // Held, not presented. The mailbox is told about a token only if the free
+    // tier refuses something; see `Mailbox::hold_token` for why waiting is the
+    // safe default.
+    if let Some(token) = chats::load_token(identity, &key)? {
+        mailbox.hold_token(token.as_str());
+    }
+
     // The commit first, before anything is listened for. Sending anything else
     // before it is refused by the core, and the other side cannot read a word
     // of this copy until they have applied it.
@@ -229,6 +236,16 @@ pub async fn resume(
 ///
 /// Returns when the command channel closes, which is the window asking for the
 /// session to stop.
+///
+/// # Why the argument list is allowed to be this long
+///
+/// Ten, and each one is something a caller decides separately: which code,
+/// which name, which mailbox, which side of the handshake, whether receipts go
+/// out, which identity calls bind to, which relay carries them. A config struct
+/// would move the same ten decisions one level out and add a type nobody else
+/// uses, and the terminal, the desktop and the tests each set a different
+/// subset of them.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     code: &str,
     display_name: &str,
@@ -245,8 +262,8 @@ pub async fn run(
     events: Arc<dyn Fn(Event) + Send + Sync>,
     rx: &mut mpsc::UnboundedReceiver<Command>,
 ) -> Result<()> {
-    let code = rotelyx_wasm::read_meeting_code(code)
-        .map_err(|e| anyhow::anyhow!("{}", error_text(&e)))?;
+    let code =
+        rotelyx_wasm::read_meeting_code(code).map_err(|e| anyhow::anyhow!("{}", error_text(&e)))?;
 
     // Derived from the canonical form and never from what was displayed, so the
     // grouping used to read a code aloud cannot move the meeting place.
@@ -267,9 +284,18 @@ pub async fn run(
         .await
         .with_context(|| format!("the mailbox at {mailbox_url} did not answer"))?;
 
+    // As above: held rather than presented. A conversation that is not written
+    // down has no identity directory to have kept a token in, which is correct:
+    // the token belongs to the identity and not to this meeting.
+    if let Some((identity, key)) = keeping.as_ref() {
+        if let Some(token) = chats::load_token(identity, key)? {
+            mailbox.hold_token(token.as_str());
+        }
+    }
+
     // Whatever was already waiting comes back from `subscribe` rather than
     // arriving afterwards, so it is handled here or not at all.
-    let waiting = mailbox.subscribe(&[tag.clone()]).await?;
+    let waiting = mailbox.subscribe(std::slice::from_ref(&tag)).await?;
 
     events(Event::Status {
         text: match role {
@@ -315,7 +341,6 @@ pub async fn run(
     for envelope in waiting {
         meeting.incoming(&mut mailbox, &envelope).await?;
     }
-
 
     turn(&mut meeting, &mut mailbox, rx).await
 }
@@ -456,10 +481,9 @@ impl Meeting {
             // The host answers a knock, and keeps answering for the life of the
             // conversation so somebody can arrive after it is established.
             Some("hello") if self.role == Role::Host => {
-                let (Some(key_package), Some(hybrid)) = (
-                    msg["keyPackage"].as_str(),
-                    msg["hybridPublicKey"].as_str(),
-                ) else {
+                let (Some(key_package), Some(hybrid)) =
+                    (msg["keyPackage"].as_str(), msg["hybridPublicKey"].as_str())
+                else {
                     return Ok(());
                 };
                 // A hello this side has already answered.
@@ -480,10 +504,7 @@ impl Meeting {
                     return Ok(());
                 }
                 self.admitted.push(key_package.to_string());
-                tracing::info!(
-                    admitted = self.admitted.len(),
-                    "admitting a guest"
-                );
+                tracing::info!(admitted = self.admitted.len(), "admitting a guest");
                 println!(
                     "  hello: new key package, admitting (that makes {})",
                     self.admitted.len()
@@ -577,8 +598,11 @@ impl Meeting {
             .await?;
 
             let commit = self.session.commit_pq().map_err(to_anyhow)?;
-            self.deposit_rendezvous(mailbox, &serde_json::json!({"t": "commit", "commit": commit}))
-                .await?;
+            self.deposit_rendezvous(
+                mailbox,
+                &serde_json::json!({"t": "commit", "commit": commit}),
+            )
+            .await?;
 
             // And again, addressed to where the guest actually is.
             //
@@ -667,7 +691,7 @@ impl Meeting {
         // dropped in silence, with the post-quantum secret never mixed in and
         // the only symptom a safety number that disagrees.
         if self.role == Role::Guest {
-            mailbox.unsubscribe(&[self.tag.clone()]).await?;
+            mailbox.unsubscribe(std::slice::from_ref(&self.tag)).await?;
         }
 
         self.joined = true;
@@ -1293,17 +1317,17 @@ impl Meeting {
         if !is_control(body) {
             self.remember(body, true);
         }
-                let bucket = bucket()?;
+        let bucket = bucket()?;
 
-                // Said out loud, because a message that goes nowhere looks
-                // exactly like a message that was never sent. These are the
-                // tags the other members should be listening on, and asking the
-                // mailbox for one of them afterwards says which of those two
-                // happened. See `is_anything_waiting`.
-                if let Ok(tags) = self.session.recipient_tags(bucket) {
-                    tracing::info!(bucket, ?tags, "depositing a message");
-                    println!("  deposited to {tags:?} at bucket {bucket}");
-                }
+        // Said out loud, because a message that goes nowhere looks
+        // exactly like a message that was never sent. These are the
+        // tags the other members should be listening on, and asking the
+        // mailbox for one of them afterwards says which of those two
+        // happened. See `is_anything_waiting`.
+        if let Ok(tags) = self.session.recipient_tags(bucket) {
+            tracing::info!(bucket, ?tags, "depositing a message");
+            println!("  deposited to {tags:?} at bucket {bucket}");
+        }
 
         let mut envelopes = self
             .session
@@ -1498,7 +1522,9 @@ mod tests {
             "/../../target/debug/rotelyx-mailbox-server"
         );
         if !std::path::Path::new(binary).exists() {
-            println!("\n  no mailbox server built, skipping: cargo build -p rotelyx-mailbox-server");
+            println!(
+                "\n  no mailbox server built, skipping: cargo build -p rotelyx-mailbox-server"
+            );
             return None;
         }
 
@@ -1519,8 +1545,11 @@ mod tests {
         None
     }
 
+    /// Where a test reads back what the window was told.
+    type Seen = Arc<std::sync::Mutex<Vec<Event>>>;
+
     /// Collect what one side told the window, so a test can assert on it.
-    fn recorder() -> (Arc<dyn Fn(Event) + Send + Sync>, Arc<std::sync::Mutex<Vec<Event>>>) {
+    fn recorder() -> (Arc<dyn Fn(Event) + Send + Sync>, Seen) {
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = seen.clone();
         (
@@ -1646,7 +1675,8 @@ mod tests {
         let joined = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 let host_in = !safety_numbers(&host_seen.lock().expect("not poisoned")).is_empty();
-                let guest_in = !safety_numbers(&guest_seen.lock().expect("not poisoned")).is_empty();
+                let guest_in =
+                    !safety_numbers(&guest_seen.lock().expect("not poisoned")).is_empty();
                 if host_in && guest_in {
                     return;
                 }
@@ -1724,7 +1754,10 @@ mod tests {
         let tag = std::env::var("ROTELYX_TAG").expect("set ROTELYX_TAG");
 
         let mut probe = Mailbox::connect(&mailbox).await.expect("connect");
-        let waiting = probe.subscribe(&[tag.clone()]).await.expect("subscribe");
+        let waiting = probe
+            .subscribe(std::slice::from_ref(&tag))
+            .await
+            .expect("subscribe");
 
         println!("\n  tag {tag}");
         println!("  waiting: {}", waiting.len());
@@ -1767,15 +1800,35 @@ mod tests {
         let (ca, cb) = (code.clone(), code.clone());
 
         let host = tokio::spawn(async move {
-            run(&ca, "one", &a, Role::Host, false, Identity::generate(), Some(ra), None,
-                host_events, &mut host_rx)
-                .await
+            run(
+                &ca,
+                "one",
+                &a,
+                Role::Host,
+                false,
+                Identity::generate(),
+                Some(ra),
+                None,
+                host_events,
+                &mut host_rx,
+            )
+            .await
         });
         tokio::time::sleep(Duration::from_millis(600)).await;
         let guest = tokio::spawn(async move {
-            run(&cb, "two", &b, Role::Guest, false, Identity::generate(), Some(rb), None,
-                guest_events, &mut guest_rx)
-                .await
+            run(
+                &cb,
+                "two",
+                &b,
+                Role::Guest,
+                false,
+                Identity::generate(),
+                Some(rb),
+                None,
+                guest_events,
+                &mut guest_rx,
+            )
+            .await
         });
 
         let met = tokio::time::timeout(Duration::from_secs(30), async {
@@ -1791,7 +1844,9 @@ mod tests {
         .await;
         assert!(met.is_ok(), "the two sides never met");
 
-        host_tx.send(Command::StartCall).expect("the host is running");
+        host_tx
+            .send(Command::StartCall)
+            .expect("the host is running");
 
         let talking = tokio::time::timeout(Duration::from_secs(40), async {
             loop {
@@ -1823,7 +1878,9 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(12)).await;
 
         host_tx.send(Command::EndCall).expect("the host is running");
-        guest_tx.send(Command::EndCall).expect("the guest is running");
+        guest_tx
+            .send(Command::EndCall)
+            .expect("the guest is running");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         for (who, seen) in [("one", &host_seen), ("two", &guest_seen)] {
@@ -1834,11 +1891,11 @@ mod tests {
                 .rev()
                 .find_map(|e| match e {
                     Event::CallEnded {
-                    sent,
-                    received,
-                    concealed,
-                    ..
-                } => Some((*sent, *received, *concealed)),
+                        sent,
+                        received,
+                        concealed,
+                        ..
+                    } => Some((*sent, *received, *concealed)),
                     _ => None,
                 });
             match ended {
@@ -1855,10 +1912,7 @@ mod tests {
                     // Twelve seconds at fifty frames a second is six hundred.
                     // A quarter of that is loose enough for a loaded machine and
                     // far above the two frames the broken version delivered.
-                    assert!(
-                        sent > 100,
-                        "{who} sent almost nothing: {sent}"
-                    );
+                    assert!(sent > 100, "{who} sent almost nothing: {sent}");
                     assert!(
                         received > 150,
                         "{who} received almost nothing: {received} of {sent} sent the other way"
@@ -1901,7 +1955,10 @@ mod tests {
                 rotelyx_wasm::read_meeting_code(&shown).expect("that is not a meeting code"),
                 Role::Guest,
             ),
-            Err(_) => (rotelyx_wasm::new_meeting_code().expect("entropy"), Role::Host),
+            Err(_) => (
+                rotelyx_wasm::new_meeting_code().expect("entropy"),
+                Role::Host,
+            ),
         };
         println!("\n  role: {role:?}");
         tracing_subscriber::fmt()
@@ -1928,9 +1985,19 @@ mod tests {
             // With the identity and relay a call needs, because watching one
             // cross is what this harness is for.
             async move {
-                run(&code, "desktop", &mailbox, role, true, Identity::generate(),
-                    std::env::var("ROTELYX_RELAY").ok(), None, events, &mut rx)
-                    .await
+                run(
+                    &code,
+                    "desktop",
+                    &mailbox,
+                    role,
+                    true,
+                    Identity::generate(),
+                    std::env::var("ROTELYX_RELAY").ok(),
+                    None,
+                    events,
+                    &mut rx,
+                )
+                .await
             }
         });
 
@@ -2051,9 +2118,19 @@ mod tests {
         let host_code = code.clone();
         let host_keeping = Some((identity.clone(), key.clone()));
         let host = tokio::spawn(async move {
-            run(&host_code, "desktop", &host_url, Role::Host, false, Identity::generate(), None,
-                host_keeping, host_events, &mut host_rx)
-                .await
+            run(
+                &host_code,
+                "desktop",
+                &host_url,
+                Role::Host,
+                false,
+                Identity::generate(),
+                None,
+                host_keeping,
+                host_events,
+                &mut host_rx,
+            )
+            .await
         });
 
         tokio::time::sleep(Duration::from_millis(400)).await;
@@ -2061,9 +2138,19 @@ mod tests {
         let guest_url = server.url.clone();
         let guest_code = code.clone();
         let guest = tokio::spawn(async move {
-            run(&guest_code, "phone", &guest_url, Role::Guest, false, Identity::generate(), None,
-                None, guest_events, &mut guest_rx)
-                .await
+            run(
+                &guest_code,
+                "phone",
+                &guest_url,
+                Role::Guest,
+                false,
+                Identity::generate(),
+                None,
+                None,
+                guest_events,
+                &mut guest_rx,
+            )
+            .await
         });
 
         let met = tokio::time::timeout(Duration::from_secs(20), async {
@@ -2080,7 +2167,9 @@ mod tests {
         assert!(met.is_ok(), "the two sides never met");
 
         host_tx
-            .send(Command::Send { text: "before".into() })
+            .send(Command::Send {
+                text: "before".into(),
+            })
             .expect("the host is running");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -2101,9 +2190,16 @@ mod tests {
         let again_identity = identity.clone();
         let again_key = key.clone();
         let again = tokio::spawn(async move {
-            resume(&again_identity, again_key, &id, Identity::generate(), None, again_events,
-                &mut again_rx)
-                .await
+            resume(
+                &again_identity,
+                again_key,
+                &id,
+                Identity::generate(),
+                None,
+                again_events,
+                &mut again_rx,
+            )
+            .await
         });
 
         let back = tokio::time::timeout(Duration::from_secs(20), async {
@@ -2121,7 +2217,9 @@ mod tests {
         let heard = tokio::time::timeout(Duration::from_secs(25), async {
             loop {
                 again_tx
-                    .send(Command::Send { text: "after".into() })
+                    .send(Command::Send {
+                        text: "after".into(),
+                    })
                     .expect("the reopened session is running");
 
                 for _ in 0..20 {
@@ -2171,9 +2269,19 @@ mod tests {
         let host_url = server.url.clone();
         let host_code = code.clone();
         let host = tokio::spawn(async move {
-            run(&host_code, "desktop", &host_url, Role::Host, false, Identity::generate(), None,
-                None, host_events, &mut host_rx)
-                .await
+            run(
+                &host_code,
+                "desktop",
+                &host_url,
+                Role::Host,
+                false,
+                Identity::generate(),
+                None,
+                None,
+                host_events,
+                &mut host_rx,
+            )
+            .await
         });
 
         tokio::time::sleep(Duration::from_millis(400)).await;
@@ -2181,15 +2289,26 @@ mod tests {
         let guest_url = server.url.clone();
         let guest_code = code.clone();
         let guest = tokio::spawn(async move {
-            run(&guest_code, "phone", &guest_url, Role::Guest, false, Identity::generate(), None,
-                None, guest_events, &mut guest_rx)
-                .await
+            run(
+                &guest_code,
+                "phone",
+                &guest_url,
+                Role::Guest,
+                false,
+                Identity::generate(),
+                None,
+                None,
+                guest_events,
+                &mut guest_rx,
+            )
+            .await
         });
 
         let met = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 let host_in = !safety_numbers(&host_seen.lock().expect("not poisoned")).is_empty();
-                let guest_in = !safety_numbers(&guest_seen.lock().expect("not poisoned")).is_empty();
+                let guest_in =
+                    !safety_numbers(&guest_seen.lock().expect("not poisoned")).is_empty();
                 if host_in && guest_in {
                     return;
                 }
@@ -2200,7 +2319,9 @@ mod tests {
         assert!(met.is_ok(), "the two sides never met");
 
         // Who is here, and the key the guest is removed by.
-        host_tx.send(Command::WhoIsHere).expect("the host is running");
+        host_tx
+            .send(Command::WhoIsHere)
+            .expect("the host is running");
         let key = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let found = host_seen
@@ -2239,12 +2360,10 @@ mod tests {
 
         let gone = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
-                let alone = host_seen
-                    .lock()
-                    .expect("not poisoned")
-                    .iter()
-                    .rev()
-                    .any(|event| matches!(event, Event::Members { members } if members.len() == 1));
+                let alone =
+                    host_seen.lock().expect("not poisoned").iter().rev().any(
+                        |event| matches!(event, Event::Members { members } if members.len() == 1),
+                    );
                 if alone {
                     return;
                 }
@@ -2296,25 +2415,39 @@ mod tests {
 
         let url = server.url.clone();
         let guest = tokio::spawn(async move {
-            run(&code, "desktop", &url, Role::Guest, false, Identity::generate(), None, None, events,
-                &mut rx)
-                .await
+            run(
+                &code,
+                "desktop",
+                &url,
+                Role::Guest,
+                false,
+                Identity::generate(),
+                None,
+                None,
+                events,
+                &mut rx,
+            )
+            .await
         });
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let events = seen.lock().expect("not poisoned");
-        assert!(
-            safety_numbers(&events).is_empty(),
-            "met somebody at a place nobody was"
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, Event::Error { .. })),
-            "an empty meeting place was reported as a failure: {events:?}"
-        );
-        drop(events);
+        // Scoped rather than dropped by hand: the guard has to be gone before
+        // the await below, and a block says so in a way the reader and the
+        // lint both follow.
+        {
+            let events = seen.lock().expect("not poisoned");
+            assert!(
+                safety_numbers(&events).is_empty(),
+                "met somebody at a place nobody was"
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, Event::Error { .. })),
+                "an empty meeting place was reported as a failure: {events:?}"
+            );
+        }
 
         drop(tx);
         let _ = tokio::time::timeout(Duration::from_secs(5), guest).await;

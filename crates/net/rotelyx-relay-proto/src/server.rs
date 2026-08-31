@@ -78,8 +78,13 @@ pub use self::{
     resolver::{DEFAULT_CERT_RELOAD_INTERVAL, reloading_resolver},
 };
 
-const NO_CONTENT_CHALLENGE_HEADER: &str = "X-Rotelyx-Challenge";
-const NO_CONTENT_RESPONSE_HEADER: &str = "X-Rotelyx-Response";
+use crate::http::{CHALLENGE_HEADER, CHALLENGE_RESPONSE_HEADER};
+
+/// Kept as aliases so the rest of this file reads as it did. The definitions
+/// live in `crate::http` because the client that sends them is in another
+/// crate; see [`CHALLENGE_HEADER`].
+const NO_CONTENT_CHALLENGE_HEADER: &str = CHALLENGE_HEADER;
+const NO_CONTENT_RESPONSE_HEADER: &str = CHALLENGE_RESPONSE_HEADER;
 const NOTFOUND: &[u8] = b"Not Found";
 const ROBOTS_TXT: &[u8] = b"User-agent: *\nDisallow: /\n";
 // What anybody who visits the relay in a browser sees.
@@ -1341,7 +1346,7 @@ fn serve_no_content_handler<B: hyper::body::Body>(
     {
         response = response.header(
             NO_CONTENT_RESPONSE_HEADER,
-            format!("response {}", challenge.to_str()?),
+            crate::http::challenge_response(challenge.to_str()?),
         );
     }
 
@@ -1474,7 +1479,7 @@ impl hyper::service::Service<Request<Incoming>> for CaptivePortalService {
     fn call(&self, req: Request<Incoming>) -> Self::Future {
         match (req.method(), req.uri().path()) {
             // Captive Portal checker
-            (&Method::GET, "/generate_204") => {
+            (&Method::GET, crate::http::CAPTIVE_PORTAL_PATH) => {
                 Box::pin(async move { serve_no_content_handler(req, Response::builder()) })
             }
             _ => {
@@ -1624,7 +1629,11 @@ mod tests {
     #[traced_test]
     async fn test_captive_portal_service() {
         let server = spawn_local_relay().await.unwrap();
-        let url = format!("http://{}/generate_204", server.http_addr().unwrap());
+        let url = format!(
+            "http://{}{}",
+            server.http_addr().unwrap(),
+            crate::http::CAPTIVE_PORTAL_PATH
+        );
         let challenge = "123az__.";
 
         let client = reqwest::Client::builder()
@@ -1639,9 +1648,79 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let header = response.headers().get(NO_CONTENT_RESPONSE_HEADER).unwrap();
-        assert_eq!(header.to_str().unwrap(), format!("response {challenge}"));
+        assert_eq!(
+            header.to_str().unwrap(),
+            crate::http::challenge_response(challenge)
+        );
         let body = response.text().await.unwrap();
         assert!(body.is_empty());
+    }
+
+    /// The whole contract, in the shape the transport crate actually sends it.
+    ///
+    /// # What this is guarding against
+    ///
+    /// The two sides of this exchange live in two crates, and for a while they
+    /// disagreed. The relay was renamed to `X-Rotelyx-Challenge` and the client
+    /// went on sending `X-Iroh-Challenge`, so the relay answered 204 with no
+    /// response header and the client read that as a captive portal. Every
+    /// fresh endpoint concluded it was behind one, against Rotelyx's own
+    /// relays, and the check could not return any other answer.
+    ///
+    /// **Nothing failed.** A missing header is exactly what a portal
+    /// swallowing the exchange looks like, so the broken case and the working
+    /// case are indistinguishable from one side.
+    ///
+    /// The constants now live in `crate::http` and both sides import them, so
+    /// they cannot drift again. What is still worth pinning is that the
+    /// challenge a client generates survives this server's own filter: that
+    /// filter accepts a limited character set and under 64 bytes, and a client
+    /// that builds a challenge out of a hostname could produce neither.
+    #[tokio::test]
+    #[traced_test]
+    async fn a_generated_challenge_survives_the_filter() {
+        let server = spawn_local_relay().await.unwrap();
+        let url = format!(
+            "http://{}{}",
+            server.http_addr().unwrap(),
+            crate::http::CAPTIVE_PORTAL_PATH
+        );
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls(ring_config())
+            .build()
+            .unwrap();
+
+        for host in [
+            "relay.example.com",
+            "a",
+            "relay-two.example.co.uk",
+            "127.0.0.1",
+            // Longer than the filter's 64 byte ceiling before truncation, and
+            // carrying characters the filter refuses.
+            "a-very-long-hostname-that-goes-on.and.on.and.on.and.on.example.com",
+            "host:8443/../evil",
+        ] {
+            let challenge = crate::http::challenge_for(host);
+            let response = client
+                .get(&url)
+                .header(NO_CONTENT_CHALLENGE_HEADER, &challenge)
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            let header = response
+                .headers()
+                .get(NO_CONTENT_RESPONSE_HEADER)
+                .unwrap_or_else(|| {
+                    panic!("the relay refused the challenge generated for {host:?}: {challenge:?}")
+                });
+            assert_eq!(
+                header.to_str().unwrap(),
+                crate::http::challenge_response(&challenge),
+                "the answer for {host:?} is not what a client compares against"
+            );
+        }
     }
 
     #[tokio::test]

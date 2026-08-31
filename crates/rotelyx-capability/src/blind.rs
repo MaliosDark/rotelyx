@@ -47,8 +47,8 @@
 //! does. Blindness protects a token among its peers, never a lone purchaser.
 
 use blind_rsa_signatures::{
-    BlindSignature, BlindingResult, DefaultRng, MessageRandomizer, PublicKey, Randomized,
-    Sha384, Signature, PSS,
+    BlindSignature, BlindingResult, DefaultRng, MessageRandomizer, PublicKey, Randomized, Sha384,
+    Signature, PSS,
 };
 
 /// RSABSSA-SHA384-PSS-Randomized, the variant RFC 9474 recommends. Randomized
@@ -162,10 +162,7 @@ impl Redeemer {
 
         // The randomizer is not secret and is useless without the signature it
         // belongs to, so carrying it in the token costs nothing but 32 bytes.
-        let randomizer = self
-            .blinding
-            .msg_randomizer
-            .ok_or(BlindError::Malformed)?;
+        let randomizer = self.blinding.msg_randomizer.ok_or(BlindError::Malformed)?;
 
         let mut token = Vec::with_capacity(ID_BYTES + RANDOMIZER_BYTES + signature.len());
         token.extend_from_slice(&self.id);
@@ -217,7 +214,9 @@ impl BlindVerifier {
 
         let id: [u8; ID_BYTES] = id_bytes.try_into().map_err(|_| BlindError::Malformed)?;
         let randomizer = MessageRandomizer(
-            randomizer_bytes.try_into().map_err(|_| BlindError::Malformed)?,
+            randomizer_bytes
+                .try_into()
+                .map_err(|_| BlindError::Malformed)?,
         );
 
         for (tier, pk) in &self.keys {
@@ -329,7 +328,9 @@ mod tests {
     fn frozen_blind_tokens_verify_and_carry_their_tier() {
         let v = both();
 
-        let cap = v.verify(vectors::BLIND_PLUS_TOKEN).expect("plus token verifies");
+        let cap = v
+            .verify(vectors::BLIND_PLUS_TOKEN)
+            .expect("plus token verifies");
         assert_eq!(cap.tier, Tier::Plus);
         assert_eq!(cap.limits.max_fanout, Tier::Plus.limits().max_fanout);
 
@@ -401,7 +402,11 @@ mod tests {
         let bytes = redeemer.to_bytes();
         let restored = Redeemer::from_bytes(&bytes).expect("restore");
 
-        assert_eq!(restored.to_bytes(), bytes, "the round trip changed the state");
+        assert_eq!(
+            restored.to_bytes(),
+            bytes,
+            "the round trip changed the state"
+        );
         assert!(!blinded.is_empty());
     }
 

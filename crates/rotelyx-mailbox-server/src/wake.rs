@@ -362,7 +362,8 @@ impl Registry {
     pub fn revoke(&mut self, secret: &str) -> bool {
         let wanted = hash(secret);
         let before = self.devices.len();
-        self.devices.retain(|d| !secrets_match(&d.revoke_hash, &wanted));
+        self.devices
+            .retain(|d| !secrets_match(&d.revoke_hash, &wanted));
         before != self.devices.len()
     }
 
@@ -993,7 +994,11 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         let assertion = fcm.assertion(1_700_000_000).expect("signing");
 
         let parts: Vec<&str> = assertion.split('.').collect();
-        assert_eq!(parts.len(), 3, "an assertion is header, claims and signature");
+        assert_eq!(
+            parts.len(),
+            3,
+            "an assertion is header, claims and signature"
+        );
 
         let claims = BASE64URL_NOPAD
             .decode(parts[1].as_bytes())
@@ -1030,7 +1035,7 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
     /// and none of them are visible from the inside.
     #[tokio::test]
     async fn what_it_sends_is_what_google_asks_for() {
-        use axum::{Router, routing::post};
+        use axum::{routing::post, Router};
         use std::sync::{Arc, Mutex};
 
         #[derive(Default)]
@@ -1087,13 +1092,16 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
             .at(format!("http://{addr}"));
 
         let device = Device::registering("ab".repeat(32), "fcm".into(), "a-long-enough-secret");
-        fcm.wake(&device).await.expect("the push should be accepted");
+        fcm.wake(&device)
+            .await
+            .expect("the push should be accepted");
 
         let seen = seen.lock().expect("not poisoned");
 
         // The assertion was exchanged, with the grant type Google requires.
         assert!(
-            seen.token_body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth"),
+            seen.token_body
+                .contains("grant_type=urn%3Aietf%3Aparams%3Aoauth"),
             "the token request did not carry the grant type: {}",
             seen.token_body
         );
@@ -1135,10 +1143,10 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
     /// every device at once on every sweep.
     #[tokio::test]
     async fn the_access_token_is_fetched_once() {
-        use axum::{Router, routing::post};
+        use axum::{routing::post, Router};
         use std::sync::{
-            Arc,
             atomic::{AtomicUsize, Ordering},
+            Arc,
         };
 
         let mints = Arc::new(AtomicUsize::new(0));
@@ -1153,7 +1161,10 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
                     }
                 }),
             )
-            .route("/v1/projects/{project}/messages:send", post(|| async { "{}" }));
+            .route(
+                "/v1/projects/{project}/messages:send",
+                post(|| async { "{}" }),
+            );
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1185,8 +1196,11 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         let android = Device::registering("ab".repeat(32), "fcm".into(), "a-long-enough-secret");
         assert!(android.valid(), "an Android device was refused");
 
-        let nonsense =
-            Device::registering("ab".repeat(32), "carrier-pigeon".into(), "a-long-enough-secret");
+        let nonsense = Device::registering(
+            "ab".repeat(32),
+            "carrier-pigeon".into(),
+            "a-long-enough-secret",
+        );
         assert!(!nonsense.valid(), "a service nothing calls was accepted");
     }
 
@@ -1281,7 +1295,11 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         // phone. A token is an address, and an address is not a credential.
         let mut r = Registry::new();
         r.register(Device::registering("ab".repeat(32), "apns".into(), "mine"));
-        r.register(Device::registering("cd".repeat(32), "apns".into(), "theirs"));
+        r.register(Device::registering(
+            "cd".repeat(32),
+            "apns".into(),
+            "theirs",
+        ));
 
         assert!(!r.revoke(&"cd".repeat(32)), "the token must not revoke");
         assert!(!r.revoke("guessed"), "nor must a wrong secret");
@@ -1312,7 +1330,11 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         assert!(r.register(Device::registering(token.clone(), "apns".into(), "mine")));
         assert!(r.register(Device::registering(token, "apns".into(), "mine")));
 
-        assert_eq!(r.len(), 1, "the same phone registered twice became two wakes");
+        assert_eq!(
+            r.len(),
+            1,
+            "the same phone registered twice became two wakes"
+        );
         assert!(r.revoke("mine"));
     }
 
@@ -1333,7 +1355,11 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         // holding every push token are the push services themselves. It gets a
         // row of its own instead of an answer about somebody else's.
         assert!(
-            r.register(Device::registering(token.clone(), "apns".into(), "attacker")),
+            r.register(Device::registering(
+                token.clone(),
+                "apns".into(),
+                "attacker"
+            )),
             "a well formed registration must look the same whoever sent it"
         );
 
@@ -1352,7 +1378,10 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
             1,
             "revoking the attacker's row took the owner's with it"
         );
-        assert!(r.revoke("owner"), "the owner lost control of their own device");
+        assert!(
+            r.revoke("owner"),
+            "the owner lost control of their own device"
+        );
         assert_eq!(r.len(), 0);
     }
 
@@ -1510,16 +1539,51 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         assert_eq!(restored.len(), 1);
     }
 
+    /// The registry stops growing at [`MAX_DEVICES`].
+    ///
+    /// # What this test used to be
+    ///
+    /// `assert!(MAX_DEVICES > 0)`. It carried the right comment, that without a
+    /// bound anything able to open a socket can make this server spend the rest
+    /// of its life calling Apple, and it checked that a constant is positive.
+    /// **The registry could have accepted devices without limit and it would
+    /// still have passed.** Clippy noticed before a person did, reporting an
+    /// assertion with a constant value.
+    ///
+    /// Filled through `restore` rather than a hundred thousand `register`
+    /// calls, because `register` scans for rows sharing a token and doing that
+    /// per insertion is quadratic. One `register` at the end is the call under
+    /// test.
     #[test]
-    fn the_registry_is_bounded() {
-        // Not trust: without a bound, anything that can open a socket can make
-        // this server spend the rest of its life calling Apple.
-        assert!(MAX_DEVICES > 0);
+    fn the_registry_stops_at_its_bound() {
+        let full: Vec<Device> = (0..MAX_DEVICES)
+            .map(|i| Device::registering(format!("{i:064x}"), "apns".into(), "secret"))
+            .collect();
+
+        let mut registry = Registry::restore(full);
+        assert_eq!(registry.len(), MAX_DEVICES, "the fixture did not fill it");
+
+        // Answered `true` either way: a caller is never told whether it landed,
+        // because that answer is a membership oracle. See `register`.
+        registry.register(Device::registering(
+            "ff".repeat(32),
+            "apns".into(),
+            "another",
+        ));
+
+        assert_eq!(
+            registry.len(),
+            MAX_DEVICES,
+            "the registry grew past its bound, so anything that can open a \
+             socket can make this server call Apple for ever"
+        );
     }
 
     #[test]
     fn a_dead_token_is_recognised() {
-        assert!(Apns::is_gone("Apple refused a wake: 410 Gone {\"reason\":\"Unregistered\"}"));
+        assert!(Apns::is_gone(
+            "Apple refused a wake: 410 Gone {\"reason\":\"Unregistered\"}"
+        ));
         assert!(!Apns::is_gone("Apple refused a wake: 429 TooManyRequests"));
     }
 }

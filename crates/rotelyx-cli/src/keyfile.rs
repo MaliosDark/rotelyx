@@ -14,8 +14,8 @@
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use zeroize::Zeroizing;
 use rotelyx_core::{sealed, Identity};
+use zeroize::Zeroizing;
 
 const PASSPHRASE_ENV: &str = "ROTELYX_PASSPHRASE";
 
@@ -109,7 +109,10 @@ pub fn load_with_passphrase(path: &Path) -> Result<(Identity, Zeroizing<String>)
         .context("key file is neither sealed nor 32 raw bytes")?;
     let identity = Identity::from_bytes(raw);
 
-    eprintln!("WARNING: {} holds an unsealed key. Sealing it now.", path.display());
+    eprintln!(
+        "WARNING: {} holds an unsealed key. Sealing it now.",
+        path.display()
+    );
     let passphrase = confirm_new_passphrase()?;
     let blob = sealed::seal(&identity, &passphrase).context("sealing migrated identity")?;
     std::fs::write(path, &blob).with_context(|| format!("writing {}", path.display()))?;
@@ -188,7 +191,7 @@ mod tests {
         let _passphrase = Passphrase::set();
         let path = tmp("migrate");
         let original = Identity::generate();
-        std::fs::write(&path, &*original.to_storage_bytes()).expect("write raw");
+        std::fs::write(&path, *original.to_storage_bytes()).expect("write raw");
         assert_eq!(std::fs::read(&path).unwrap().len(), 32);
 
         let (loaded, _) = load_with_passphrase(&path).expect("migrate");

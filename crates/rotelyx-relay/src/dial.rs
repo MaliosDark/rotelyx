@@ -104,9 +104,9 @@ impl RelayDialer for Dialer {
             // addresses are being asked for can turn the transport's own
             // logging up; putting it here would write a stranger's chosen
             // string into this relay's log on demand.
-            return Box::pin(async move {
-                Err(DialError("not a relay this one chains to".to_owned()))
-            });
+            return Box::pin(
+                async move { Err(DialError("not a relay this one chains to".to_owned())) },
+            );
         }
 
         let secret = self.secret.clone();
@@ -147,9 +147,10 @@ pub fn load_or_create_identity(path: &std::path::Path) -> anyhow::Result<SecretK
 
     match std::fs::read(path) {
         Ok(bytes) => {
-            let bytes: [u8; 32] = bytes.as_slice().try_into().with_context(|| {
-                format!("{} is not a 32 byte key", path.display())
-            })?;
+            let bytes: [u8; 32] = bytes
+                .as_slice()
+                .try_into()
+                .with_context(|| format!("{} is not a 32 byte key", path.display()))?;
             Ok(SecretKey::from_bytes(&bytes))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -209,7 +210,10 @@ mod tests {
             "https://sub.relay.example.invalid",
             "",
         ] {
-            assert!(!d.permitted(near), "{near} was treated as the allowed relay");
+            assert!(
+                !d.permitted(near),
+                "{near} was treated as the allowed relay"
+            );
         }
     }
 
@@ -249,7 +253,10 @@ mod tests {
     /// put a chosen string into this relay's log on demand.
     #[test]
     fn debug_says_nothing_it_was_given() {
-        let shown = format!("{:?}", dialer(Some(vec!["https://secret.invalid".to_owned()])));
+        let shown = format!(
+            "{:?}",
+            dialer(Some(vec!["https://secret.invalid".to_owned()]))
+        );
         assert!(!shown.contains("secret.invalid"), "{shown}");
         assert!(shown.contains('1'), "the count should be there: {shown}");
 

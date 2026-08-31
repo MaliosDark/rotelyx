@@ -92,8 +92,7 @@ pub fn reopen(
         return Ok(None);
     };
 
-    let saved: Saved =
-        postcard::from_bytes(&bytes).context("decoding the saved conversation")?;
+    let saved: Saved = postcard::from_bytes(&bytes).context("decoding the saved conversation")?;
     let member = Member::restore(saved.member).context("restoring the member")?;
 
     // `None` here means the file predates this conversation: the member is real

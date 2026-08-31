@@ -120,7 +120,7 @@ impl<'a> Decoder<'a> {
         if folded % 2 == 0 {
             (folded / 2) as i16
         } else {
-            -(((folded + 1) / 2) as i16)
+            -(folded.div_ceil(2) as i16)
         }
     }
 
@@ -185,7 +185,11 @@ mod tests {
         let mut decoder = Decoder::new(&[0xff, 0xff]);
 
         assert_eq!(decoder.read_bits(16), 0xffff);
-        assert_eq!(decoder.read_bits(8), 0, "past the end must be zero, not a panic");
+        assert_eq!(
+            decoder.read_bits(8),
+            0,
+            "past the end must be zero, not a panic"
+        );
         assert_eq!(decoder.position_bits(), 24);
     }
 

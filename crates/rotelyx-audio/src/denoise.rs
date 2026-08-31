@@ -104,9 +104,12 @@ impl Denoiser {
         self.pending.extend_from_slice(samples);
         while self.pending.len() >= FFT_LEN {
             let mut frame = [C::ZERO; FFT_LEN];
-            for i in 0..FFT_LEN {
-                frame[i] = C {
-                    re: self.pending[i] * self.window[i],
+            for (slot, (sample, w)) in frame
+                .iter_mut()
+                .zip(self.pending.iter().zip(self.window.iter()))
+            {
+                *slot = C {
+                    re: sample * w,
                     im: 0.0,
                 };
             }
@@ -130,8 +133,8 @@ impl Denoiser {
 
     /// Track the noise and pull each bin down towards it.
     fn shape(&mut self, frame: &mut [C; FFT_LEN]) {
-        for k in 0..FFT_LEN {
-            let p = frame[k].norm_sq();
+        for (k, bin) in frame.iter_mut().enumerate() {
+            let p = bin.norm_sq();
             self.power[k] = if self.started {
                 SMOOTHING * self.power[k] + (1.0 - SMOOTHING) * p
             } else {
@@ -152,7 +155,7 @@ impl Denoiser {
             } else {
                 FLOOR
             };
-            frame[k] = frame[k].scale(gain);
+            *bin = bin.scale(gain);
         }
         self.started = true;
     }

@@ -18,9 +18,9 @@
 mod chats;
 mod engine;
 mod handshake;
+mod keyfile;
 mod meeting;
 mod resume;
-mod keyfile;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -163,10 +163,7 @@ fn qr_svg(code: &str) -> Result<String, String> {
     // so it is a valid document wherever it ends up, not only inside the one
     // element it is currently written into.
     const OPEN: &str = "<svg ";
-    svg.insert_str(
-        OPEN.len(),
-        r#"xmlns:xlink="http://www.w3.org/1999/xlink" "#,
-    );
+    svg.insert_str(OPEN.len(), r#"xmlns:xlink="http://www.w3.org/1999/xlink" "#);
 
     let close = svg
         .rfind("</svg>")
@@ -230,6 +227,54 @@ fn mark_plate(side: u32) -> String {
     )
 }
 
+/// Keep a capability token for this identity, sealed with the conversations.
+///
+/// # What the window has to tell the person, and why
+///
+/// A token is a stable pseudonym at the mailbox: every deposit made under one is
+/// tied to every other. `docs/THREAT-MODEL.md` says so under ADV-4 and asks for
+/// the trade to be **visible to whoever makes it**, which is a UI obligation
+/// and not a nicety.
+///
+/// What softens it is that the token is held rather than presented: it goes to
+/// the mailbox only when the free tier refuses something, so ordinary traffic
+/// stays unlinked. That is worth saying in the window too, because a person who
+/// believes paying links everything will not pay, and a person who believes it
+/// links nothing has been misled.
+#[tauri::command]
+fn save_token(app: tauri::State<'_, Arc<App>>, token: String) -> Result<String, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("that is not a token".into());
+    }
+
+    chats::save_token(&app.paths.identity, &app.chat_key, token).map_err(|e| e.to_string())?;
+
+    // Named rather than echoed. Repeating a bearer credential back into the
+    // window puts it somewhere it does not need to be.
+    Ok(
+        if token.len() >= rotelyx_mailbox_client::BLIND_TOKEN_MINIMUM {
+            "blind".into()
+        } else {
+            "signed".into()
+        },
+    )
+}
+
+/// Forget the token, so this identity goes back to the free tier.
+#[tauri::command]
+fn forget_token(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
+    chats::forget_token(&app.paths.identity).map_err(|e| e.to_string())
+}
+
+/// Whether a token is kept here. Not the token.
+#[tauri::command]
+fn has_token(app: tauri::State<'_, Arc<App>>) -> Result<bool, String> {
+    chats::load_token(&app.paths.identity, &app.chat_key)
+        .map(|held| held.is_some())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn invitation_qr(code: String) -> Result<String, String> {
     qr_svg(code.trim())
@@ -248,7 +293,11 @@ mod qr_tests {
     #[test]
     fn an_invitation_code_fits_in_a_qr() {
         let code = "HqKKk-8fPRC7cTEaXLt1cxsKF3vOTkJKC1j6kmrZ3BJXxnFKQmifUbaqDsR3TWfYLKkImwQ2xWpR9sW9mr_UqA";
-        assert_eq!(code.len(), 86, "the invitation code is not the length this assumes");
+        assert_eq!(
+            code.len(),
+            86,
+            "the invitation code is not the length this assumes"
+        );
 
         // The size the specification requires, checked rather than assumed.
         //
@@ -259,14 +308,21 @@ mod qr_tests {
         // and wrong once the level went to H to make room for the logo; and
         // version 8 at 49, on the belief that H at version 8 holds 86 bytes. It
         // holds 84. The answer is version 9, at 53.
-        let qr = qrcode::QrCode::with_error_correction_level(code, qrcode::EcLevel::H)
-            .expect("encode");
+        let qr =
+            qrcode::QrCode::with_error_correction_level(code, qrcode::EcLevel::H).expect("encode");
         assert_eq!(qr.width(), 53, "not the version this code needs");
 
         let svg = qr_svg(code).expect("a code this length must encode");
-        assert!(svg.starts_with("<svg"), "that is not an svg: {}", &svg[..40.min(svg.len())]);
+        assert!(
+            svg.starts_with("<svg"),
+            "that is not an svg: {}",
+            &svg[..40.min(svg.len())]
+        );
         assert!(svg.contains("</svg>"));
-        assert!(svg.len() > 500, "an svg that small cannot be a QR of 86 characters");
+        assert!(
+            svg.len() > 500,
+            "an svg that small cannot be a QR of 86 characters"
+        );
     }
 
     /// Not a test of behaviour: writes the drawing out so it can be looked at.
@@ -307,8 +363,8 @@ mod qr_tests {
         // A meeting code is far shorter than an invitation, so at the same
         // correction level it is a much smaller symbol: easier to read from
         // across a desk, which is where this one is read from.
-        let qr = qrcode::QrCode::with_error_correction_level(&code, qrcode::EcLevel::H)
-            .expect("encode");
+        let qr =
+            qrcode::QrCode::with_error_correction_level(&code, qrcode::EcLevel::H).expect("encode");
         assert!(
             qr.width() <= 33,
             "a meeting code should be version 4 or smaller, got {} modules",
@@ -326,10 +382,15 @@ mod qr_tests {
         let svg = qr_svg("HqKKk-8fPRC7cTEaXLt1cxsKF3vOTkJKC1j6kmrZ3BJXxnFKQmifUbaqDsR3TWfYLKkImwQ2xWpR9sW9mr_UqA")
             .expect("encode");
 
-        let image = svg.find("rotelyx-mark.png").expect("the mark is not in the drawing");
+        let image = svg
+            .find("rotelyx-mark.png")
+            .expect("the mark is not in the drawing");
         let end = svg.rfind("</svg>").expect("no end tag");
         assert!(image < end, "the mark was written past the end of the svg");
-        assert!(svg.contains("clip-path"), "the mark is not clipped to its plate");
+        assert!(
+            svg.contains("clip-path"),
+            "the mark is not clipped to its plate"
+        );
         assert!(
             svg.contains("xlink:href"),
             "only the SVG2 spelling is there, and the window may be an older WebKit"
@@ -338,7 +399,9 @@ mod qr_tests {
         // And the prefix is bound, or the drawing is not a document any XML
         // parser will open. This is not hypothetical: it was rendered as a file
         // and came back as a parse error with the code below it.
-        let declared = svg.find("xmlns:xlink").expect("the xlink prefix is not bound");
+        let declared = svg
+            .find("xmlns:xlink")
+            .expect("the xlink prefix is not bound");
         let used = svg.find("xlink:href").expect("checked above");
         assert!(declared < used, "the prefix is used before it is declared");
     }
@@ -350,7 +413,10 @@ mod qr_tests {
     /// the phone client's `test/meeting_code_test.dart` for the same reason.
     #[test]
     fn the_plate_is_centred_and_the_agreed_share() {
-        assert_eq!(LOGO_SHARE, 0.24, "the phone client asserts against this number");
+        assert_eq!(
+            LOGO_SHARE, 0.24,
+            "the phone client asserts against this number"
+        );
 
         let side = 400.0_f64;
         let plate = side * LOGO_SHARE;
@@ -367,7 +433,10 @@ mod qr_tests {
     #[test]
     fn a_longer_code_still_fits() {
         let long = "A".repeat(160);
-        assert!(qr_svg(&long).is_ok(), "no headroom above the current code length");
+        assert!(
+            qr_svg(&long).is_ok(),
+            "no headroom above the current code length"
+        );
     }
 
     /// And something that cannot be drawn is reported, not panicked over.
@@ -464,9 +533,13 @@ fn block(app: tauri::State<'_, Arc<App>>, code: String) -> Result<bool, String> 
 
 #[tauri::command]
 fn send_message(app: tauri::State<'_, Arc<App>>, text: String) -> Result<(), String> {
-    let guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let guard = app
+        .session
+        .lock()
+        .map_err(|_| "state poisoned".to_string())?;
     let tx = guard.as_ref().ok_or("no session is running")?;
-    tx.send(Command::Send { text }).map_err(|_| "session ended".to_string())
+    tx.send(Command::Send { text })
+        .map_err(|_| "session ended".to_string())
 }
 
 /// Start talking.
@@ -477,22 +550,33 @@ fn send_message(app: tauri::State<'_, Arc<App>>, text: String) -> Result<(), Str
 /// time this returns the engine has not looked at it yet.
 #[tauri::command]
 fn start_call(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
-    let guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let guard = app
+        .session
+        .lock()
+        .map_err(|_| "state poisoned".to_string())?;
     let tx = guard.as_ref().ok_or("no session is running")?;
-    tx.send(Command::StartCall).map_err(|_| "session ended".to_string())
+    tx.send(Command::StartCall)
+        .map_err(|_| "session ended".to_string())
 }
 
 /// Stop talking. The session stays up and text keeps working.
 #[tauri::command]
 fn end_call(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
-    let guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let guard = app
+        .session
+        .lock()
+        .map_err(|_| "state poisoned".to_string())?;
     let tx = guard.as_ref().ok_or("no session is running")?;
-    tx.send(Command::EndCall).map_err(|_| "session ended".to_string())
+    tx.send(Command::EndCall)
+        .map_err(|_| "session ended".to_string())
 }
 
 #[tauri::command]
 fn hangup(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
-    let mut guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let mut guard = app
+        .session
+        .lock()
+        .map_err(|_| "state poisoned".to_string())?;
     if let Some(tx) = guard.take() {
         let _ = tx.send(Command::Hangup);
     }
@@ -519,7 +603,10 @@ fn open_chat(
 ) -> Result<(), String> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
     {
-        let mut guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+        let mut guard = app
+            .session
+            .lock()
+            .map_err(|_| "state poisoned".to_string())?;
         if guard.is_some() {
             return Err("a session is already running".into());
         }
@@ -550,7 +637,9 @@ fn open_chat(
         .await;
 
         if let Err(e) = outcome {
-            emit(Event::Error { text: format!("{e:#}") });
+            emit(Event::Error {
+                text: format!("{e:#}"),
+            });
         }
 
         if let Ok(mut guard) = app_handle.session.lock() {
@@ -585,7 +674,10 @@ fn forget_chat(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String
 /// the tree shifts as people come and go.
 #[tauri::command]
 fn remove_member(app: tauri::State<'_, Arc<App>>, key: String) -> Result<(), String> {
-    let guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let guard = app
+        .session
+        .lock()
+        .map_err(|_| "state poisoned".to_string())?;
     let session = guard.as_ref().ok_or("no session is running")?;
     session
         .send(Command::Remove { key })
@@ -595,7 +687,10 @@ fn remove_member(app: tauri::State<'_, Arc<App>>, key: String) -> Result<(), Str
 /// Ask who is in the conversation. The answer arrives as an event.
 #[tauri::command]
 fn who_is_here(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
-    let guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+    let guard = app
+        .session
+        .lock()
+        .map_err(|_| "state poisoned".to_string())?;
     let session = guard.as_ref().ok_or("no session is running")?;
     session
         .send(Command::WhoIsHere)
@@ -652,12 +747,17 @@ fn meet(
 
     let mailbox = mailbox.trim().to_string();
     if mailbox.is_empty() {
-        return Err("a meeting needs a mailbox: it is the only place a phone can be reached".into());
+        return Err(
+            "a meeting needs a mailbox: it is the only place a phone can be reached".into(),
+        );
     }
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
     {
-        let mut guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+        let mut guard = app
+            .session
+            .lock()
+            .map_err(|_| "state poisoned".to_string())?;
         if guard.is_some() {
             return Err("a session is already running".into());
         }
@@ -696,7 +796,9 @@ fn meet(
         .await;
 
         if let Err(e) = outcome {
-            emit(Event::Error { text: format!("{e:#}") });
+            emit(Event::Error {
+                text: format!("{e:#}"),
+            });
         }
 
         if let Ok(mut guard) = app_handle.session.lock() {
@@ -731,7 +833,10 @@ fn start(
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Command>();
     {
-        let mut guard = app.session.lock().map_err(|_| "state poisoned".to_string())?;
+        let mut guard = app
+            .session
+            .lock()
+            .map_err(|_| "state poisoned".to_string())?;
         if guard.is_some() {
             return Err("a session is already running".into());
         }
@@ -764,8 +869,12 @@ fn start(
         ) {
             Ok(e) => e,
             Err(e) => {
-                emit(Event::Error { text: format!("{e:#}") });
-                emit(Event::Disconnected { reason: "could not start".into() });
+                emit(Event::Error {
+                    text: format!("{e:#}"),
+                });
+                emit(Event::Disconnected {
+                    reason: "could not start".into(),
+                });
                 return;
             }
         };
@@ -782,7 +891,9 @@ fn start(
         if let Err(e) = outcome {
             // `{:#}` prints the whole context chain, which is what turns
             // "connecting failed" into a legible refusal.
-            emit(Event::Error { text: format!("{e:#}") });
+            emit(Event::Error {
+                text: format!("{e:#}"),
+            });
         }
 
         if let Ok(mut guard) = app_handle.session.lock() {
@@ -881,6 +992,9 @@ fn main() {
     tauri::Builder::default()
         .manage(app)
         .invoke_handler(tauri::generate_handler![
+            save_token,
+            forget_token,
+            has_token,
             snapshot,
             issue_invitation,
             block,

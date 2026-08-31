@@ -181,8 +181,7 @@ fn no_unreviewed_foreign_hostname_exists_anywhere() {
 
                 let where_ = format!("{rel}:{}: {}", n + 1, line.trim());
 
-                if file.extension().is_some_and(|e| e == "rs")
-                    && inside_string_literal(line, token)
+                if file.extension().is_some_and(|e| e == "rs") && inside_string_literal(line, token)
                 {
                     hard.push(where_);
                     continue;
@@ -218,10 +217,16 @@ fn no_unreviewed_foreign_hostname_exists_anywhere() {
 /// A ledger entry must never be able to silence a reachable endpoint.
 #[test]
 fn a_string_literal_cannot_be_excepted() {
-    assert!(inside_string_literal(r#"let x = "https://dns.iroh.link";"#, "iroh.link"));
-    assert!(!inside_string_literal("//! see https://n0.computer for details", "n0.computer"));
-    assert!(!inside_string_literal(r#"authors = ["f <f@n0.computer>"]"#, "n0.computer") == false
-        || true); // manifests are checked against the ledger, not this rule
+    assert!(inside_string_literal(
+        r#"let x = "https://dns.iroh.link";"#,
+        "iroh.link"
+    ));
+    assert!(!inside_string_literal(
+        "//! see https://n0.computer for details",
+        "n0.computer"
+    ));
+    assert!(inside_string_literal(r#"authors = ["f <f@n0.computer>"]"#, "n0.computer") || true);
+    // manifests are checked against the ledger, not this rule
 }
 
 /// Setting the upstream override must not change what an Rotelyx endpoint does.

@@ -206,7 +206,9 @@ pub struct Verifier(VerifyingKey);
 impl Verifier {
     pub fn from_public_hex(hex: &str) -> Option<Self> {
         let bytes = decode_hex(hex, 32)?;
-        VerifyingKey::from_bytes(&bytes.try_into().ok()?).ok().map(Self)
+        VerifyingKey::from_bytes(&bytes.try_into().ok()?)
+            .ok()
+            .map(Self)
     }
 
     /// Check a token and return what it permits.
@@ -223,8 +225,7 @@ impl Verifier {
         }
         let (body, sig) = raw.split_at(raw.len() - 64);
 
-        let signature =
-            Signature::from_slice(sig).map_err(|_| TokenError::Malformed)?;
+        let signature = Signature::from_slice(sig).map_err(|_| TokenError::Malformed)?;
 
         let mut signed = Vec::with_capacity(TOKEN_CONTEXT.len() + body.len());
         signed.extend_from_slice(TOKEN_CONTEXT);
@@ -236,8 +237,7 @@ impl Verifier {
             .verify(&signed, &signature)
             .map_err(|_| TokenError::BadSignature)?;
 
-        let claims: Claims =
-            postcard::from_bytes(body).map_err(|_| TokenError::Malformed)?;
+        let claims: Claims = postcard::from_bytes(body).map_err(|_| TokenError::Malformed)?;
 
         if claims.expires_hour <= now_hour {
             return Err(TokenError::Expired);
@@ -290,7 +290,9 @@ impl Meter {
     pub fn charge(&mut self, cap: &Capability, bytes: u64, now_hour: u64) -> Charge {
         let limit = cap.limits.bytes_per_period;
         if limit == 0 {
-            return Charge::Allowed { remaining: u64::MAX };
+            return Charge::Allowed {
+                remaining: u64::MAX,
+            };
         }
 
         let period = now_hour / PERIOD_HOURS;

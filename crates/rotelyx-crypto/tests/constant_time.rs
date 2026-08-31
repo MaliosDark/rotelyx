@@ -132,7 +132,12 @@ fn welch(mut a: Vec<f64>, mut b: Vec<f64>) -> f64 {
 /// data that differed in the same byte, out of two buffers, produced t = -26 on
 /// its own. The buffer is flipped and restored outside the timed region, so the
 /// only thing that changes between the two classes is which byte is wrong.
-fn t_statistic(base: &mut [u8], class_a: (usize, u8), class_b: (usize, u8), mut op: impl FnMut(&[u8])) -> f64 {
+fn t_statistic(
+    base: &mut [u8],
+    class_a: (usize, u8),
+    class_b: (usize, u8),
+    mut op: impl FnMut(&[u8]),
+) -> f64 {
     for _ in 0..BATCH {
         op(base);
     }
@@ -142,7 +147,11 @@ fn t_statistic(base: &mut [u8], class_a: (usize, u8), class_b: (usize, u8), mut 
 
     for _ in 0..SAMPLES {
         let a_first = rng.next() & 1 == 0;
-        let order = if a_first { [class_a, class_b] } else { [class_b, class_a] };
+        let order = if a_first {
+            [class_a, class_b]
+        } else {
+            [class_b, class_a]
+        };
         let mut timed = [0.0f64; 2];
 
         for (slot, &(position, mask)) in order.iter().enumerate() {
@@ -223,7 +232,9 @@ fn the_primitives_do_not_leak_where_they_are_compared() {
     // ---- the null ---------------------------------------------------------
     let mut buffer = truth;
     let null = t_statistic(&mut buffer, null_a, null_b, |candidate| {
-        black_box(bool::from(black_box(&truth[..]).ct_eq(black_box(candidate))));
+        black_box(bool::from(
+            black_box(&truth[..]).ct_eq(black_box(candidate)),
+        ));
     });
     println!("  null, two wrong values in the same byte: t = {null:.1}");
     assert!(
@@ -236,7 +247,9 @@ fn the_primitives_do_not_leak_where_they_are_compared() {
     // ---- subtle::ConstantTimeEq ------------------------------------------
     let mut buffer = truth;
     let subtle_t = t_statistic(&mut buffer, early, late, |candidate| {
-        black_box(bool::from(black_box(&truth[..]).ct_eq(black_box(candidate))));
+        black_box(bool::from(
+            black_box(&truth[..]).ct_eq(black_box(candidate)),
+        ));
     });
     println!("  subtle::ConstantTimeEq on 32 bytes:    t = {subtle_t:.1}");
 
@@ -248,7 +261,13 @@ fn the_primitives_do_not_leak_where_they_are_compared() {
     let cipher = XChaCha20Poly1305::new_from_slice(&[7u8; 32]).expect("key");
     let nonce = XNonce::try_from(&[9u8; 24][..]).expect("nonce");
     let mut sealed = cipher
-        .encrypt(&nonce, Payload { msg: b"a message of no importance", aad: b"" })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: b"a message of no importance",
+                aad: b"",
+            },
+        )
         .expect("seal");
 
     let tag_first = (sealed.len() - 16, 0xffu8);
@@ -256,7 +275,13 @@ fn the_primitives_do_not_leak_where_they_are_compared() {
     let aead_t = t_statistic(&mut sealed, tag_first, tag_last, |candidate| {
         black_box(
             cipher
-                .decrypt(&nonce, Payload { msg: black_box(candidate), aad: b"" })
+                .decrypt(
+                    &nonce,
+                    Payload {
+                        msg: black_box(candidate),
+                        aad: b"",
+                    },
+                )
                 .is_ok(),
         );
     });

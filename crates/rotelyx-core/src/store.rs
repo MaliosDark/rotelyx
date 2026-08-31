@@ -81,7 +81,8 @@ impl Paths {
     /// already told them, which is that a conversation exists.
     pub fn conversation_at(&self, address: &crate::identity::RotelyxId) -> PathBuf {
         let short: String = address.to_string().chars().take(16).collect();
-        self.conversation.with_extension(format!("{short}.conversation"))
+        self.conversation
+            .with_extension(format!("{short}.conversation"))
     }
 }
 
@@ -234,11 +235,7 @@ pub fn save_invitations(path: &Path, invitations: &[StoredInvitation]) -> Result
 /// The caller decides what the bytes are: this layer does not know what an MLS
 /// group looks like and should not have to, so it takes something already
 /// serialised and gives it back unchanged.
-pub fn save_conversation(
-    path: &Path,
-    state: &[u8],
-    passphrase: &str,
-) -> Result<(), StoreError> {
+pub fn save_conversation(path: &Path, state: &[u8], passphrase: &str) -> Result<(), StoreError> {
     let sealed = crate::sealed::seal_bytes(state, passphrase).map_err(|e| StoreError::Write {
         path: path.to_path_buf(),
         source: std::io::Error::other(e.to_string()),
@@ -414,7 +411,7 @@ mod tests {
             transport: [0x5a; 32],
             expires_at_epoch: 500,
         };
-        save_invitations(&path, &[inv.clone()]).expect("save");
+        save_invitations(&path, std::slice::from_ref(&inv)).expect("save");
 
         let back = load_invitations(&path, 100).expect("load");
         assert_eq!(back.len(), 1);
@@ -430,8 +427,16 @@ mod tests {
         save_invitations(
             &path,
             &[
-                StoredInvitation { secret: [1u8; 32], transport: [0x5a; 32], expires_at_epoch: 50 },
-                StoredInvitation { secret: [2u8; 32], transport: [0x5a; 32], expires_at_epoch: 500 },
+                StoredInvitation {
+                    secret: [1u8; 32],
+                    transport: [0x5a; 32],
+                    expires_at_epoch: 50,
+                },
+                StoredInvitation {
+                    secret: [2u8; 32],
+                    transport: [0x5a; 32],
+                    expires_at_epoch: 500,
+                },
             ],
         )
         .expect("save");
@@ -447,13 +452,21 @@ mod tests {
         let path = tmp("invites-prune");
         save_invitations(
             &path,
-            &[StoredInvitation { secret: [1u8; 32], transport: [0x5a; 32], expires_at_epoch: 50 }],
+            &[StoredInvitation {
+                secret: [1u8; 32],
+                transport: [0x5a; 32],
+                expires_at_epoch: 50,
+            }],
         )
         .expect("save");
 
         add_invitation(
             &path,
-            StoredInvitation { secret: [9u8; 32], transport: [0x5a; 32], expires_at_epoch: 500 },
+            StoredInvitation {
+                secret: [9u8; 32],
+                transport: [0x5a; 32],
+                expires_at_epoch: 500,
+            },
             100,
         )
         .expect("add");
@@ -478,7 +491,11 @@ mod tests {
         save_invitations(&path, &[]).expect("save");
 
         let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "an invitation file is readable by others");
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "an invitation file is readable by others"
+        );
         let _ = std::fs::remove_file(&path);
     }
 }

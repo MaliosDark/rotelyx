@@ -130,7 +130,11 @@ pub fn plan(n: usize, budget: usize) -> Vec<usize> {
             break;
         }
         // Half the remaining budget to this stage, all of it to the last.
-        let share = if stage + 1 == MAX_STAGES { left } else { left / 2 };
+        let share = if stage + 1 == MAX_STAGES {
+            left
+        } else {
+            left / 2
+        };
 
         let k = pvq::pulses_for(n, share.max(1));
         if k == 0 {
@@ -409,11 +413,21 @@ mod tests {
             println!("    plan            bits   cosine");
 
             for plan in [
-                vec![4usize], vec![8], vec![16], vec![24],
-                vec![4, 4], vec![8, 8], vec![6, 6, 6], vec![8, 4, 2],
-                vec![12, 6, 3], vec![8, 6, 4, 2],
+                vec![4usize],
+                vec![8],
+                vec![16],
+                vec![24],
+                vec![4, 4],
+                vec![8, 8],
+                vec![6, 6, 6],
+                vec![8, 4, 2],
+                vec![12, 6, 3],
+                vec![8, 6, 4, 2],
             ] {
-                let bits: usize = plan.iter().map(|&k| pvq::bits(n, k).ceil() as usize + GAIN_BITS + 1).sum();
+                let bits: usize = plan
+                    .iter()
+                    .map(|&k| pvq::bits(n, k).ceil() as usize + GAIN_BITS + 1)
+                    .sum();
                 let c = cosine(&t, &decode(n, &encode(&t, &plan)));
                 println!("    {plan:14?}  {bits:4}   {c:.3}");
             }

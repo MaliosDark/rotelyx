@@ -21,7 +21,6 @@ fn test_call() -> rotelyx_media::CallBinding {
     rotelyx_media::CallBinding::new(b"a-test-call-0001").expect("long enough")
 }
 
-
 const BYTES_PER_FRAME: usize = 60;
 
 fn voice_like(samples: usize) -> Vec<f32> {
@@ -50,8 +49,16 @@ fn voice_like(samples: usize) -> Vec<f32> {
 fn pair() -> (MediaOut, MediaIn) {
     let base = [7u8; 32];
     (
-        MediaOut::new(PathPolicy::RelayOnly, SenderKeys::derive(&base, 0, &test_call())).expect("sender"),
-        MediaIn::new(PathPolicy::RelayOnly, SenderKeys::derive(&base, 0, &test_call())).expect("receiver"),
+        MediaOut::new(
+            PathPolicy::RelayOnly,
+            SenderKeys::derive(&base, 0, &test_call()),
+        )
+        .expect("sender"),
+        MediaIn::new(
+            PathPolicy::RelayOnly,
+            SenderKeys::derive(&base, 0, &test_call()),
+        )
+        .expect("receiver"),
     )
 }
 
@@ -178,7 +185,9 @@ fn the_base_is_never_trimmed_away() {
     let mut decoder = LayeredDecoder::new(BYTES_PER_FRAME);
 
     for start in (0..signal.len() - WINDOW).step_by(FRAME) {
-        let frame = encoder.encode(&signal[start..start + WINDOW]).expect("encode");
+        let frame = encoder
+            .encode(&signal[start..start + WINDOW])
+            .expect("encode");
 
         // One byte of payload, which does not fit a base and is not meant to.
         let trimmed = frame.within(1);

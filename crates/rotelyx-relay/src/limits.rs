@@ -38,8 +38,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rotelyx_relay_proto::server::{Access, AccessControl, ClientRequest, ConnectionId};
 use rotelyx_net::EndpointId;
+use rotelyx_relay_proto::server::{Access, AccessControl, ClientRequest, ConnectionId};
 
 /// Concurrent connections one identity may hold.
 ///
@@ -318,7 +318,11 @@ mod tests {
             !limiter.admit(who, now),
             "the ninth concurrent connection, with rate to spare"
         );
-        assert_eq!(limiter.counters().refusals().1, 1, "refused for concurrency");
+        assert_eq!(
+            limiter.counters().refusals().1,
+            1,
+            "refused for concurrency"
+        );
 
         limiter.released(who);
         assert!(limiter.admit(who, now), "a slot freed is a slot usable");
@@ -335,7 +339,10 @@ mod tests {
             limiter.released(id(4));
         }
         assert!(!limiter.admit(id(4), now));
-        assert!(limiter.admit(id(5), now), "a different identity is unaffected");
+        assert!(
+            limiter.admit(id(5), now),
+            "a different identity is unaffected"
+        );
     }
 
     /// The global cap is what stops ten thousand fresh identities.
@@ -408,7 +415,11 @@ mod tests {
             matches!(limiter.on_connect(&request()).await, Access::Deny { .. }),
             "the cap is reached and the limiter was not consulted"
         );
-        assert_eq!(limiter.counters().refusals().1, 1, "refused for concurrency, not rate");
+        assert_eq!(
+            limiter.counters().refusals().1,
+            1,
+            "refused for concurrency, not rate"
+        );
 
         // Disconnecting must return the slot. If it does not, a busy relay
         // refuses everybody for ever after a few minutes of ordinary use, which
@@ -438,7 +449,11 @@ mod tests {
 
         let limiter = Limited::new(No);
         for _ in 0..(PER_ENDPOINT_BURST as usize * 3) {
-            let (parts, _) = http::Request::builder().uri("/relay").body(()).unwrap().into_parts();
+            let (parts, _) = http::Request::builder()
+                .uri("/relay")
+                .body(())
+                .unwrap()
+                .into_parts();
             let r = ClientRequest::new(id(8), ProtocolVersion::V2, parts);
             assert!(matches!(limiter.on_connect(&r).await, Access::Deny { .. }));
         }

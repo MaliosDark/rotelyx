@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use rotelyx_audio::Call;
 use rotelyx_core::store::{self, Paths};
 use rotelyx_core::{
     Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint,
@@ -22,7 +23,6 @@ use rotelyx_core::{
 };
 use rotelyx_crypto::{Conversation, Member, Received};
 use rotelyx_net::{NetConfig, PathPolicy, RelayPolicy, RelayUrl, SecretKey};
-use rotelyx_audio::Call;
 use tokio::sync::mpsc;
 
 /// What the window asks a *running* session to do.
@@ -32,7 +32,9 @@ use tokio::sync::mpsc;
 /// messages travel on this channel.
 #[derive(Debug)]
 pub enum Command {
-    Send { text: String },
+    Send {
+        text: String,
+    },
     /// Start talking. Refused, with a reason, on a session that may go direct.
     StartCall,
     /// Stop talking. The session stays up.
@@ -43,7 +45,9 @@ pub enum Command {
     /// A key rather than a name: two members can choose the same label, and a
     /// position in the tree shifts as people come and go, so a caller holding
     /// one across an epoch would remove somebody else.
-    Remove { key: String },
+    Remove {
+        key: String,
+    },
     /// Say who is here, so the window can offer to remove one of them.
     WhoIsHere,
 }
@@ -64,17 +68,33 @@ fn hex_id(identity: &[u8]) -> String {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    Status { text: String },
-    Listening { addr: String, id: String },
-    Connected { peer: String, safety_number: String, direct: bool },
-    Message { text: String },
-    CallStarted { kbit: usize, mono: bool },
+    Status {
+        text: String,
+    },
+    Listening {
+        addr: String,
+        id: String,
+    },
+    Connected {
+        peer: String,
+        safety_number: String,
+        direct: bool,
+    },
+    Message {
+        text: String,
+    },
+    CallStarted {
+        kbit: usize,
+        mono: bool,
+    },
     /// Milliseconds of audio waiting to be played.
     ///
     /// Sent while a call runs because it is the one number that tells a person
     /// what they are about to hear: a figure that keeps climbing is the call
     /// falling behind, and after the call it is too late to know.
-    CallLevel { queued_ms: usize },
+    CallLevel {
+        queued_ms: usize,
+    },
     /// `concealed` is frames that arrived and could not be turned into sound.
     ///
     /// Reported beside `received` because the two together are the difference
@@ -102,9 +122,15 @@ pub enum Event {
         removed: Vec<String>,
     },
     /// Everybody in the conversation, with the key each is removed by.
-    Members { members: Vec<Present> },
-    Disconnected { reason: String },
-    Error { text: String },
+    Members {
+        members: Vec<Present>,
+    },
+    Disconnected {
+        reason: String,
+    },
+    Error {
+        text: String,
+    },
 }
 
 /// One member, as the window needs to show and act on them.
@@ -196,7 +222,11 @@ impl Engine {
         Ok(gate)
     }
 
-    pub async fn listen(&self, open: bool, rx: &mut mpsc::UnboundedReceiver<Command>) -> Result<()> {
+    pub async fn listen(
+        &self,
+        open: bool,
+        rx: &mut mpsc::UnboundedReceiver<Command>,
+    ) -> Result<()> {
         let live = store::load_invitations(&self.paths.invitations, self.epoch)?;
         let gate = self.gate(open, &live)?;
 
@@ -232,8 +262,7 @@ impl Engine {
             }
             if !endpoint.also_answer_as(&SecretKey::from_bytes(&inv.transport)) {
                 self.emit(Event::Status {
-                    text: "Could not ask the relay to answer one invitation's address"
-                        .into(),
+                    text: "Could not ask the relay to answer one invitation's address".into(),
                 });
             }
         }
@@ -325,8 +354,8 @@ impl Engine {
                 // read thirty two bytes and refused anything else, so it could
                 // not accept the code this application's own invite command
                 // produces, which has been sixty four for a while.
-                let (secret, host) = Invitation::read_code(&bytes)
-                    .context("that is not an invitation code")?;
+                let (secret, host) =
+                    Invitation::read_code(&bytes).context("that is not an invitation code")?;
                 // Expiry belongs to the issuer; we only prove possession.
                 let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
                 // Call the address in the code, not one pasted beside it.
@@ -389,13 +418,25 @@ impl Engine {
             }
         };
 
-        crate::resume::save(&self.paths, &dialled_id, &me, &conversation, &self.passphrase)?;
+        crate::resume::save(
+            &self.paths,
+            &dialled_id,
+            &me,
+            &conversation,
+            &self.passphrase,
+        )?;
 
         self.announce(&endpoint, &conversation, my_name).await;
 
         let conversation = self.chat(session, conversation, &me, rx).await;
         if let Some(conversation) = conversation {
-            crate::resume::save(&self.paths, &dialled_id, &me, &conversation, &self.passphrase)?;
+            crate::resume::save(
+                &self.paths,
+                &dialled_id,
+                &me,
+                &conversation,
+                &self.passphrase,
+            )?;
         }
         endpoint.close().await;
         Ok(())
@@ -416,7 +457,11 @@ impl Engine {
         conversation: &Conversation,
         my_name: rotelyx_core::RotelyxId,
     ) {
-        let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
+        let roster: Vec<Vec<u8>> = conversation
+            .roster()
+            .into_iter()
+            .map(|p| p.identity)
+            .collect();
         // Both halves must be names that are in the roster. Passing the
         // long-lived identity as "me" was consistent only while it was also
         // what went into the credential; a conversation carries a name derived
@@ -458,8 +503,11 @@ impl Engine {
         // already share, so no index has to be negotiated and the two sides
         // cannot disagree about who is who.
         let mine = me.signature_key();
-        let mut keys: Vec<Vec<u8>> =
-            conversation.roster().into_iter().map(|p| p.signature_key).collect();
+        let mut keys: Vec<Vec<u8>> = conversation
+            .roster()
+            .into_iter()
+            .map(|p| p.signature_key)
+            .collect();
         keys.sort();
         let index = keys
             .iter()
@@ -519,7 +567,7 @@ impl Engine {
                         // has exactly two members and no roster to act on.
                         Some(Command::Remove { .. }) | Some(Command::WhoIsHere) => {}
                         Some(Command::Send { text }) => {
-                            match conversation.send(&me, text.as_bytes()) {
+                            match conversation.send(me, text.as_bytes()) {
                                 Ok(ciphertext) => {
                                     if let Err(e) = Frame::new(FrameKind::Message, ciphertext)
                                         .write(&mut send).await
@@ -537,7 +585,7 @@ impl Engine {
                             if call.is_some() {
                                 self.emit(Event::Error { text: "already on a call".into() });
                             } else {
-                                match self.start_call(&conversation, &me) {
+                                match self.start_call(&conversation, me) {
                                     Ok(c) => {
                                         self.emit(Event::CallStarted {
                                             kbit: c.kbit_per_second(),
@@ -611,7 +659,7 @@ impl Engine {
                         continue;
                     }
 
-                    match conversation.receive(&me, &frame.payload) {
+                    match conversation.receive(me, &frame.payload) {
                         Ok(Received::Message { bytes: plaintext, .. }) => self.emit(Event::Message {
                             text: String::from_utf8_lossy(&plaintext).into_owned(),
                         }),

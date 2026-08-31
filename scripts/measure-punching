@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# Turn `rotelyx-cli probe` into a hole punching success rate.
+#
+#   scripts/measure-punching <addr-or-invite> [runs] [--relay URL]
+#
+# # Why this exists
+#
+# `probe` prints one record per run and one record is an anecdote. A rate needs
+# a denominator, and the item in TODO.md has been open partly for want of one:
+# hole punching is simulated in 46 tests and has never been measured between two
+# machines on different networks.
+#
+# # What counts as a second network, and what does not
+#
+# **Two machines on one LAN prove nothing**, because there is no NAT between
+# them to traverse. Both sides have to be behind different NATs.
+#
+# The cheapest real second network is a phone hotspot, and it is also the most
+# valuable one: carrier-grade NAT is the hard case and the one a simulation
+# models worst. A VPS is a weaker test, because a VPS usually has a public
+# address and nothing to punch through.
+#
+# # How to run it
+#
+# On the far machine:
+#
+#     rotelyx-cli listen --relay <url>
+#
+# and copy the address it prints. Then here, on the other network:
+#
+#     scripts/measure-punching <that address> 20 --relay <url>
+#
+# Every run is appended to a file, so a session interrupted halfway is still
+# twelve records rather than nothing.
+#
+# # This is not a CI gate and must not become one
+#
+# It needs two networks and a person. A gate that cannot run is not a gate, and
+# this repository has already made that mistake once with the NAT job.
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  sed -n '2,40p' "$0" | sed 's/^# \?//'
+  exit 2
+fi
+
+TARGET="$1"
+RUNS="${2:-20}"
+shift || true
+shift || true
+
+OUT="${ROTELYX_PUNCH_LOG:-punching-$(date +%Y-%m-%d).tsv}"
+CLI="${ROTELYX_CLI:-./target/release/rotelyx-cli}"
+
+if [ ! -x "$CLI" ]; then
+  CLI="./target/debug/rotelyx-cli"
+fi
+if [ ! -x "$CLI" ]; then
+  echo "no rotelyx-cli built: cargo build --release -p rotelyx-cli" >&2
+  exit 1
+fi
+
+if [ ! -f "$OUT" ]; then
+  printf 'run\tdirect\tafter\trelayed_first\tpeer\n' > "$OUT"
+fi
+
+echo "  $RUNS runs against $TARGET, appending to $OUT"
+echo
+
+for run in $(seq 1 "$RUNS"); do
+  # A failed run is a data point, not a reason to stop: a probe that cannot
+  # connect at all is exactly what a bad network looks like.
+  record="$("$CLI" probe "$TARGET" "$@" 2>/dev/null | grep '^direct=' || true)"
+
+  if [ -z "$record" ]; then
+    printf '%s\t%s\t%s\t%s\t%s\n' "$run" "error" "-" "-" "-" >> "$OUT"
+    printf '  %3d  did not connect\n' "$run"
+    continue
+  fi
+
+  direct=$(sed 's/.*direct=\([^ ]*\).*/\1/' <<<"$record")
+  after=$(sed 's/.*after=\([^ ]*\).*/\1/' <<<"$record")
+  first=$(sed 's/.*relayed_first=\([^ ]*\).*/\1/' <<<"$record")
+  peer=$(sed 's/.*peer=\([^ ]*\).*/\1/' <<<"$record")
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$run" "$direct" "$after" "$first" "$peer" >> "$OUT"
+  printf '  %3d  direct=%-5s after=%-7s relayed_first=%s\n' "$run" "$direct" "$after" "$first"
+
+  # A pause between runs, so a NAT's mapping table is not being measured in the
+  # state the previous run left it in.
+  sleep 2
+done
+
+echo
+awk -F'\t' '
+  NR == 1 { next }
+  { total++ }
+  $2 == "yes" { direct++; if ($3 != "-") { sub("s", "", $3); sum += $3; n++ } }
+  $2 == "error" { failed++ }
+  END {
+    if (total == 0) { print "  no runs"; exit }
+    printf "  %d runs, %d punched through, %d stayed relayed, %d never connected\n",
+      total, direct + 0, total - (direct + 0) - (failed + 0), failed + 0
+    printf "  success rate: %.0f%%\n", 100 * (direct + 0) / total
+    if (n > 0) printf "  median time to direct is not computed here; mean is %.2fs over %d\n", sum / n, n
+    print ""
+    print "  Both numbers are for one pair of networks. A rate that means anything"
+    print "  needs several pairs: two carriers, a hotel, an office. Record which"
+    print "  ones these were beside the file, because the file does not know."
+  }
+' "$OUT"

@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use rotelyx_crypto::circuit::SealedHop;
 use rotelyx_crypto::hybrid::{HybridSecretKey, SECRET_KEY_LEN};
 use rotelyx_net::EndpointId;
@@ -46,13 +46,14 @@ impl Opener {
     pub fn load_or_create(path: &Path, exit_id: EndpointId) -> Result<Self> {
         let secret = match std::fs::read(path) {
             Ok(bytes) => {
-                let bytes: [u8; SECRET_KEY_LEN] = bytes.as_slice().try_into().with_context(|| {
-                    format!(
-                        "{} is {} bytes, and a circuit key is {SECRET_KEY_LEN}",
-                        path.display(),
-                        bytes.len()
-                    )
-                })?;
+                let bytes: [u8; SECRET_KEY_LEN] =
+                    bytes.as_slice().try_into().with_context(|| {
+                        format!(
+                            "{} is {} bytes, and a circuit key is {SECRET_KEY_LEN}",
+                            path.display(),
+                            bytes.len()
+                        )
+                    })?;
                 HybridSecretKey::from_storage_bytes(bytes)
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -136,15 +137,13 @@ mod tests {
     /// key, the real sealing, and the conversion into the types the transport uses.
     #[test]
     fn the_relays_opener_opens_a_real_descriptor_and_refuses_the_rest() {
-    
-
         let dir = std::env::temp_dir().join(format!("rotelyx-circuit-{}", std::process::id()));
         let key_path = dir.join("circuit.key");
         let _ = std::fs::remove_file(&key_path);
 
         let exit_id = rotelyx_net::SecretKey::from_bytes(&[11u8; 32]).public();
-        let opener = Opener::load_or_create(&key_path, exit_id)
-            .expect("a key should be made on first use");
+        let opener =
+            Opener::load_or_create(&key_path, exit_id).expect("a key should be made on first use");
 
         let destination = rotelyx_net::SecretKey::from_bytes(&[12u8; 32]).public();
         let return_key = rotelyx_net::SecretKey::from_bytes(&[13u8; 32]).public();
@@ -177,7 +176,10 @@ mod tests {
         let hop = opener
             .open(&sealed.to_bytes())
             .expect("the relay should open a descriptor sealed to it");
-        assert_eq!(hop.destination, destination, "the destination did not survive");
+        assert_eq!(
+            hop.destination, destination,
+            "the destination did not survive"
+        );
         assert_eq!(hop.return_key, return_key, "the return key did not survive");
 
         assert!(

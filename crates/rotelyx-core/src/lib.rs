@@ -19,8 +19,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
-pub mod backup;
 pub mod access;
+pub mod backup;
 #[cfg(feature = "transport")]
 pub mod endpoint;
 pub mod identity;
@@ -29,12 +29,11 @@ pub mod store;
 pub mod wire;
 
 pub use access::{
-    epoch_at, Admission, Gate, estimated_cost, peer_identity, solve, verify_proof, AccessError,
-    ContactProof, Invitation,
-    ReachabilityPolicy, EPOCH_SECONDS,
+    epoch_at, estimated_cost, peer_identity, solve, verify_proof, AccessError, Admission,
+    ContactProof, Gate, Invitation, ReachabilityPolicy, EPOCH_SECONDS,
 };
 #[cfg(feature = "transport")]
-pub use endpoint::{Session, RotelyxEndpoint, ALPN};
+pub use endpoint::{RotelyxEndpoint, Session, ALPN};
 pub use identity::{safety_number, Identity, RotelyxId};
 pub use sealed::{is_sealed, SealError};
 pub use store::{Paths, StoreError, StoredInvitation};

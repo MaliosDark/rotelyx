@@ -127,10 +127,7 @@ unsafe fn text(p: *const c_char) -> Option<String> {
 ///
 /// Both pointers must be null-terminated strings.
 #[no_mangle]
-pub unsafe extern "C" fn rotelyx_net_open(
-    secret_hex: *const c_char,
-    relay: *const c_char,
-) -> i64 {
+pub unsafe extern "C" fn rotelyx_net_open(secret_hex: *const c_char, relay: *const c_char) -> i64 {
     let (Some(secret_hex), Some(relay)) = (text(secret_hex), text(relay)) else {
         return -1;
     };
@@ -322,11 +319,7 @@ pub extern "C" fn rotelyx_net_accept(endpoint: i64, timeout_ms: i32) -> i64 {
 ///
 /// `data` must point to `len` readable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn rotelyx_net_send(
-    connection: i64,
-    data: *const u8,
-    len: i32,
-) -> i32 {
+pub unsafe extern "C" fn rotelyx_net_send(connection: i64, data: *const u8, len: i32) -> i32 {
     if data.is_null() || len < 0 {
         return -1;
     }

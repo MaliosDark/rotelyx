@@ -78,8 +78,8 @@ pub enum SealError {
 }
 
 fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>, SealError> {
-    let params =
-        Params::new(MEMORY_KIB, ITERATIONS, PARALLELISM, Some(KEY_LEN)).map_err(|_| SealError::Kdf)?;
+    let params = Params::new(MEMORY_KIB, ITERATIONS, PARALLELISM, Some(KEY_LEN))
+        .map_err(|_| SealError::Kdf)?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut input = Zeroizing::new(Vec::with_capacity(KDF_CONTEXT.len() + passphrase.len()));
@@ -166,12 +166,10 @@ pub fn seal_bytes(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, SealErr
 /// two cases.
 pub fn open(bytes: &[u8], passphrase: &str) -> Result<Identity, SealError> {
     let plain = open_bytes(bytes, passphrase)?;
-    let secret: [u8; SECRET_LEN] = plain[..]
-        .try_into()
-        .map_err(|_| SealError::Truncated {
-            len: plain.len(),
-            min: SECRET_LEN,
-        })?;
+    let secret: [u8; SECRET_LEN] = plain[..].try_into().map_err(|_| SealError::Truncated {
+        len: plain.len(),
+        min: SECRET_LEN,
+    })?;
     Ok(Identity::from_bytes(secret))
 }
 
@@ -271,10 +269,7 @@ mod tests {
     fn the_wrong_passphrase_fails() {
         let identity = Identity::generate();
         let sealed = seal(&identity, "right").expect("seal");
-        assert!(matches!(
-            open(&sealed, "wrong"),
-            Err(SealError::Unopenable)
-        ));
+        assert!(matches!(open(&sealed, "wrong"), Err(SealError::Unopenable)));
     }
 
     /// The secret must not be recoverable by reading the file.
@@ -300,7 +295,10 @@ mod tests {
         assert_ne!(a, b);
 
         // Both still open.
-        assert_eq!(open(&a, "same").unwrap().id(), open(&b, "same").unwrap().id());
+        assert_eq!(
+            open(&a, "same").unwrap().id(),
+            open(&b, "same").unwrap().id()
+        );
     }
 
     /// Every byte of the header is authenticated, so tampering is detected
@@ -329,14 +327,20 @@ mod tests {
             // Must never panic, whatever the prefix.
             let _ = open(&sealed[..cut], "pass");
         }
-        assert!(matches!(open(&[], "pass"), Err(SealError::Truncated { .. })));
+        assert!(matches!(
+            open(&[], "pass"),
+            Err(SealError::Truncated { .. })
+        ));
     }
 
     #[test]
     fn a_raw_key_file_is_not_mistaken_for_a_sealed_one() {
         let raw = [7u8; 32];
         assert!(!is_sealed(&raw));
-        assert!(matches!(open(&raw, "pass"), Err(SealError::Truncated { .. })));
+        assert!(matches!(
+            open(&raw, "pass"),
+            Err(SealError::Truncated { .. })
+        ));
 
         let sealed = seal(&Identity::generate(), "pass").expect("seal");
         assert!(is_sealed(&sealed));

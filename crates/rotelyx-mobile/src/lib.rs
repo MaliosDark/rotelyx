@@ -309,7 +309,10 @@ fn dispatch(req: &Value) -> Res {
     }
 
     let mut reg = lock();
-    let s = reg.sessions.get_mut(&handle).ok_or("no such session handle")?;
+    let s = reg
+        .sessions
+        .get_mut(&handle)
+        .ok_or("no such session handle")?;
 
     let out = match op {
         "session.keyPackage" => json!(engine(s.key_package())?),
@@ -380,8 +383,7 @@ fn dispatch(req: &Value) -> Res {
             // the one and stay quiet about the other, and surfacing membership
             // changes is a security control. See ADV-7 in the threat model.
             let json = engine(s.receive(&message))?;
-            serde_json::from_str::<Value>(&json)
-                .unwrap_or_else(|_| Value::String(json))
+            serde_json::from_str::<Value>(&json).unwrap_or(Value::String(json))
         }
 
         "session.seal" => {
@@ -425,7 +427,9 @@ fn dispatch(req: &Value) -> Res {
         )?),
         "session.recipientTags" => json!(engine(s.recipient_tags(u64_arg(req, "timeBucket")?))?),
         "session.commitRecipientTags" => {
-            json!(engine(s.commit_recipient_tags(u64_arg(req, "timeBucket")?))?)
+            json!(engine(
+                s.commit_recipient_tags(u64_arg(req, "timeBucket")?)
+            )?)
         }
         "session.tagFor" => json!(engine(s.tag_for(u64_arg(req, "timeBucket")?))?),
         "session.pollingTags" => json!(engine(
@@ -801,7 +805,11 @@ pub unsafe extern "C" fn rotelyx_call_open(
         inbound.insert(other as u8, rx);
     }
 
-    let bytes = if bytes_per_frame <= 0 { 60 } else { bytes_per_frame as usize };
+    let bytes = if bytes_per_frame <= 0 {
+        60
+    } else {
+        bytes_per_frame as usize
+    };
     let handle = next_handle() as i64;
     call_lock().insert(
         handle,
@@ -842,7 +850,9 @@ pub unsafe extern "C" fn rotelyx_call_capture(
     }
     let mut reg = call_lock();
 
-    let Some(c) = reg.get_mut(&call) else { return -1 };
+    let Some(c) = reg.get_mut(&call) else {
+        return -1;
+    };
 
     let input = std::slice::from_raw_parts(pcm, samples as usize);
 
@@ -850,19 +860,22 @@ pub unsafe extern "C" fn rotelyx_call_capture(
     let mut window = Vec::with_capacity(WINDOW);
     window.extend_from_slice(&c.history);
     window.extend(input.iter().map(|s| *s as f32 / 32768.0));
-    c.history
-        .copy_from_slice(&window[FRAME..]);
+    c.history.copy_from_slice(&window[FRAME..]);
 
     if !c.primed {
         c.primed = true;
         return 0;
     }
 
-    let Ok(frame) = c.encoder.encode(&window) else { return -2 };
+    let Ok(frame) = c.encoder.encode(&window) else {
+        return -2;
+    };
     // As bytes, because what the transport carries is a datagram and what the
     // far side parses is `LayeredFrame::from_bytes`.
     let packet = frame.to_bytes();
-    let Ok(datagram) = c.out.frame(&packet) else { return -3 };
+    let Ok(datagram) = c.out.frame(&packet) else {
+        return -3;
+    };
 
     if datagram.len() > out_capacity as usize {
         return -4;
@@ -893,7 +906,9 @@ pub unsafe extern "C" fn rotelyx_call_deliver(
         return -1;
     }
     let mut reg = call_lock();
-    let Some(c) = reg.get_mut(&call) else { return -1 };
+    let Some(c) = reg.get_mut(&call) else {
+        return -1;
+    };
 
     let bytes = std::slice::from_raw_parts(datagram, len as usize);
 
@@ -926,7 +941,9 @@ pub unsafe extern "C" fn rotelyx_call_playback(call: i64, pcm: *mut i16, capacit
         return -1;
     }
     let mut reg = call_lock();
-    let Some(c) = reg.get_mut(&call) else { return -1 };
+    let Some(c) = reg.get_mut(&call) else {
+        return -1;
+    };
 
     // One participant for now: mixing several speakers is a separate problem
     // and doing it badly is worse than not doing it. With one remote party
@@ -939,15 +956,15 @@ pub unsafe extern "C" fn rotelyx_call_playback(call: i64, pcm: *mut i16, capacit
 
     while c.pending.len() < FRAME {
         match rx.play() {
-            Playout::Frame(packet) => match LayeredFrame::from_bytes(&packet)
-                .and_then(|frame| c.decoder.decode(&frame))
-            {
-                Ok(audio) => c.pending.extend(audio),
-                Err(_) => {
-                    c.pending.extend(std::iter::repeat_n(0.0, FRAME));
-                    c.concealed += 1;
+            Playout::Frame(packet) => {
+                match LayeredFrame::from_bytes(&packet).and_then(|frame| c.decoder.decode(&frame)) {
+                    Ok(audio) => c.pending.extend(audio),
+                    Err(_) => {
+                        c.pending.extend(std::iter::repeat_n(0.0, FRAME));
+                        c.concealed += 1;
+                    }
                 }
-            },
+            }
             Playout::Missing => {
                 // Conversational mode does not wait. Silence is a poor
                 // concealment and an honest one: packet loss concealment is
@@ -1001,11 +1018,19 @@ pub unsafe extern "C" fn rotelyx_call_stats(call: i64, response: *mut *mut c_cha
     *response = CString::new(value.to_string())
         .unwrap_or_else(|_| CString::new("{\"ok\":false}").unwrap())
         .into_raw();
-    if ok { 0 } else { -1 }
+    if ok {
+        0
+    } else {
+        -1
+    }
 }
 
 /// End a call and release everything it held.
 #[no_mangle]
 pub extern "C" fn rotelyx_call_close(call: i64) -> i32 {
-    if call_lock().remove(&call).is_some() { 0 } else { -1 }
+    if call_lock().remove(&call).is_some() {
+        0
+    } else {
+        -1
+    }
 }

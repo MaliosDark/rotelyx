@@ -260,7 +260,10 @@ impl SealedHop {
             // nothing. Anything that is not valid UTF-8 is refused rather than
             // repaired: this becomes a URL a relay dials.
             let padded = &body[64..64 + NEXT_RELAY_LEN];
-            let end = padded.iter().position(|b| *b == 0).unwrap_or(NEXT_RELAY_LEN);
+            let end = padded
+                .iter()
+                .position(|b| *b == 0)
+                .unwrap_or(NEXT_RELAY_LEN);
             let next_relay = match end {
                 0 => None,
                 _ => {
@@ -438,7 +441,9 @@ mod tests {
             next_relay: None,
             hour: 400_000,
         };
-        let wire = SealedHop::seal(&public, &exit_id, &hop).expect("seal").to_bytes();
+        let wire = SealedHop::seal(&public, &exit_id, &hop)
+            .expect("seal")
+            .to_bytes();
 
         for i in (0..wire.len()).step_by(37) {
             let mut broken = wire.clone();
@@ -463,8 +468,12 @@ mod tests {
 
         // A first relay watching one sender open circuits must not be able to
         // tell that two of them go to the same place.
-        let a = SealedHop::seal(&public, &exit_id, &hop).expect("seal").to_bytes();
-        let b = SealedHop::seal(&public, &exit_id, &hop).expect("seal").to_bytes();
+        let a = SealedHop::seal(&public, &exit_id, &hop)
+            .expect("seal")
+            .to_bytes();
+        let b = SealedHop::seal(&public, &exit_id, &hop)
+            .expect("seal")
+            .to_bytes();
         assert_ne!(a, b);
     }
 
@@ -575,9 +584,7 @@ mod tests {
             .expect("seal")
             .to_bytes();
         assert!(
-            !wire
-                .windows(url.len())
-                .any(|w| w == url.as_bytes()),
+            !wire.windows(url.len()).any(|w| w == url.as_bytes()),
             "the next relay's address is readable in the descriptor"
         );
     }
@@ -593,7 +600,10 @@ mod tests {
         };
         let sealed = SealedHop::seal(&public, &exit_id, &hop).expect("seal");
         let shown = format!("{sealed:?}");
-        assert!(!shown.contains("ab"), "the destination reached a log: {shown}");
+        assert!(
+            !shown.contains("ab"),
+            "the destination reached a log: {shown}"
+        );
         assert!(
             !shown.contains("relay.example.invalid"),
             "the next relay reached a log: {shown}"

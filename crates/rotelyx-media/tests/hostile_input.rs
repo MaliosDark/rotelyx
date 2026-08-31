@@ -20,7 +20,6 @@ fn test_call() -> rotelyx_media::CallBinding {
     rotelyx_media::CallBinding::new(b"a-test-call-0001").expect("long enough")
 }
 
-
 fn receiver() -> Receiver {
     Receiver::new(SenderKeys::derive(&[3u8; 32], 0, &test_call())).expect("receiver")
 }
@@ -28,7 +27,9 @@ fn receiver() -> Receiver {
 /// A genuine protected frame to mutate.
 fn specimen() -> Vec<u8> {
     let mut sender = Sender::new(SenderKeys::derive(&[3u8; 32], 0, &test_call())).expect("sender");
-    sender.protect(b"twenty milliseconds of speech, more or less").expect("protect")
+    sender
+        .protect(b"twenty milliseconds of speech, more or less")
+        .expect("protect")
 }
 
 /// A frame from a counter large enough to need every counter byte.

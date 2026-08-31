@@ -10,14 +10,14 @@
 //! warning the page shows.
 
 use anyhow::{bail, Context, Result};
-use tokio::sync::mpsc;
 use rotelyx_core::store;
 use rotelyx_core::{
-    Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, Session,
-    RotelyxEndpoint,
+    Admission, Frame, FrameKind, Gate, Identity, Invitation, ReachabilityPolicy, RotelyxEndpoint,
+    Session,
 };
-use rotelyx_crypto::{Received, Conversation, Member};
+use rotelyx_crypto::{Conversation, Member, Received};
 use rotelyx_net::NetConfig;
+use tokio::sync::mpsc;
 
 /// What the page can ask for.
 #[derive(Debug, serde::Deserialize)]
@@ -113,13 +113,15 @@ impl Driver {
         epoch: u64,
         tx: mpsc::UnboundedSender<Event>,
     ) -> Self {
-        let conversation_key = zeroize::Zeroizing::new(data_encoding::HEXLOWER.encode(
-            blake3::derive_key(
-                "rotelyx web conversation-at-rest v1",
-                &*identity.to_storage_bytes(),
-            )
-            .as_slice(),
-        ));
+        let conversation_key = zeroize::Zeroizing::new(
+            data_encoding::HEXLOWER.encode(
+                blake3::derive_key(
+                    "rotelyx web conversation-at-rest v1",
+                    &*identity.to_storage_bytes(),
+                )
+                .as_slice(),
+            ),
+        );
 
         Self {
             identity,
@@ -136,7 +138,11 @@ impl Driver {
     }
 
     /// Listen for one peer, then chat until either side goes away.
-    pub async fn listen(&mut self, open: bool, rx: &mut mpsc::UnboundedReceiver<Command>) -> Result<()> {
+    pub async fn listen(
+        &mut self,
+        open: bool,
+        rx: &mut mpsc::UnboundedReceiver<Command>,
+    ) -> Result<()> {
         let gate = if open {
             self.emit(Event::Status {
                 text: "Accepting anyone: no invitation required".into(),
@@ -250,12 +256,24 @@ impl Driver {
             }
         };
 
-        super::resume::save(&self.paths, &here, &me, &conversation, &self.conversation_key)?;
+        super::resume::save(
+            &self.paths,
+            &here,
+            &me,
+            &conversation,
+            &self.conversation_key,
+        )?;
 
         self.announce(&endpoint, &conversation, my_name).await;
 
         if let Some(conversation) = self.chat(session, conversation, &me, rx).await {
-            super::resume::save(&self.paths, &here, &me, &conversation, &self.conversation_key)?;
+            super::resume::save(
+                &self.paths,
+                &here,
+                &me,
+                &conversation,
+                &self.conversation_key,
+            )?;
         }
         endpoint.close().await;
         Ok(())
@@ -275,46 +293,48 @@ impl Driver {
         let transport = RotelyxEndpoint::ephemeral_transport_key();
         let calling_as = rotelyx_core::RotelyxId::from(transport.public());
 
-        let (evidence, _invitation_secret, addr) = match invite.map(str::trim).filter(|s| !s.is_empty()) {
-            Some(code) => {
-                let bytes = data_encoding::BASE64URL_NOPAD
-                    .decode(code.as_bytes())
-                    .context("invitation is not valid base64")?;
-                // The secret and the address it is answered at. Reading only
-                // thirty two bytes meant refusing the code this application's
-                // own invite produces.
-                let (secret, host) =
-                    Invitation::read_code(&bytes).context("that is not an invitation code")?;
-                // Expiry is the issuer's to enforce; we only prove possession.
-                let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
-                // Call the address in the code, not one pasted beside it.
-                //
-                // Each invitation is answered at an address of its own, so a
-                // holder who dials some other address of the same host is
-                // refused: a permission is for one address. The code carries
-                // the right one, which is the whole reason it is in there.
-                (
-                    Admission::Invitation {
-                        proof: invitation.prove(&calling_as, self.epoch),
-                        epoch: self.epoch,
-                    },
-                    Some(secret.to_vec()),
-                    // The id comes from the code and the network addresses
-                    // from what was pasted: one says which key to ask for, the
-                    // other says where the machine is.
-                    rotelyx_net::EndpointAddr::from_parts(
-                        host.endpoint_id(),
-                        addr.addrs.iter().cloned(),
-                    ),
-                )
-            }
-            None => (Admission::None, None, addr),
-        };
+        let (evidence, _invitation_secret, addr) =
+            match invite.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(code) => {
+                    let bytes = data_encoding::BASE64URL_NOPAD
+                        .decode(code.as_bytes())
+                        .context("invitation is not valid base64")?;
+                    // The secret and the address it is answered at. Reading only
+                    // thirty two bytes meant refusing the code this application's
+                    // own invite produces.
+                    let (secret, host) =
+                        Invitation::read_code(&bytes).context("that is not an invitation code")?;
+                    // Expiry is the issuer's to enforce; we only prove possession.
+                    let invitation = Invitation::from_parts(secret, [0u8; 32], u64::MAX);
+                    // Call the address in the code, not one pasted beside it.
+                    //
+                    // Each invitation is answered at an address of its own, so a
+                    // holder who dials some other address of the same host is
+                    // refused: a permission is for one address. The code carries
+                    // the right one, which is the whole reason it is in there.
+                    (
+                        Admission::Invitation {
+                            proof: invitation.prove(&calling_as, self.epoch),
+                            epoch: self.epoch,
+                        },
+                        Some(secret.to_vec()),
+                        // The id comes from the code and the network addresses
+                        // from what was pasted: one says which key to ask for, the
+                        // other says where the machine is.
+                        rotelyx_net::EndpointAddr::from_parts(
+                            host.endpoint_id(),
+                            addr.addrs.iter().cloned(),
+                        ),
+                    )
+                }
+                None => (Admission::None, None, addr),
+            };
         let dialled_id = rotelyx_core::RotelyxId::from(addr.id);
 
-        let endpoint = RotelyxEndpoint::bind_as(&self.identity, transport, NetConfig::direct_only())
-            .await
-            .context("binding endpoint")?;
+        let endpoint =
+            RotelyxEndpoint::bind_as(&self.identity, transport, NetConfig::direct_only())
+                .await
+                .context("binding endpoint")?;
 
         self.emit(Event::Status {
             text: "Connecting…".into(),
@@ -387,7 +407,11 @@ impl Driver {
         conversation: &Conversation,
         my_name: rotelyx_core::RotelyxId,
     ) {
-        let roster: Vec<Vec<u8>> = conversation.roster().into_iter().map(|p| p.identity).collect();
+        let roster: Vec<Vec<u8>> = conversation
+            .roster()
+            .into_iter()
+            .map(|p| p.identity)
+            .collect();
         // Both halves must be names that are in the roster: a conversation
         // carries a name derived for it, and the long-lived identity is in
         // neither entry, so combining it with a roster entry gives each side a
@@ -431,7 +455,7 @@ impl Driver {
                 command = rx.recv() => {
                     match command {
                         Some(Command::Send { text }) => {
-                            match conversation.send(&me, text.as_bytes()) {
+                            match conversation.send(me, text.as_bytes()) {
                                 Ok(ciphertext) => {
                                     if let Err(e) = Frame::new(FrameKind::Message, ciphertext)
                                         .write(&mut send)
@@ -461,7 +485,7 @@ impl Driver {
                         continue;
                     }
 
-                    match conversation.receive(&me, &frame.payload) {
+                    match conversation.receive(me, &frame.payload) {
                         Ok(Received::Message { bytes: plaintext, .. }) => self.emit(Event::Message {
                             text: String::from_utf8_lossy(&plaintext).into_owned(),
                         }),

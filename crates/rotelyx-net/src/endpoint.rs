@@ -7,7 +7,9 @@
 
 use anyhow::{Context, Result};
 use rotelyx_transport::endpoint::{presets, Connection, RecvStream, SendStream};
-use rotelyx_transport::{Endpoint, EndpointAddr, EndpointId, RelayMap, RelayMode, RelayUrl, SecretKey};
+use rotelyx_transport::{
+    Endpoint, EndpointAddr, EndpointId, NetReportConfig, RelayMap, RelayMode, RelayUrl, SecretKey,
+};
 
 use crate::config::{NetConfig, RelayPolicy};
 use crate::path::MetadataResistantSelector;
@@ -60,6 +62,8 @@ impl NetEndpoint {
             // is deliberate belt-and-braces, so that adding a preset later
             // cannot silently reintroduce a publisher.
             .clear_address_lookup()
+            // No captive portal probe. See `net_report` at the end of this file.
+            .net_report_config(net_report())
             .bind()
             .await
             .context("binding transport endpoint")?;
@@ -248,7 +252,9 @@ impl NetEndpoint {
     /// own: the endpoint may still be reachable directly, and a caller that has
     /// nothing better to offer may publish anyway and say so.
     pub async fn online(&self, within: std::time::Duration) -> bool {
-        tokio::time::timeout(within, self.inner.online()).await.is_ok()
+        tokio::time::timeout(within, self.inner.online())
+            .await
+            .is_ok()
     }
 
     /// Accept a connection without waiting for a stream on it.
@@ -358,4 +364,43 @@ impl NetSession {
         let _ = self.finish().await;
         self.conn.close(0u32.into(), b"bye");
     }
+}
+
+/// What the endpoint is allowed to measure about the network it is on.
+///
+/// # The captive portal probe is off, and that is the whole reason this exists
+///
+/// Upstream's default runs one on the first report after an endpoint binds. It
+/// picks a relay from the map, sends a **cleartext HTTP** `GET /generate_204`
+/// to port 80 of that host, and reads the answer to decide whether a hotel wifi
+/// is in the way.
+///
+/// Three things are wrong with that here.
+///
+/// **It names us in the clear.** The request carries a distinctive header, and
+/// renaming that header from upstream's spelling to ours made it worse rather
+/// than better: before, it blended into the traffic of a much larger project;
+/// after, it announces which software this is to anyone on the path. A
+/// messenger whose claim is metadata resistance should not open by saying its
+/// own name unencrypted.
+///
+/// **It never worked.** The two halves of that exchange live in two crates and
+/// the rename moved only one, so the answer never matched and every fresh
+/// endpoint concluded it was behind a captive portal. That is fixed, and fixing
+/// it is what made the point above visible.
+///
+/// **And it buys little.** Knowing about a captive portal makes the endpoint
+/// retry relays more eagerly. Rotelyx already copes with a relay it cannot
+/// reach.
+///
+/// `https_probes` stays on: it measures relay latency over a connection that is
+/// encrypted and that the endpoint was going to open anyway.
+fn net_report() -> NetReportConfig {
+    // Built by mutation rather than as a struct expression, which the type's
+    // `non_exhaustive` refuses across a crate boundary. That is also what keeps
+    // this honest: a field added upstream arrives at its own default instead of
+    // silently taking one from here.
+    let mut config = NetReportConfig::default();
+    config.captive_portal_check = false;
+    config
 }

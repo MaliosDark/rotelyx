@@ -239,7 +239,9 @@ impl HybridCiphertext {
         if bytes.len() != CIPHERTEXT_LEN {
             return Err(HybridError::BadCiphertext);
         }
-        Ok(Self(Ciphertext::try_from(bytes).map_err(|_| HybridError::BadCiphertext)?))
+        Ok(Self(
+            Ciphertext::try_from(bytes).map_err(|_| HybridError::BadCiphertext)?,
+        ))
     }
 }
 
@@ -343,7 +345,8 @@ impl PqBinding {
     /// produce the same bytes by moving a boundary.
     fn to_aad(&self) -> Vec<u8> {
         const LABEL: &[u8] = b"rotelyx pq group secret wrap v2";
-        let mut out = Vec::with_capacity(LABEL.len() + self.group_id.len() + self.recipient.len() + 32);
+        let mut out =
+            Vec::with_capacity(LABEL.len() + self.group_id.len() + self.recipient.len() + 32);
         out.extend_from_slice(&(LABEL.len() as u64).to_be_bytes());
         out.extend_from_slice(LABEL);
         out.extend_from_slice(&(self.group_id.len() as u64).to_be_bytes());
@@ -452,8 +455,8 @@ impl PqSecret {
         let mut nonce = [0u8; 24];
         getrandom::fill(&mut nonce).map_err(|_| HybridError::Entropy)?;
 
-        let cipher = XChaCha20Poly1305::new_from_slice(&key[..])
-            .map_err(|_| HybridError::BadCiphertext)?;
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(&key[..]).map_err(|_| HybridError::BadCiphertext)?;
 
         let aad = binding.to_aad();
         let sealed = cipher
@@ -538,8 +541,8 @@ impl HybridSecretKey {
             .sender()
             .try_into()
             .map_err(|_| HybridError::WrongSender)?;
-        let key = ed25519_dalek::VerifyingKey::from_bytes(&key)
-            .map_err(|_| HybridError::WrongSender)?;
+        let key =
+            ed25519_dalek::VerifyingKey::from_bytes(&key).map_err(|_| HybridError::WrongSender)?;
         let signature: [u8; 64] = wrapped
             .signature
             .as_slice()
@@ -570,8 +573,8 @@ impl HybridSecretKey {
         let kem_secret = self.decapsulate(&wrapped.kem);
         let key = wrapping_key(&kem_secret);
 
-        let cipher = XChaCha20Poly1305::new_from_slice(&key[..])
-            .map_err(|_| HybridError::BadCiphertext)?;
+        let cipher =
+            XChaCha20Poly1305::new_from_slice(&key[..]).map_err(|_| HybridError::BadCiphertext)?;
 
         let aad = binding.to_aad();
         let plain = cipher
@@ -661,7 +664,10 @@ mod tests {
         // public key can still produce bytes, but not ones that open under the
         // binding the recipient will use.
         let strangers = PqSecret::generate()
-            .wrap_for(&public, &PqBinding::new(b"whatever-they-choose", 7, mine, A_SENDER))
+            .wrap_for(
+                &public,
+                &PqBinding::new(b"whatever-they-choose", 7, mine, A_SENDER),
+            )
             .expect("wrap");
         assert!(
             recipient.unwrap_pq(&strangers, &here).is_err(),
@@ -696,7 +702,11 @@ mod tests {
         let (_sk, pk) = HybridKem::generate();
         let (ct1, s1) = pk.encapsulate();
         let (ct2, s2) = pk.encapsulate();
-        assert_ne!(ct1.to_bytes(), ct2.to_bytes(), "ciphertexts must not repeat");
+        assert_ne!(
+            ct1.to_bytes(),
+            ct2.to_bytes(),
+            "ciphertexts must not repeat"
+        );
         assert!(!s1.ct_eq(&s2), "shared secrets must not repeat");
     }
 

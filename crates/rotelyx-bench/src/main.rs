@@ -102,7 +102,7 @@ fn bench_few(label: &str, runs: usize, mut body: impl FnMut()) {
     report(label, &mut taken, Some(runs));
 }
 
-fn report(label: &str, taken: &mut Vec<Duration>, runs: Option<usize>) {
+fn report(label: &str, taken: &mut [Duration], runs: Option<usize>) {
     if taken.len() < MINIMUM {
         println!("  {label:<42} too few samples to say");
         return;
@@ -182,8 +182,14 @@ fn messages() {
     }
     report("decrypt, 2 bytes", &mut taken, None);
 
-    size("ciphertext for 2 bytes", group.send(&alice, short).expect("send").len());
-    size("ciphertext for 4 KiB", group.send(&alice, &long).expect("send").len());
+    size(
+        "ciphertext for 2 bytes",
+        group.send(&alice, short).expect("send").len(),
+    );
+    size(
+        "ciphertext for 4 KiB",
+        group.send(&alice, &long).expect("send").len(),
+    );
 }
 
 fn groups() {
@@ -196,7 +202,9 @@ fn groups() {
         for i in 1..members {
             let joiner = Member::new(format!("member-{i}").as_bytes()).expect("identity");
             let bundle = joiner.key_package().expect("kp");
-            let (commit, _welcome) = group.invite(&founder, bundle.key_package()).expect("invite");
+            let (commit, _welcome) = group
+                .invite(&founder, bundle.key_package())
+                .expect("invite");
             last = commit.len();
         }
 
@@ -235,7 +243,10 @@ fn mailbox() {
     size("sealed payload for 900 bytes", sealed.len());
     size(
         "envelope on the wire",
-        Envelope::seal(tag, &sealed).expect("envelope").to_bytes().len(),
+        Envelope::seal(tag, &sealed)
+            .expect("envelope")
+            .to_bytes()
+            .len(),
     );
 }
 
@@ -243,8 +254,7 @@ fn media() {
     let call = CallBinding::new(b"a-benchmark-call").expect("binding");
     let keys = SenderKeys::derive(&[3u8; 32], 1, &call);
     let mut sender = Sender::new(keys).expect("sender");
-    let mut receiver =
-        Receiver::new(SenderKeys::derive(&[3u8; 32], 1, &call)).expect("receiver");
+    let mut receiver = Receiver::new(SenderKeys::derive(&[3u8; 32], 1, &call)).expect("receiver");
 
     // Sixty bytes is one frame at 24 kbit/s, which is what a call sends.
     let frame = vec![0xA5u8; 60];
