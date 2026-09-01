@@ -40,7 +40,8 @@ docs/
   THREAT-MODEL.md              what Rotelyx defends against, and what it does not
   PQ-COMPOSITION.md            the novel construction, specified for review
   rotelyx-architecture.html    the architecture assessment
-TODO.md                        what is done, what is next, what is blocked
+TODO.md                        what is left: open, blocked, undecided
+docs/DONE.md                   what was done, and what each thing cost
 ```
 
 ---

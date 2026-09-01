@@ -5641,6 +5641,7 @@ dependencies = [
  "rotelyx-capability",
  "rotelyx-mailbox",
  "rotelyx-wasm",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",

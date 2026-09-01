@@ -288,18 +288,32 @@ pub extern "C" fn rotelyx_net_accept(endpoint: i64, timeout_ms: i32) -> i64 {
         held.endpoint.transport().clone()
     };
 
+    // `accept_media`, not `accept`.
+    //
+    // `NetEndpoint::accept` waits for a bidirectional stream after the
+    // handshake, which is right for anything that talks in frames and wrong
+    // for the one thing this ABI accepts for: a call, whose audio is
+    // datagrams and never opens a stream. A stream is invisible until it
+    // carries a byte, so the dialler opened one, wrote nothing into it,
+    // reported itself connected and began sending audio, while this side
+    // waited for a byte that was never coming and reported that nobody had
+    // arrived.
+    //
+    // The reason is written out at `NetEndpoint::accept_media`, which exists
+    // for exactly this and which the desktop has used since it hit the same
+    // wall. This ABI was never moved across. Measured on two phones: the
+    // dialling side reported a connection 3.2 s in, and the accepting side
+    // was still polling and gave up 10 s later having seen nothing.
     let waited = runtime().block_on(async {
         tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms.max(0) as u64),
-            transport.accept(),
+            transport.accept_media(),
         )
         .await
     });
 
     let Ok(accepted) = waited else { return 0 };
-    let Ok(session) = accepted else { return -4 };
-
-    let (_send, _recv, conn) = session.split();
+    let Ok((_peer, conn)) = accepted else { return -4 };
 
     let mut h = lock();
     let handle = h.next;

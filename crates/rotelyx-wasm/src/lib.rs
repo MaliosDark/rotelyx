@@ -581,11 +581,42 @@ impl Session {
         // parser would accept, which in Spanish is most messages.
         let value = match outcome {
             rotelyx_crypto::Received::Message {
-                bytes: plaintext, ..
+                sender,
+                bytes: plaintext,
             } => {
                 let text = String::from_utf8(plaintext)
                     .map_err(|_| Error::new("decrypted payload is not valid UTF-8"))?;
-                serde_json::json!({ "kind": "message", "text": text })
+
+                // Who MLS authenticated as the author, resolved to the label
+                // that member joined under.
+                //
+                // # Why this field exists
+                //
+                // The crypto layer has carried the sending leaf since it was
+                // written, with a comment saying an application that cannot say
+                // who spoke cannot do the group cases. This layer dropped it,
+                // and the phone then attributed every read receipt in a group to
+                // one name, the conversation's own, so the second receipt looked
+                // like a repeat of the first and a group of three never showed a
+                // read tick at all.
+                //
+                // Absent rather than empty when the sender is unknown or has
+                // since been removed, so a caller can tell "nobody knows" from
+                // "somebody with no name".
+                let from = sender
+                    .and_then(|leaf| {
+                        self.conversation
+                            .as_ref()
+                            .and_then(|group| group.participant_at(leaf))
+                    })
+                    .map(|p| String::from_utf8_lossy(&p.identity).into_owned());
+
+                match from {
+                    Some(from) => {
+                        serde_json::json!({ "kind": "message", "text": text, "from": from })
+                    }
+                    None => serde_json::json!({ "kind": "message", "text": text }),
+                }
             }
             rotelyx_crypto::Received::MembershipChanged(change) => {
                 let added: Vec<String> = change.added.iter().map(|p| short(&p.identity)).collect();

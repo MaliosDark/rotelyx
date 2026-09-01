@@ -775,6 +775,28 @@ impl Conversation {
             .collect()
     }
 
+    /// Who sits at a leaf, by the index [`Received::Message`] carries.
+    ///
+    /// # Why the index does not leave this crate
+    ///
+    /// `receive` authenticates a sending leaf and reports it as a
+    /// `LeafNodeIndex`, which is an MLS tree position and means nothing to an
+    /// application. Every caller that wants it wants the same thing: a name to
+    /// put beside a message or a receipt. So the resolution happens here, where
+    /// the tree is, rather than in three clients that would each have to learn
+    /// what a leaf is.
+    ///
+    /// `None` when the index is not in the group, which happens when a member
+    /// has been removed since a message was sent.
+    pub fn participant_at(&self, index: openmls::prelude::LeafNodeIndex) -> Option<Participant> {
+        self.group.members().find(|m| m.index == index).map(|m| {
+            Participant::from_credential(
+                m.credential.serialized_content(),
+                m.signature_key.as_slice().to_vec(),
+            )
+        })
+    }
+
     /// Invite a member, returning the commit to broadcast and the welcome to
     /// deliver to the invitee.
     pub fn invite(

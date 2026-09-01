@@ -35,6 +35,9 @@ data-encoding.workspace = true
 # A token is a bearer credential: it is not left in freed memory.
 zeroize = { workspace = true }
 
+# For the round-trip example, which needs a process-level provider for wss.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 data-encoding.workspace = true

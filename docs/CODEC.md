@@ -131,9 +131,18 @@ offline on a codec that could not have carried a conversation. Factored through
 an FFT the transform is 540 times faster and, because an FFT accumulates in a
 tree rather than a line of 1920 additions, 775 times more accurate.
 
-**Nobody has listened to it.** Every number above is objective, codec quality is
-not, and no comparison with any other codec may be made until a listening test
-has happened. Opus's decade of advantage is precisely that tuning.
+**No usable listening test has been run.** Every number above is objective,
+codec quality is not, and no comparison with any other codec may be made until
+one has. Opus's decade of advantage is precisely that tuning.
+
+Two sessions were run, on 20 and 21 August 2026, and both are in `docs/` as
+`listening-2026-08-20.txt` and `listening-2026-08-21.txt`. Neither produced
+usable data and the reason is in the numbers: every clip scored between 87 and
+100, including the 3.5 kHz version that is there to mark the bottom of the
+scale. The rating scale was never shown to either listener, so the sessions
+measured willingness to give high marks. They are kept rather than deleted,
+because a test that failed this way is the easiest one to run again by
+accident.
 
 ### Running the listening test
 

@@ -93,7 +93,9 @@ engine does it and the C ABI does not expose it, so the client most likely to be
 lost or stolen is the one that cannot revoke a device. Calls, between two
 desktops and between a phone and a desktop.
 
-What is not here is in [`TODO.md`](TODO.md), which is the ledger rather than the
+What is not here is in [`TODO.md`](TODO.md), which lists only what is left.
+What was done, and what each thing cost, is in [`docs/DONE.md`](docs/DONE.md).
+`TODO.md` is the ledger rather than the
 plan: an item moves to done when a test proves it, not when the code exists.
 
 ### Meeting somebody who is not on your network
@@ -176,9 +178,12 @@ Both sides need `--relay <url>` for a call, and it will tell you so if you
 forget. That is not a network preference: over a direct path the other side
 sees your address, so a call refuses to start on one.
 
-**A phone and a desktop have called each other**, and audio crosses in both
-directions. Four faults stood between an open call and a voice and not one of
-them was visible from either end: a QUIC stream opened and never written to, so
+**Two phones on different networks have called each other**, and audio crosses
+in both directions: four minutes, relayed, nothing dropped, over mobile
+hardware nine years apart. A phone and a desktop did it first.
+
+Four faults stood between an open call and a voice on the desktop path and not
+one of them was visible from either end: a QUIC stream opened and never written to, so
 the far side sat in `accept_bi` while this side sent audio into a connection
 nobody was reading; an address published before the relay had finished
 registering the endpoint behind it; two clients speaking different frame
@@ -195,8 +200,39 @@ reported a healthy call. `CallEnded` carries the concealed count now, and the
 tools that found it stay in the tree: `ROTELYX_CALL_DUMP` records what the
 speaker played, `ROTELYX_FRAME_DUMP` records each payload as it arrived, and
 `decode_a_recording` replays them away from the call. The measure is the
-correlation between neighbouring samples, which is above 0.9 for a voice and
-near zero for broadband noise. Before the last fix, 0.156. After it, 0.992.
+correlation between neighbouring samples, which is near zero for broadband
+noise. Before the last fix, 0.156. After it, 0.992.
+
+**It is not, on its own, a measure of a voice**, and reading it as one cost a
+day. Correlation between neighbouring samples is a measure of smoothness: a
+hum at a hundred hertz scores 0.99 and so does speech, and a phone playing the
+first while somebody insisted it was not the second was believed for hours
+because the number agreed with the wrong one of them. Where a voice has to be
+told from a smooth signal that is not one, the measure is where the energy
+sits: speech spreads across 300 to 3000 hertz and a rumble does not, which is
+four passes of the same arithmetic the touch tone test already uses.
+
+The phone path then produced its own set, on 1 September 2026, and they share
+a shape with the four above and with each other: **every one of them was
+covered by a test that could not fail.**
+
+The answering side sent an identifier and no address, so the caller dialled an
+empty string; nothing tested the handshake because the controller is a
+singleton and had no unit test at all. The phone accepted calls with `accept`
+rather than `accept_media`, so it waited for a stream a call never opens: the
+desktop had hit that and `accept_media` was written for it, and the mobile ABI
+was never moved across, because every test of that ABI opens a stream. Decoded
+frames were handed to the speaker with `unawaited`, and a platform channel does
+not promise order, so speech arrived shuffled while touch tones, whose frames
+are all alike, came through clean. And the call mode was set only by the
+speaker button, so a call nobody pressed it on ran with the platform's voice
+route unselected and captured about -70 dBFS while somebody spoke into it.
+
+The audio round trip through that ABI was tested, and its signal was a held 440
+hertz tone, which is the one thing that survives every fault above; its
+assertion was that energy came out, which noise satisfies. `a_voice_survives_the_round_trip`
+speaks instead and measures how much of what went in can be found in what came
+out.
 
 Measured between two processes through a relay: 991 frames sent and 944
 received in twenty seconds, 79 ms of audio queued, nothing dropped. Two desktop
@@ -207,18 +243,20 @@ needs the live relay and mailbox, so it is marked `#[ignore]` and run
 deliberately, and a test that needs the network is one people learn to re-run
 when it is slow rather than believe when it fails.
 
-Two people have also listened to the codec, and what that found is written down
-in [`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) and
-[`docs/listening-2026-08-21.txt`](docs/listening-2026-08-21.txt). What it found
-was a broken test: the rating scale was never shown to either listener, so there
-is no perceptual measurement of this codec yet, only the objective one.
+Two people have also listened to the codec, and the sessions are in
+[`docs/listening-2026-08-20.txt`](docs/listening-2026-08-20.txt) and
+[`docs/listening-2026-08-21.txt`](docs/listening-2026-08-21.txt). They measure
+the method rather than the codec: the rating scale was never shown to either
+listener, and every clip scored between 87 and 100 including the 3.5 kHz
+version that marks the bottom of the range. The perceptual number is therefore
+still to come, and the objective ones above stand on their own.
 
-**Echo cancellation has now met a real room and the room won.** The canceller
-measures the path from your speaker to your microphone and subtracts what it
-predicts, which took 38.3 dB off a room this project generated. Played through
-this machine's own speaker into its own microphone it removed **-0.0 dB**. A
-residual suppressor written after seeing that brings it to 1.3 dB run
-continuously, or 6.1 dB when something keeps the filter aligned.
+**Echo cancellation has been measured in a real room, and the room sets the
+ceiling.** The canceller measures the path from your speaker to your microphone
+and subtracts what it predicts, which took 38.3 dB off a room this project
+generated. Played through this machine's own speaker into its own microphone it
+removed **-0.0 dB**. A residual suppressor written after seeing that brings it
+to 1.3 dB run continuously, or 6.1 dB when something keeps the filter aligned.
 
 The echo arrives 21.8 dB above that room's own noise, so the ceiling on any
 canceller there is about 21.8 dB and what is missing is not tuning. The two
@@ -363,19 +401,20 @@ to access. Those claims are false for every system that has ever made them.
 What it claims is bounded, written down and testable. See
 [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md).
 
-The code has been through five rounds of internal review at Ideoa Labs. Every
-finding raised against code written here is fixed, and each fix has a test that
-fails without it: the arc ran from a critical nonce reuse across calls, through
-a mailbox that leaked which group an envelope belonged to and a post-quantum
-wrap anybody could forge, down to nothing open. The dependency advisories that
-remain are argued unreachable one by one, and `scripts/audit-dependencies`
-fails the build if any of them is ever ignored without that argument written
-down.
+The code has been through five rounds of internal review at Ideoa Labs and one
+external audit. Every finding raised against code written here is fixed, and
+each fix has a test that fails without it: the arc ran from a critical nonce
+reuse across calls, through a mailbox that leaked which group an envelope
+belonged to and a post-quantum wrap anybody could forge, down to nothing open.
+The external audit, in August 2026, found two more of the same shape, and both
+are closed with regression tests. The dependency advisories that remain are
+argued unreachable one by one, and `scripts/audit-dependencies` fails the build
+if any of them is ever ignored without that argument written down.
 
-Nobody outside the project has reviewed it, and there is no budget to commission
-that. So it is an open invitation: the models are in [`formal/`](formal/), the
-harness in [`security/ct/`](security/ct/), the advisory arguments in
-[`docs/UPSTREAM.md`](docs/UPSTREAM.md). Whatever you find is yours to publish.
+One audit is one audit, so the invitation stands: the models are in
+[`formal/`](formal/), the harness in [`security/ct/`](security/ct/), the
+advisory arguments in [`docs/UPSTREAM.md`](docs/UPSTREAM.md). Whatever you find
+is yours to publish.
 
 **Found something? Email <contact@ideoa.co.uk>, and please do not open a public
 issue.** A public issue is a working exploit handed to everybody reading this
