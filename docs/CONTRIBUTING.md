@@ -87,7 +87,7 @@ sudo mkswap /swapfile2 && sudo swapon /swapfile2
 ## Before you push
 
 ```sh
-cargo test --workspace          # 597
+cargo test --workspace          # 678
 cargo clippy --workspace        # no errors
 cargo deny check                # bans, licences, sources, advisories
 cargo audit                     # the same advisories, the other tool
@@ -127,7 +127,7 @@ section from the ledger breaks the build, which is checked by deleting one.
 cargo test --workspace
 ```
 
-**597 tests**, and 11 more in the issuer crate that is not published here. The
+**678 tests** in the workspace and 544 more under `crates/net/`, 1,222 in all, plus 11 in the issuer crate that is not published here. The
 distribution matters more than the count:
 
 | Suite | Tests | What it proves |
@@ -158,7 +158,7 @@ Hostile input tests run in six crates and account for 36 of the total: every
 truncation, every byte value at every position, extension, and arbitrary input,
 against every parser reachable before anything has been authenticated.
 
-### Two defects found by an audit, not by testing
+### Two defects found by review, not by testing
 
 Both passed every test in this repository, and both are the same shape: a
 property that holds whenever the thing is done **once**.

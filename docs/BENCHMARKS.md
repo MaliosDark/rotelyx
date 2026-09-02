@@ -97,7 +97,7 @@ listed as open in `TODO.md` and has not been done.
 
 ```sh
 git clone <this repository> && cd rotelyx
-cargo test --workspace              # 597 tests
+cargo test --workspace              # 678 tests
 cargo test -p rotelyx-crypto --test pq_vectors   # the published vectors
 scripts/benchmarks                  # this file
 scripts/audit-dependencies          # every advisory, reviewed

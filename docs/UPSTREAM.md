@@ -192,7 +192,7 @@ There is a second reason, and it is the stronger one. In `hpke-rs`, both calls t
 `DhKem25519`, and that arm goes to `dh_kem::derive_key_pair` and never reaches
 SHAKE at all. Rotelyx's post-quantum material is X-Wing composed separately and
 injected at the pre-shared-key input, not an MLS ciphersuite, so nothing moves
-this to the ML-KEM arm. An external audit raised these two in August 2026 and
+this to the ML-KEM arm. A review round raised these two in August 2026 and
 explicitly left reachability open; this is the answer.
 
 0208 is in `libcrux_sha3::avx2::x4::shake256`, used by ML-KEM and ML-DSA. Neither

@@ -10,20 +10,22 @@
 
 No accounts, no phone numbers, and no servers belonging to anybody else.
 
-[![tests](https://img.shields.io/badge/tests-597%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
+[![tests](https://img.shields.io/badge/tests-1%2C222%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-6a31ee?style=flat-square)](#try-it)
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-8b8b8b?style=flat-square)](#licence)
-[![status](https://img.shields.io/badge/internally%20audited-5%20rounds-C8A76B?style=flat-square)](#security-status)
+[![status](https://img.shields.io/badge/reviewed-6%20rounds%20internal-C8A76B?style=flat-square)](#security-status)
 
 
 </div>
 
 ---
 
-> [!CAUTION]
-> **Rotelyx is internally audited and pre release.** Five rounds closed every
-> finding raised against code written here. No outside review yet, so the gates
-> in [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) section 5 are not all met.
+> [!NOTE]
+> **Six rounds of review inside Ideoa Labs, by hand and with tooling.** Every
+> finding raised against code written here is closed, each with a test that
+> fails without it. No independent audit has been commissioned: the gates in
+> [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) section 5 are not all met, and
+> they say which.
 
 ---
 
@@ -134,6 +136,8 @@ an envelope deposited at 10:59 is still collected at 11:00.
 You need [Rust](https://rustup.rs) 1.85 or newer.
 
 ```sh
+git clone https://github.com/MaliosDark/rotelyx
+cd rotelyx
 cargo build -p rotelyx-cli
 R=./target/debug/rotelyx-cli
 ```
@@ -238,7 +242,7 @@ Measured between two processes through a relay: 991 frames sent and 944
 received in twenty seconds, 79 ms of audio queued, nothing dropped. Two desktop
 windows calling each other over the production relay is a test rather than a
 story, `two_desktops_calling`, and it asserts on what arrives rather than on
-what was sent, because sending proves nothing. It is not one of the 597: it
+what was sent, because sending proves nothing. It is not one of the 1,222: it
 needs the live relay and mailbox, so it is marked `#[ignore]` and run
 deliberately, and a test that needs the network is one people learn to re-run
 when it is slow rather than believe when it fails.
@@ -401,17 +405,17 @@ to access. Those claims are false for every system that has ever made them.
 What it claims is bounded, written down and testable. See
 [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md).
 
-The code has been through five rounds of internal review at Ideoa Labs and one
-external audit. Every finding raised against code written here is fixed, and
+The code has been through six rounds of review at Ideoa Labs, by hand and with
+tooling. Every finding raised against code written here is fixed, and
 each fix has a test that fails without it: the arc ran from a critical nonce
 reuse across calls, through a mailbox that leaked which group an envelope
 belonged to and a post-quantum wrap anybody could forge, down to nothing open.
-The external audit, in August 2026, found two more of the same shape, and both
-are closed with regression tests. The dependency advisories that remain are
+The last round, in August 2026, found two more of the same shape, and both are
+closed with regression tests. The dependency advisories that remain are
 argued unreachable one by one, and `scripts/audit-dependencies` fails the build
 if any of them is ever ignored without that argument written down.
 
-One audit is one audit, so the invitation stands: the models are in
+No independent audit has been commissioned, so the invitation stands: the models are in
 [`formal/`](formal/), the harness in [`security/ct/`](security/ct/), the
 advisory arguments in [`docs/UPSTREAM.md`](docs/UPSTREAM.md). Whatever you find
 is yours to publish.
