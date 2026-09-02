@@ -168,26 +168,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # One at a time, and no retry.
+      #
+      # These build NATs out of real sockets on real ports, and run in
+      # parallel they contend for them: `hard_nat_to_holepunchable_server`
+      # and `switch_uplink::switch_client_dual_to_v6` failed together, passed
+      # alone, and the whole suite passes serially, 46 of 46.
+      #
+      # The retry that used to be here ran the suite twice and accepted a pass
+      # on either. It said in its own message that a suite needing the retry
+      # every time is telling you something, and it had been telling us that
+      # while the second run rolled the same dice again. A test that contends
+      # with its neighbour is not flaky, it is serialisable, and this is what
+      # that costs: 146 s instead of 73.
       - run: |
-          set -o pipefail
-          run() {
-            cargo test --manifest-path crates/net/rotelyx-transport/Cargo.toml \
-              --test patchbay
-          }
-          if run; then
-            echo "nat traversal: passed first time"
-          else
-            echo "nat traversal: first attempt failed, running once more" >&2
-            if run; then
-              echo "nat traversal: passed on the second attempt" >&2
-              echo "That is the simulation, not the code, unless it keeps" >&2
-              echo "happening: a suite that needs the retry every time is a" >&2
-              echo "suite that is telling you something." >&2
-            else
-              echo "nat traversal: failed twice, which is not the simulation" >&2
-              exit 1
-            fi
-          fi
+          cargo test --manifest-path crates/net/rotelyx-transport/Cargo.toml \
+            --test patchbay -- --test-threads=1
 
   chain:
     # The only thing that covers a relay dialling another relay. Everything

@@ -313,7 +313,9 @@ pub extern "C" fn rotelyx_net_accept(endpoint: i64, timeout_ms: i32) -> i64 {
     });
 
     let Ok(accepted) = waited else { return 0 };
-    let Ok((_peer, conn)) = accepted else { return -4 };
+    let Ok((_peer, conn)) = accepted else {
+        return -4;
+    };
 
     let mut h = lock();
     let handle = h.next;

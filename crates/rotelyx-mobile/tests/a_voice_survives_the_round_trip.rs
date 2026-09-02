@@ -195,11 +195,7 @@ fn through(keep: usize, of: usize) -> (Vec<i16>, Vec<i16>) {
         }
 
         let got = unsafe {
-            rotelyx_mobile::rotelyx_call_playback(
-                listening,
-                out.as_mut_ptr(),
-                out.len() as i32,
-            )
+            rotelyx_mobile::rotelyx_call_playback(listening, out.as_mut_ptr(), out.len() as i32)
         };
         assert_eq!(got, SAMPLES as i32, "playback must always fill the buffer");
         heard.extend_from_slice(&out);

@@ -100,7 +100,10 @@ pub fn Ok<T>(value: T) -> Result<T, AnyError> {
 /// Ensures we can use the macros within this crate as well.
 extern crate self as rotelyx_error;
 
-/// Ensure the code in the README compiles
-#[cfg(doctest)]
-#[doc = include_str!("../README.md")]
-mod readme_doctest {}
+// The upstream crate carried a README here and compiled its examples as a
+// doctest. The README was not vendored with the code, so the include named a
+// file that does not exist and `cargo test` on this crate failed to build its
+// doctests: 18 tests passing and then `couldn't read src/../README.md`. No
+// other crate under `crates/net/` ships one either. Removed rather than
+// written, because a README invented now would be a file whose only purpose is
+// to satisfy a check that was verifying somebody else's examples.

@@ -77,7 +77,9 @@ fn nothing_else_in_this_abi_accepts_for_a_call() {
 
     // The ABI has one accept. If a second appears, it has the same decision to
     // make and this test should be told about it rather than pass silently.
-    let accepts = source.matches("pub extern \"C\" fn rotelyx_net_accept").count();
+    let accepts = source
+        .matches("pub extern \"C\" fn rotelyx_net_accept")
+        .count();
     assert_eq!(
         accepts, 1,
         "There is now more than one accept in this ABI. Each one has to choose \
