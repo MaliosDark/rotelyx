@@ -437,6 +437,10 @@ stays under the licences they granted: MIT, Apache-2.0 and BSD-3-Clause. See
 
 Rotelyx is a trademark. The licence covers the code, not the name.
 
+Sending code? [`CLA.md`](CLA.md), which is one comment on your pull request.
+You keep your copyright; the project keeps the ability to ship the same code
+in a store, which AGPL-3.0 alone cannot do.
+
 <div align="center">
 
 

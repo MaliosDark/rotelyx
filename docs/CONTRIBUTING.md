@@ -6,6 +6,23 @@
 > mailbox at the time. [`SECURITY.md`](../SECURITY.md) says what to include and
 > what happens next.
 
+## Sending code
+
+Comment on your pull request with **"I have read CLA.md and I accept it."**,
+once, for all of your contributions. [`CLA.md`](../CLA.md) is short and the
+reason it exists is in its first paragraph: Rotelyx is AGPL-3.0-only and is
+also published in stores whose terms that licence cannot satisfy alone, so the
+project has to be able to grant itself an exception, and it can only do that
+over code it holds the rights to. One contribution without it and that stops
+being possible for the whole of it.
+
+You keep your copyright and your name in the history, and your contribution
+stays published under the AGPL like everything else.
+
+If you would rather not, say so and open an issue describing the change
+instead. An idea is not a contribution in the copyright sense and there is
+nothing to sign for one.
+
 ## Repository layout
 
 ```
