@@ -71,9 +71,10 @@ hole-punch.
   hold no session state.
 - **Not defended:** **A2.** The relay sees which address sends to which. This
   is the single largest metadata exposure in the system and it is inherent to
-  relayed transport *as it is built today*. Mitigations: prefer direct paths and
-  surface relay use in the UI; support self-hosted relays; rotate relay
-  selection.
+  relayed transport *as it is built today*. A direct path would remove it and
+  replace it with something worse: the peer learning this device's address. So
+  every client selects `RelayOnly` and this stays. Mitigations: what the relay
+  sees are keys and not people; self-hosted relays; rotate relay selection.
 - **The one design that changes this is built, and off unless asked for.**
   Chaining two relays leaves the first knowing who sends and the second knowing
   who receives, so no single operator holds the pair. `docs/RELAY-CHAINING.md`

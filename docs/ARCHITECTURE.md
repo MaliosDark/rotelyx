@@ -128,7 +128,7 @@ separation is a design rule, not an accident.
 | **L3** | `rotelyx-mailbox` | Operator sees no sender, no recipient identity, no plaintext, no message length | Timing correlation between deposit and collection. Deletion is enforced by code, not by protocol |
 | **L2** | `rotelyx-crypto` | Forward secrecy, post compromise security, membership visible in commits, post quantum epoch keys | Anything once a device is compromised |
 | **L1** | `rotelyx-core` | Peer authenticated by public key, admission control before any group crypto, length capped framing | That the key belongs to the person you mean. That is what safety numbers are for |
-| **L0** | `rotelyx-net` | Messages prefer a direct path over a relayed one at any latency; calls are relayed always, never direct; no third party infrastructure contacted | That a direct path always exists. Roughly 10 to 20 percent of NAT pairs cannot be punched |
+| **L0** | `rotelyx-net` | Every shipped client selects `RelayOnly`: nothing is carried on a path that would hand the peer this device's address. No third party infrastructure contacted | That the relay is reachable. It is the one thing every conversation needs, which is why it is publishable and self-hostable |
 
 ---
 

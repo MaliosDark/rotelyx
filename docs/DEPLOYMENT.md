@@ -351,7 +351,7 @@ serve an expired envelope.
 | Which tags one connection asks for together | **Yes** |
 | Connecting addresses | **Yes** |
 
-The last three are ADV-3 and the reason a native client prefers a direct path.
+The last three are ADV-3, and the reason every client refuses a direct path: taking one would trade this exposure for handing the peer an address instead.
 
 ---
 
