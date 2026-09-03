@@ -63,6 +63,74 @@ const MAILBOX_TAG_KEY_LABEL: &str = "rotelyx mailbox tag key v1";
 /// tag key can never be the same bytes even at the same epoch.
 const MEDIA_KEY_LABEL: &str = "rotelyx media base key v1";
 
+/// Bytes of sequence number carried at the front of every application
+/// plaintext. See [`Conversation::send`] for why it is there and not elsewhere.
+const SEQ_LEN: usize = 8;
+
+/// How far behind the highest accepted sequence number a message may still be.
+///
+/// OpenMLS lets a message through up to `out_of_order_tolerance` generations
+/// behind what it has already decrypted, five by default, so anything reaching
+/// this check is at most five behind. Sixty four is the width of the mask in
+/// [`SeenFrom`] and is picked so this is never the binding constraint: if that
+/// tolerance is ever raised, it has room to move before messages the library
+/// accepts start being refused here.
+const REPLAY_WINDOW: u64 = 64;
+
+/// Which sequence numbers one sender has already spent at one epoch.
+///
+/// A high water mark plus a mask of the window below it, which is the ordinary
+/// anti-replay window: out-of-order delivery still gets through, a repeat does
+/// not. `high` of zero means nothing has been accepted yet, which is why
+/// sequence numbers start at one.
+#[derive(Default, Clone, Copy)]
+struct SeenFrom {
+    high: u64,
+    window: u64,
+}
+
+impl SeenFrom {
+    /// Record `seq`, or report that it must not be accepted.
+    fn admit(&mut self, seq: u64) -> bool {
+        if seq > self.high {
+            let step = seq - self.high;
+            // The old high water mark becomes a seen entry `step - 1` places
+            // back once the frame moves up to `seq`.
+            self.window = match step {
+                s if s > REPLAY_WINDOW => 0,
+                s if s == REPLAY_WINDOW => 1u64 << (REPLAY_WINDOW - 1),
+                s => (self.window << s) | (1u64 << (s - 1)),
+            };
+            self.high = seq;
+            return true;
+        }
+
+        let back = self.high - seq;
+        if back == 0 || back > REPLAY_WINDOW {
+            return false;
+        }
+        let bit = 1u64 << (back - 1);
+        if self.window & bit != 0 {
+            return false;
+        }
+        self.window |= bit;
+        true
+    }
+}
+
+/// Split an application plaintext into its sequence number and its body.
+fn split_sequence(bytes: &[u8]) -> Result<(u64, Vec<u8>), GroupError> {
+    if bytes.len() < SEQ_LEN {
+        return Err(GroupError::NoSequence);
+    }
+    let (head, body) = bytes.split_at(SEQ_LEN);
+    let seq = u64::from_be_bytes(
+        head.try_into()
+            .expect("SEQ_LEN bytes, length checked just above"),
+    );
+    Ok((seq, body.to_vec()))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum GroupError {
     #[error("mls: {0}")]
@@ -94,6 +162,15 @@ pub enum GroupError {
          Call `rekey_after_restore` and send the commit before sending messages"
     )]
     RestoredAndNotRekeyed,
+
+    #[error("an application message carried no sequence number")]
+    NoSequence,
+
+    #[error("sequence {seq} from that sender was already spent at this epoch")]
+    SequenceSpent { seq: u64 },
+
+    #[error("an application message did not name a member as its sender")]
+    UnattributedMessage,
 }
 
 fn mls<E: std::fmt::Display>(e: E) -> GroupError {
@@ -589,6 +666,15 @@ pub struct Conversation {
     /// If two copies rekey at once, MLS resolves it the way it resolves any two
     /// commits at one epoch: one merges and the other has to process it.
     restored_needs_rekey: bool,
+
+    /// The epoch the two sequence fields below belong to.
+    seq_epoch: u64,
+
+    /// Sequence number this copy last sent at `seq_epoch`.
+    sent_seq: u64,
+
+    /// Sequence numbers already spent by each sender at `seq_epoch`.
+    seen_seq: std::collections::HashMap<openmls::prelude::LeafNodeIndex, SeenFrom>,
 }
 
 impl std::fmt::Debug for Conversation {
@@ -621,10 +707,35 @@ impl Conversation {
         )
         .map_err(mls)?;
 
-        Ok(Self {
+        Ok(Self::opened(group, false))
+    }
+
+    /// Wrap a group with empty sequence state at whatever epoch it is on.
+    fn opened(group: MlsGroup, restored_needs_rekey: bool) -> Self {
+        let seq_epoch = group.epoch().as_u64();
+        Self {
             group,
-            restored_needs_rekey: false,
-        })
+            restored_needs_rekey,
+            seq_epoch,
+            sent_seq: 0,
+            seen_seq: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Drop sequence state belonging to an epoch that has passed.
+    ///
+    /// Safe to do rather than a hole, because a sequence number is only ever
+    /// compared against others from the same epoch, and the epoch is already
+    /// part of what MLS signs. A number lifted from a spent epoch cannot be
+    /// presented at this one: the signature covers the epoch and would not
+    /// verify.
+    fn sync_seq_epoch(&mut self) {
+        let now = self.group.epoch().as_u64();
+        if now != self.seq_epoch {
+            self.seq_epoch = now;
+            self.sent_seq = 0;
+            self.seen_seq.clear();
+        }
     }
 
     pub fn epoch(&self) -> u64 {
@@ -889,12 +1000,9 @@ impl Conversation {
         MlsGroup::load(member.provider.storage(), &id)
             .map_err(|e| GroupError::Mls(format!("{e:?}")))
             .map(|maybe| {
-                maybe.map(|group| Self {
-                    group,
-                    // Reopened from storage: this copy may be behind whatever
-                    // else has been using this state.
-                    restored_needs_rekey: true,
-                })
+                // Reopened from storage: this copy may be behind whatever
+                // else has been using this state.
+                maybe.map(|group| Self::opened(group, true))
             })
     }
 
@@ -936,10 +1044,7 @@ impl Conversation {
                 .map_err(mls)?;
 
         let group = staged.into_group(&joiner.provider).map_err(mls)?;
-        Ok(Self {
-            group,
-            restored_needs_rekey: false,
-        })
+        Ok(Self::opened(group, false))
     }
 
     /// Mix hybrid post-quantum material into the conversation's key schedule.
@@ -1036,14 +1141,53 @@ impl Conversation {
     }
 
     /// Encrypt an application message.
+    ///
+    /// # The sequence number in front of the plaintext
+    ///
+    /// Every member of an MLS group holds the material every other member's
+    /// messages are encrypted under: that is how the group works. A member can
+    /// therefore take somebody else's message, decrypt it, and re-encrypt the
+    /// signed content under the key and nonce of a different generation. The
+    /// signature still verifies, because RFC 9420 does not put the generation
+    /// into what is signed. So a member of the group can make another member's
+    /// message arrive a second time, or arrive in a different order, without
+    /// being able to change a word of it. Jaeger and Kumar set this out in
+    /// "Analyzing Group Chat Encryption in MLS, Session, Signal, and Matrix"
+    /// (EUROCRYPT 2025) and took it to the MLS working group.
+    ///
+    /// The fix they give is to bind the position into what gets signed. This
+    /// counter is that binding: it rides inside the content, which the
+    /// signature covers, so a member who moves a message to another generation
+    /// leaves the counter saying where it came from, and
+    /// [`Conversation::receive`] refuses it.
+    ///
+    /// # Why not in the associated data
+    ///
+    /// Because that is the obvious place and it is the wrong one here. The
+    /// paper suggests it, and it is signed, but `authenticated_data` sits in
+    /// `PrivateMessage` in the clear, next to `encrypted_sender_data`. MLS
+    /// encrypts the sender data precisely so the leaf index and generation do
+    /// not travel in the open. Putting a per-sender counter in the associated
+    /// data would publish, in cleartext, the value that encryption exists to
+    /// hide, and on a relayed session the relay reads the MLS ciphertext with
+    /// nothing around it. The content is signed and encrypted; the associated
+    /// data is only signed. So it goes in the content.
     pub fn send(&mut self, sender: &Member, plaintext: &[u8]) -> Result<Vec<u8>, GroupError> {
         // Refuse loudly rather than send into a hole. See
         // `Conversation::restored_needs_rekey`.
         if self.restored_needs_rekey {
             return Err(GroupError::RestoredAndNotRekeyed);
         }
+
+        self.sync_seq_epoch();
+        self.sent_seq += 1;
+
+        let mut framed = Vec::with_capacity(SEQ_LEN + plaintext.len());
+        framed.extend_from_slice(&self.sent_seq.to_be_bytes());
+        framed.extend_from_slice(plaintext);
+
         self.group
-            .create_message(&sender.provider, &sender.signer, plaintext)
+            .create_message(&sender.provider, &sender.signer, &framed)
             .map_err(mls)?
             .tls_serialize_detached()
             .map_err(codec)
@@ -1055,6 +1199,10 @@ impl Conversation {
     /// return `None`: the caller must treat that as "the group changed" and
     /// re-read [`Conversation::member_count`].
     pub fn receive(&mut self, receiver: &Member, bytes: &[u8]) -> Result<Received, GroupError> {
+        // Before anything is admitted, so state from a spent epoch is never
+        // compared against a number from this one.
+        self.sync_seq_epoch();
+
         let msg = MlsMessageIn::tls_deserialize(&mut &bytes[..]).map_err(codec)?;
         let protocol = msg.try_into_protocol_message().map_err(mls)?;
 
@@ -1079,10 +1227,23 @@ impl Conversation {
         };
 
         match processed.into_content() {
-            ProcessedMessageContent::ApplicationMessage(app) => Ok(Received::Message {
-                sender,
-                bytes: app.into_bytes(),
-            }),
+            ProcessedMessageContent::ApplicationMessage(app) => {
+                let (seq, body) = split_sequence(&app.into_bytes())?;
+
+                // An application message always names a member; a group with an
+                // unattributable one cannot sequence it, and refusing is the
+                // only answer that does not leave a hole.
+                let index = sender.ok_or(GroupError::UnattributedMessage)?;
+
+                if !self.seen_seq.entry(index).or_default().admit(seq) {
+                    return Err(GroupError::SequenceSpent { seq });
+                }
+
+                Ok(Received::Message {
+                    sender,
+                    bytes: body,
+                })
+            }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
                 // Read the roster on both sides of the merge rather than asking
                 // the staged commit what it contains. A commit can add, remove
@@ -1239,6 +1400,165 @@ mod tests {
         assert!(
             b.receive(&bob, &ct).is_err(),
             "the same ciphertext was accepted a second time"
+        );
+    }
+
+    /// A member of the group cannot move another member's message.
+    ///
+    /// # The hole this closes
+    ///
+    /// The test above covers somebody outside the group resending bytes they
+    /// captured. It does not cover somebody inside it, and inside is where MLS
+    /// is weaker than it reads: every member holds the material every other
+    /// member's messages are encrypted under, so a member can decrypt one,
+    /// re-encrypt the signed content at a different generation, and have the
+    /// signature still verify. RFC 9420 leaves the generation out of what is
+    /// signed. Jaeger and Kumar, EUROCRYPT 2025.
+    ///
+    /// Mounting that end to end needs the library's internals, which are not
+    /// reachable from here, so what is pinned is the thing that stops it: the
+    /// sequence number rides inside the signed content, and this window is what
+    /// decides. If the window stops refusing, so does the defence.
+    #[test]
+    fn a_sequence_number_already_spent_is_refused() {
+        let mut seen = SeenFrom::default();
+
+        assert!(seen.admit(1), "the first message was refused");
+        assert!(seen.admit(2), "the second message was refused");
+        assert!(!seen.admit(2), "a repeat was admitted");
+        assert!(!seen.admit(1), "an older repeat was admitted");
+        assert!(seen.admit(3), "the conversation could not continue");
+    }
+
+    /// Out-of-order delivery is normal and must still arrive.
+    ///
+    /// A window that refused everything but the next number would drop real
+    /// messages: OpenMLS itself accepts up to five generations behind what it
+    /// has already decrypted, so anything reaching this check may be behind by
+    /// that much and still be honest.
+    #[test]
+    fn a_message_that_arrives_out_of_order_is_still_admitted() {
+        let mut seen = SeenFrom::default();
+
+        assert!(seen.admit(5), "the first to arrive was refused");
+        assert!(seen.admit(2), "a message behind the newest was refused");
+        assert!(seen.admit(4), "a message behind the newest was refused");
+        assert!(seen.admit(1), "a message behind the newest was refused");
+        assert!(!seen.admit(4), "a repeat behind the newest was admitted");
+        assert!(seen.admit(6), "the conversation could not continue");
+    }
+
+    /// Past the window there is no memory left, so nothing is admitted.
+    ///
+    /// The window is finite, and a number older than it cannot be told apart
+    /// from one already seen. Refusing is the only answer that does not leave
+    /// a replay through the back of the window.
+    #[test]
+    fn a_sequence_number_older_than_the_window_is_refused() {
+        let mut seen = SeenFrom::default();
+
+        assert!(seen.admit(1), "the first message was refused");
+        assert!(seen.admit(REPLAY_WINDOW + 1), "a jump forward was refused");
+
+        assert!(
+            !seen.admit(1),
+            "a number that has fallen out of the window was admitted"
+        );
+        assert!(
+            seen.admit(REPLAY_WINDOW),
+            "a number still inside the window was refused"
+        );
+    }
+
+    /// The sequence number must not be readable by whoever carries the message.
+    ///
+    /// # Why this is worth a test
+    ///
+    /// The obvious place for it is `authenticated_data`, which is signed, and
+    /// which the EUROCRYPT paper suggests. But that field travels in the clear
+    /// inside `PrivateMessage`, beside `encrypted_sender_data`. MLS encrypts
+    /// the sender data so that the leaf index and the generation do not travel
+    /// in the open, and a per-sender counter in the clear gives back the same
+    /// thing: a relay carrying the ciphertext could count each member's
+    /// messages and link them across an epoch without holding a key.
+    ///
+    /// So it goes in the content, which is signed and encrypted both. This
+    /// asserts the number is not on the wire, and it is the test that fails if
+    /// somebody later moves it to the associated data for tidiness.
+    #[test]
+    fn the_sequence_number_does_not_travel_in_the_clear() {
+        let (alice, bob, mut a, mut b) = conversation_of_two();
+
+        let mut ct = Vec::new();
+        for _ in 0..300 {
+            ct = a.send(&alice, b"ordinary traffic").expect("send");
+        }
+
+        let needle = 300u64.to_be_bytes();
+        assert!(
+            !ct.windows(needle.len()).any(|w| w == needle),
+            "the sequence number was readable in the ciphertext"
+        );
+
+        // And it is still doing its job: the receiver reads it and hands back
+        // the message without it.
+        b.receive(&bob, &ct).expect("delivery");
+    }
+
+    /// The sequence rides under the message and never surfaces in it.
+    ///
+    /// A prefix on the plaintext is only safe if every reader has it stripped.
+    /// One path that handed back the raw bytes would show eight bytes of
+    /// counter as part of somebody's message. Three members rather than two
+    /// because that is the smallest group where a sender is told apart from a
+    /// receiver, so it is the smallest case that exercises the per-sender
+    /// bookkeeping at all.
+    #[test]
+    fn a_group_of_three_reads_what_was_written() {
+        let (alice, bob) = pair();
+        let carol = Member::new(b"carol").expect("carol");
+
+        let mut a = Conversation::create(&alice).expect("create");
+
+        let bob_kp = bob.key_package().expect("bob key package");
+        let (_first_commit, welcome_b) =
+            a.invite(&alice, bob_kp.key_package()).expect("invite bob");
+        let mut b = Conversation::join(&bob, &welcome_b, &a.ratchet_tree().expect("tree"))
+            .expect("bob joins");
+
+        let carol_kp = carol.key_package().expect("carol key package");
+        let (second_commit, welcome_c) = a
+            .invite(&alice, carol_kp.key_package())
+            .expect("invite carol");
+
+        // Bob has to hear Carol arrive, or he stays an epoch behind and reads
+        // nothing that follows.
+        b.receive(&bob, &second_commit)
+            .expect("bob applies the commit");
+
+        let mut c = Conversation::join(&carol, &welcome_c, &a.ratchet_tree().expect("tree"))
+            .expect("carol joins");
+
+        for text in [b"first ".as_slice(), b"second", b"third "] {
+            let ct = a.send(&alice, text).expect("send");
+
+            assert_eq!(
+                b.receive(&bob, &ct).expect("bob reads it").message(),
+                Some(text.to_vec()),
+                "the body did not survive the round trip to bob"
+            );
+            assert_eq!(
+                c.receive(&carol, &ct).expect("carol reads it").message(),
+                Some(text.to_vec()),
+                "the body did not survive the round trip to carol"
+            );
+        }
+
+        let repeat = a.send(&alice, b"once").expect("send");
+        b.receive(&bob, &repeat).expect("the first delivery");
+        assert!(
+            b.receive(&bob, &repeat).is_err(),
+            "a member accepted the same message twice"
         );
     }
 
