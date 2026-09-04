@@ -110,6 +110,44 @@ unsafe fn text(p: *const c_char) -> Option<String> {
     CStr::from_ptr(p).to_str().ok().map(str::to_owned)
 }
 
+/// Why the last `rotelyx_net_open` returned -4.
+///
+/// A single slot rather than one per call: `open` happens once per device and
+/// the value is read immediately after a failure.
+fn last_error() -> std::sync::MutexGuard<'static, Option<String>> {
+    static LAST: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+        std::sync::OnceLock::new();
+    match LAST.get_or_init(|| std::sync::Mutex::new(None)).lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    }
+}
+
+/// The reason the last endpoint failed to bind, or nothing.
+///
+/// Returns 0 and writes the string, -1 when `out` is null, -2 when there is no
+/// reason to give. The caller frees the string with `rotelyx_string_free`.
+///
+/// # Safety
+///
+/// `out` must be a valid pointer to a `*mut c_char`.
+#[no_mangle]
+pub unsafe extern "C" fn rotelyx_net_last_error(out: *mut *mut c_char) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let Some(reason) = last_error().clone() else {
+        return -2;
+    };
+    match std::ffi::CString::new(reason) {
+        Ok(s) => {
+            *out = s.into_raw();
+            0
+        }
+        Err(_) => -2,
+    }
+}
+
 /// Bind an endpoint that can be reached through a relay.
 ///
 /// `secret` is thirty two bytes of identity, hex encoded. It is this device's
@@ -146,8 +184,19 @@ pub unsafe extern "C" fn rotelyx_net_open(secret_hex: *const c_char, relay: *con
     let identity = Identity::from_bytes(bytes);
     let config = NetConfig::new(RelayPolicy::SelfHosted(vec![url]), PathPolicy::RelayOnly);
 
-    let bound = runtime().block_on(RotelyxEndpoint::bind(&identity, config.clone()));
-    let Ok(endpoint) = bound else { return -4 };
+    let endpoint = match runtime().block_on(RotelyxEndpoint::bind(&identity, config.clone())) {
+        Ok(endpoint) => endpoint,
+        Err(e) => {
+            // Kept rather than dropped. `bind` says what went wrong and this
+            // used to answer -4 for every one of them, so a phone that could
+            // not open a socket reported the same number as a phone whose
+            // relay was unreachable, and the only diagnosis available on a
+            // device was "calls do not work". `rotelyx_net_last_error` hands
+            // it back.
+            *last_error() = Some(format!("{e:#}"));
+            return -4;
+        }
+    };
 
     let mut h = lock();
     let handle = h.next;
