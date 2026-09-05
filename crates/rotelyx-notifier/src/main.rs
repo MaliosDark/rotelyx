@@ -239,6 +239,12 @@ async fn wake(
         }
     }
 
+    // A count, and never which. An operator needs to know this is working at
+    // all, and the difference between "one of four" and "which of four" is the
+    // difference between an operational number and the thing decoys exist to
+    // withhold.
+    info!(asked = request.tickets.len(), woken, "handled a wake");
+
     (StatusCode::OK, Json(WakeReply { woken }))
 }
 
