@@ -223,7 +223,7 @@ struct Args {
     #[arg(long)]
     apns_sandbox: bool,
 
-    /// How often to wake every registered device, in seconds.
+    /// How often to wake every registered device, in seconds. Zero is never.
     ///
     /// The one number that trades latency against battery, and deliberately not
     /// tunable per device: a device woken on its own schedule is a device
@@ -1568,7 +1568,18 @@ fn router_stateful(
     // arrival would mean this server knows which device to wake for which tag,
     // and would mean Apple learns the timing of every conversation. A fixed
     // rhythm identical for every device carries neither. See `wake.rs`.
-    if server.pushers.any() {
+    //
+    // # Zero turns it off, and that is now a reasonable way to run
+    //
+    // The schedule was the only way to wake a phone when it was written. It is
+    // not any more: a device that leaves a wake ticket is woken the moment
+    // something arrives for it, and a deployment where every client does that
+    // has no use for a rhythm that wakes everybody hourly to find nothing.
+    //
+    // What it costs to switch off is a client that leaves no ticket. Those get
+    // nothing at all, rather than something eventually, so the number is only
+    // zero once an operator knows there are none.
+    if server.pushers.any() && !server.wake_every.is_zero() {
         let waker = Arc::clone(&server);
         let every = server.wake_every;
         tokio::spawn(async move {
@@ -1785,12 +1796,21 @@ async fn main() -> Result<()> {
                 args.apns_topic.clone(),
                 args.apns_sandbox,
             )?;
-            info!(
+            if args.wake_every == 0 {
+                info!(
+                    topic = %args.apns_topic,
+                    sandbox = args.apns_sandbox,
+                    "waking iPhones when something arrives for them, and never on a schedule. \
+                     A client that leaves no wake ticket is not woken at all"
+                );
+            } else {
+                info!(
                 topic = %args.apns_topic,
                 sandbox = args.apns_sandbox,
                 every_seconds = args.wake_every,
                 "waking iPhones on a schedule, through Apple and nobody else"
             );
+            }
             Some(Arc::new(apns))
         }
         (None, None, None) => {
@@ -1898,7 +1918,14 @@ async fn main() -> Result<()> {
     let waking = Waking {
         registry,
         pushers,
-        every: Duration::from_secs(args.wake_every.max(60)),
+        // Zero is off. Anything else is floored, because a sweep every few
+        // seconds is a battery bill nobody asked for and almost certainly a
+        // typo.
+        every: Duration::from_secs(if args.wake_every == 0 {
+            0
+        } else {
+            args.wake_every.max(60)
+        }),
         state: wake_state,
         notifier,
     };
