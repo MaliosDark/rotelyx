@@ -16,6 +16,8 @@ path = "src/main.rs"
 rotelyx-status.workspace = true
 rotelyx-mailbox = { path = "../rotelyx-mailbox" }
 rotelyx-capability = { path = "../rotelyx-capability" }
+rotelyx-push = { path = "../rotelyx-push" }
+rotelyx-crypto = { path = "../rotelyx-crypto" }
 
 axum = { version = "0.8", features = ["ws"] }
 tokio.workspace = true
@@ -59,7 +61,7 @@ ring = "0.17"
 # this mailbox talks to Apple.
 sha2.workspace = true
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
-reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "json"] }
 
 [dev-dependencies]
 # The minter, for the paid-tier tests. Test-only: see rotelyx-capability/src/testing.rs.

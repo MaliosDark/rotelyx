@@ -459,6 +459,72 @@ exposed **directly**, bypassing nginx.
 
 ---
 
+## 4b. The notifier, for waking a phone at once
+
+Optional, and the mailbox runs without it exactly as it did before: every
+registered device is woken on the schedule, which costs the interval in
+latency and asks for no second server.
+
+Run it and a device that has left a **wake ticket** is woken the moment
+something arrives for it, and the mailbox still never learns which device that
+is. `docs/THREAT-MODEL.md` ADV-4 has why that is possible; the short version is
+that the mailbox holds a sealed blob it cannot read and the notifier is never
+told which tag it came from.
+
+### It is meant to be somebody else's machine
+
+The separation is the whole point, and running both on one host gives most of
+it away: an operator holding both can watch a ticket leave beside the deposit
+that caused it and pair the two as it happens. What that does **not** give
+them is a table to read afterwards, which is why it is still worth running
+this way, and why the honest thing to publish is which of the two you did.
+
+Nothing in the software can check where it runs.
+
+### Running it
+
+```bash
+rotelyx-notifier \
+  --bind 127.0.0.1:3342 \
+  --key /var/lib/rotelyx/notifier.key \
+  --caller-secret /etc/rotelyx/notifier-caller \
+  --apns-key /etc/rotelyx/apns.p8 \
+  --apns-key-id KEYID00000 \
+  --apns-team-id TEAMID0000 \
+  --apns-topic com.example.app
+```
+
+The key is made on first run and printed. **Its public half goes in the client
+build**, and a client pins it rather than asking: a client that asked the
+mailbox which key to seal to would be asking the one party the sealing protects
+it from.
+
+`--caller-secret` is a shared file the mailbox presents. Not a privacy control:
+a ticket says nothing to whoever holds it and buys nothing but a wake carrying
+no content. It is there so only the mailbox can spend somebody's battery.
+
+Bind it to loopback when both run on one host, and put it behind TLS otherwise.
+It has no business being reachable from anywhere but the mailbox.
+
+### Pointing the mailbox at it
+
+```
+rotelyx-mailbox-server ... \
+  --notifier http://127.0.0.1:3342 \
+  --notifier-secret /etc/rotelyx/notifier-caller \
+  --notifier-decoys 3
+```
+
+`--notifier-decoys` is how many tickets from unrelated tags ride along with
+each real one. The notifier cannot tell which of them mattered, which is what
+stops it learning one device's timing. **Zero turns that off and hands it the
+timing**; the cost of a higher number is a wake on that many other devices per
+deposit, and every wake is contentless, so what it costs them is a look at the
+mailbox.
+
+Keep the schedule running as well. A client older than this feature leaves no
+ticket, and the schedule is the only thing that wakes it.
+
 ## 5. Verification
 
 After any nginx change:

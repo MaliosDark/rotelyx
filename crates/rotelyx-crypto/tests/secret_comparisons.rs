@@ -43,6 +43,10 @@ const CLASSIFIED: &[(&str, &str)] = &[
         "a device's revocation secret against the stored hash",
     ),
     (
+        "crates/rotelyx-notifier/src/main.rs",
+        "the caller secret the mailbox presents against the one this holds",
+    ),
+    (
         "crates/rotelyx-mailbox/src/envelope.rs",
         "a tag against the one a recipient expected",
     ),

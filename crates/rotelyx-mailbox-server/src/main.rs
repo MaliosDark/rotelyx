@@ -32,6 +32,7 @@
 
 mod limits;
 mod vault;
+mod tickets;
 mod wake;
 
 use std::collections::HashSet;
@@ -64,6 +65,7 @@ use tracing::{debug, info, warn};
 
 use rotelyx_mailbox::{Envelope, Mailbox, Tag, DEFAULT_TTL_SECONDS};
 
+use rotelyx_crypto::SEALED_TICKET_LEN;
 use rotelyx_capability as access;
 use rotelyx_capability::{Capability, Charge, Meter, Tier, Verifier};
 
@@ -95,6 +97,14 @@ const MAX_TAGS_PER_SUBSCRIPTION: usize = 64;
 /// which is past what a client with a few conversations across a few epochs
 /// needs, and it is a number rather than an absence.
 const MAX_TAGS_PER_CONNECTION: usize = 256;
+
+/// The longest string that could be a wake ticket, base64.
+///
+/// A ticket is a fixed size by construction, so this is a bound on what could
+/// possibly be one rather than a guess. The server cannot check any more than
+/// this: it has no key, and a ticket it could recognise would be one it could
+/// tell apart from another, which is what must not be possible.
+const MAX_TICKET_CHARS: usize = 4 * SEALED_TICKET_LEN.div_ceil(3) + 4;
 
 /// The largest bucket is 8 MiB; the rest is envelope overhead and base64
 /// expansion, with room to spare.
@@ -181,6 +191,29 @@ struct Args {
     /// The application's bundle identifier, which Apple calls the topic.
     #[arg(long, value_name = "BUNDLE", default_value = "com.rotelyx.app")]
     apns_topic: String,
+
+    /// A notifier to wake devices through, the moment something arrives.
+    ///
+    /// Without it this server wakes every registered device on the schedule
+    /// and nothing is immediate. With it, a device that has left a ticket is
+    /// woken at once, and this server still never learns which device that is.
+    #[arg(long, value_name = "URL")]
+    notifier: Option<String>,
+
+    /// The shared secret the notifier expects.
+    #[arg(long, value_name = "PATH", requires = "notifier")]
+    notifier_secret: Option<PathBuf>,
+
+    /// How many unrelated tickets ride along with each real one.
+    ///
+    /// The notifier cannot tell which of them mattered, so this is what stops
+    /// it learning the timing of one device by watching what it is asked to
+    /// push. Costs a wake on that many other devices per deposit, and every
+    /// wake is contentless, so what it costs them is a look at the mailbox.
+    ///
+    /// Zero turns decoys off and hands the notifier the timing.
+    #[arg(long, default_value_t = 3, requires = "notifier")]
+    notifier_decoys: usize,
 
     /// Use Apple's sandbox rather than production.
     ///
@@ -311,6 +344,16 @@ struct Counters {
 
 struct Server {
     mailbox: Mutex<Mailbox>,
+
+    /// Sealed wake tickets, by tag. See `tickets`.
+    tickets: Mutex<tickets::Tickets>,
+
+    /// Where to send a wake the moment something arrives, if anywhere.
+    ///
+    /// Absent is the old behaviour and a valid way to run: every device is
+    /// woken on the schedule instead, which costs latency and asks nothing of
+    /// a second server.
+    notifier: Option<Arc<Notifier>>,
 
     /// Announces that a tag has something waiting.
     ///
@@ -556,11 +599,42 @@ enum Request {
     /// act.
     #[serde(rename = "revokeWake")]
     RevokeWake { secret: String },
+
+    /// Leave sealed wake tickets, one per tag.
+    ///
+    /// A ticket is a push token sealed to the notifier's key. This server
+    /// cannot read one, and because every ticket is freshly randomised it
+    /// cannot tell that two of them belong to one device. That is what makes
+    /// an immediate wake possible without the row that would undo the tag
+    /// rotation: `registerWake` gives this server a stable token, and this
+    /// gives it something it can hand on and never open.
+    ///
+    /// Each entry is a tag and its own ticket. Sending one ticket for several
+    /// tags would put the same bytes in several rows, which is the identifier
+    /// this exists to avoid.
+    #[serde(rename = "leaveTickets")]
+    LeaveTickets { tickets: Vec<TagTicket> },
     // There is no `Fanout`. One request that named every recipient of a group
     // message handed the operator the whole set in a single frame, and no
     // client ever sent one: both seal per recipient and deposit each envelope
     // separately. Removed rather than repaired. See the note where its handler
     // was.
+}
+
+/// The notifier this server hands tickets to.
+struct Notifier {
+    url: String,
+    secret: Option<String>,
+    /// How many tickets from unrelated tags ride along with a real one.
+    decoys: usize,
+    client: reqwest::Client,
+}
+
+/// One tag and the ticket left under it.
+#[derive(Deserialize)]
+struct TagTicket {
+    tag: String,
+    ticket: String,
 }
 
 /// Sent by the server.
@@ -576,6 +650,14 @@ enum Reply {
 
     /// The deposit was stored.
     Stored,
+
+    /// How many tickets were taken.
+    ///
+    /// A count and not a list, for the same reason the notifier answers with
+    /// one: naming which was refused would say something about the device
+    /// behind it.
+    #[serde(rename = "ticketsLeft")]
+    TicketsLeft { taken: usize },
 
     /// The tags are no longer being listened on. `listening` is how many
     /// remain.
@@ -985,6 +1067,46 @@ async fn handle_request(
         // `max_fanout` stays in the capability limits. Tokens are signed by an
         // issuer outside this tree and changing what they carry invalidates
         // every one already minted.
+        Request::LeaveTickets { tickets } => {
+            // Bounded by the same number a subscription is, because a client
+            // leaves one ticket per tag it listens on and those are the same
+            // tags.
+            if tickets.len() > MAX_TAGS_PER_SUBSCRIPTION {
+                return Some(Reply::Error {
+                    message: format!(
+                        "at most {MAX_TAGS_PER_SUBSCRIPTION} tickets per request"
+                    ),
+                });
+            }
+
+            let now = now_seconds();
+            let mut taken = 0usize;
+            let mut store = server.tickets.lock().await;
+
+            for pair in tickets {
+                let Some(tag) = parse_tag(&pair.tag) else {
+                    return Some(Reply::Error {
+                        message: "a tag must be 64 hex characters".into(),
+                    });
+                };
+
+                // Length checked and nothing else. This server cannot tell a
+                // real ticket from noise of the right size, which is the
+                // point, so all it can do is refuse what could not be one.
+                if pair.ticket.len() > MAX_TICKET_CHARS {
+                    return Some(Reply::Error {
+                        message: "that is not a wake ticket".into(),
+                    });
+                }
+
+                if store.leave(tag, pair.ticket, now).is_ok() {
+                    taken += 1;
+                }
+            }
+
+            Some(Reply::TicketsLeft { taken })
+        }
+
         Request::Deposit { envelope } => {
             let bytes = match BASE64.decode(envelope.trim().as_bytes()) {
                 Ok(b) => b,
@@ -1048,10 +1170,93 @@ async fn handle_request(
                 from: connection,
             });
 
+            // And the immediate wake, if a notifier is configured and somebody
+            // left a ticket under this tag.
+            //
+            // Spawned rather than awaited: a deposit must not wait on another
+            // server, and a notifier that is slow or down has to cost a late
+            // wake and never a refused message. The envelope is already
+            // stored by this point, so the worst case is the schedule, which
+            // is what this server did before tickets existed.
+            notify(&server, tag).await;
+
             server.counters.deposits.fetch_add(1, Ordering::Relaxed);
             Some(Reply::Stored)
         }
     }
+}
+
+/// Ask the notifier to wake whoever left a ticket under `tag`.
+///
+/// # What is sent, and what is not
+///
+/// The tickets under that tag, and a number of others taken from tags with
+/// nothing to do with it. The notifier opens all of them and pushes all of
+/// them and cannot tell which one mattered: every wake it sends is
+/// contentless, and every device that receives one goes and looks and usually
+/// finds nothing, so a decoy and a real one are the same event at the far end
+/// and at Apple.
+///
+/// **The tag never leaves this server.** What the notifier receives is a list
+/// of sealed blobs and no indication of where any of them came from.
+///
+/// # Why this can fail quietly
+///
+/// A wake is an optimisation over the schedule, not a delivery. The envelope
+/// is stored before this is called and will be collected whenever the
+/// recipient next asks, so a notifier that is down costs latency and nothing
+/// else. Failing the deposit because a third server was unreachable would
+/// turn somebody else's outage into a message that did not send.
+async fn notify(server: &Arc<Server>, tag: Tag) {
+    let Some(notifier) = server.notifier.as_ref() else {
+        return;
+    };
+
+    let now = now_seconds();
+    let (real, decoys) = {
+        let store = server.tickets.lock().await;
+        let real = store.for_tag(&tag, now);
+        if real.is_empty() {
+            // Nobody to wake. No call, and therefore nothing said about a tag
+            // that nobody is listening on.
+            return;
+        }
+        let from = server.next_connection.load(Ordering::Relaxed) as usize;
+        let decoys = store.decoys(&tag, notifier.decoys, now, from);
+        (real, decoys)
+    };
+
+    let mut tickets = real;
+    tickets.extend(decoys);
+
+    // Shuffled, so position does not say which was real. Fisher-Yates over
+    // the OS CSPRNG: the notifier is the party this hides from and it sees
+    // only the order.
+    let mut bytes = vec![0u8; tickets.len() * 8];
+    if getrandom::fill(&mut bytes).is_ok() {
+        for i in (1..tickets.len()).rev() {
+            let mut n = [0u8; 8];
+            n.copy_from_slice(&bytes[i * 8..(i + 1) * 8]);
+            let j = (u64::from_le_bytes(n) as usize) % (i + 1);
+            tickets.swap(i, j);
+        }
+    }
+
+    let notifier = notifier.clone();
+    tokio::spawn(async move {
+        let mut request = notifier
+            .client
+            .post(format!("{}/wake", notifier.url))
+            .json(&serde_json::json!({ "tickets": tickets }));
+        if let Some(secret) = notifier.secret.as_deref() {
+            request = request.header("x-rotelyx-caller", secret);
+        }
+        match request.send().await {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => warn!(status = %r.status(), "the notifier refused a wake"),
+            Err(e) => warn!(error = %e, "could not reach the notifier"),
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,6 +1464,8 @@ struct Waking {
     pushers: Arc<wake::Pushers>,
     every: Duration,
     state: Option<(PathBuf, Zeroizing<String>)>,
+    /// Where an immediate wake goes, if anywhere. See [`Notifier`].
+    notifier: Option<Arc<Notifier>>,
 }
 
 impl Default for Waking {
@@ -1270,6 +1477,7 @@ impl Default for Waking {
             pushers: Arc::new(wake::Pushers::default()),
             every: Duration::from_secs(wake::WAKE_EVERY_DEFAULT),
             state: None,
+            notifier: None,
         }
     }
 }
@@ -1305,6 +1513,8 @@ fn router_stateful(
     let (wake, _) = broadcast::channel(1024);
     let server = Arc::new(Server {
         mailbox: Mutex::new(mailbox),
+        tickets: Mutex::new(tickets::Tickets::default()),
+        notifier: waking.notifier,
         wake,
         next_connection: AtomicU64::new(0),
         keepalive,
@@ -1644,11 +1854,47 @@ async fn main() -> Result<()> {
         None => wake::Registry::new(),
     };
 
+    // The notifier, if one was named. Built here rather than inside the deposit
+    // path so a bad URL is a refusal to start rather than a warning per
+    // message.
+    let notifier = match args.notifier.as_ref() {
+        Some(url) => {
+            let secret = match args.notifier_secret.as_ref() {
+                Some(path) => Some(
+                    std::fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?
+                        .trim()
+                        .to_owned(),
+                ),
+                None => {
+                    warn!("no --notifier-secret: the notifier will take a wake from anybody");
+                    None
+                }
+            };
+            info!(
+                url = %url,
+                decoys = args.notifier_decoys,
+                "waking through a notifier, which is told a ticket and never a tag"
+            );
+            Some(Arc::new(Notifier {
+                url: url.trim_end_matches('/').to_owned(),
+                secret,
+                decoys: args.notifier_decoys,
+                client: reqwest::Client::new(),
+            }))
+        }
+        None => {
+            info!("no --notifier: devices are woken on the schedule and nothing is immediate");
+            None
+        }
+    };
+
     let waking = Waking {
         registry,
         pushers,
         every: Duration::from_secs(args.wake_every.max(60)),
         state: wake_state,
+        notifier,
     };
 
     let (app, server) = router_stateful(
@@ -1815,6 +2061,7 @@ mod tests {
                     fcm: None,
                 }),
                 every: Duration::from_secs(300),
+                notifier: None,
                 state: None,
             },
             Vec::new(),

@@ -375,6 +375,45 @@ token is an address, not a credential: without it, anybody who learned a token
 could silence that phone. Sixty four hex characters, or omit it and accept that
 the registration cannot be revoked.
 
+### Waking at once instead of on the schedule
+
+The schedule is what the mailbox does when it has nothing better. A device that
+leaves a **wake ticket** is woken the moment something arrives for it, and the
+mailbox still never learns which device that is.
+
+A ticket is this device's push token sealed to a **notifier's** public key. The
+engine makes one:
+
+```json
+{"op": "wake.sealWakeTicket", "notifier": "<base64 public key>",
+ "kind": "apns" | "fcm", "token": "<the platform token>", "hour": 490000}
+```
+
+`hour` is hours since the epoch. The notifier refuses a ticket much older than
+that, so one taken from a mailbox stops working; the worst it buys meanwhile is
+a wake carrying nothing.
+
+The result goes under the tags this device listens on, one per tag:
+
+```json
+{"op": "leaveTickets",
+ "tickets": [{"tag": "<64 hex>", "ticket": "<base64>"}, ...]}
+```
+
+Answered with `{"op": "ticketsLeft", "taken": <n>}`.
+
+**Seal one per tag, and never reuse a string.** Two calls give different bytes
+for the same token, and that is what stops the mailbox recognising the rows as
+one device. Leaving the same ticket under several tags puts a repeated value in
+its table, which is exactly what the hourly rotation exists to prevent.
+
+**Pin the notifier key in the build.** A client that asked the mailbox which
+key to seal to would be asking the one party the sealing protects it from, and
+would be handed whichever key that party preferred.
+
+An application that does neither of these loses nothing but immediacy: the
+mailbox wakes it on the schedule as before.
+
 ### What the server does with it, and what it refuses to do
 
 It wakes **every registered device on a fixed schedule**, not the one device a

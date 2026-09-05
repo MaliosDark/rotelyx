@@ -28,10 +28,14 @@
 #![warn(missing_debug_implementations)]
 
 pub mod circuit;
+pub mod wake_ticket;
 pub mod group;
 pub mod hybrid;
 
 pub use circuit::{circuit_binding, Hop, SealedHop, SEALED_HOP_LEN};
+pub use wake_ticket::{
+    TicketKind, WakeTicket, Woken, SEALED_TICKET_LEN, TICKET_MAX_AGE_HOURS,
+};
 pub use group::{
     deserialize_key_package, serialize_key_package, Conversation, GroupError, Member, MemberState,
     MembershipChange, Participant, Received, CIPHERSUITE,

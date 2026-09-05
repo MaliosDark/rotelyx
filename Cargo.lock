@@ -5673,6 +5673,7 @@ dependencies = [
  "rotelyx-capability",
  "rotelyx-crypto",
  "rotelyx-mailbox",
+ "rotelyx-push",
  "rotelyx-status",
  "rotelyx-wasm",
  "serde",
@@ -5741,6 +5742,7 @@ dependencies = [
  "ndk-context",
  "rotelyx-codec",
  "rotelyx-core",
+ "rotelyx-crypto",
  "rotelyx-media",
  "rotelyx-net",
  "rotelyx-wasm",
@@ -5798,8 +5800,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "rotelyx-notifier"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "data-encoding",
+ "getrandom 0.4.3",
+ "reqwest",
+ "rotelyx-crypto",
+ "rotelyx-push",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zeroize",
+]
+
+[[package]]
 name = "rotelyx-path"
 version = "0.1.0"
+
+[[package]]
+name = "rotelyx-push"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "data-encoding",
+ "p256",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "rotelyx-quic"

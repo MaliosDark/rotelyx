@@ -26,6 +26,8 @@ members = [
     "crates/rotelyx-status",
     "crates/rotelyx-mailbox-client",
     "crates/rotelyx-mailbox-server",
+    "crates/rotelyx-push",
+    "crates/rotelyx-notifier",
 ]
 
 [workspace.package]

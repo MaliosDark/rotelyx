@@ -201,6 +201,40 @@ fn dispatch(req: &Value) -> Res {
             return Ok(json!(lock().sessions.remove(&handle).is_some()));
         }
 
+        // Seal a push token to the notifier, so the mailbox can ask for this
+        // device to be woken without being able to tell which device it is.
+        //
+        // Takes no session, because a ticket carries nothing about a
+        // conversation: it is a token and an hour, and the tag it will sit
+        // under is chosen by whoever leaves it. Keeping the two apart here is
+        // the same separation the two servers have.
+        //
+        // `notifier` is the notifier's public key, base64. A client pins it in
+        // its build rather than asking for it, because a key handed over by
+        // whoever is asked is a key the asker can substitute for their own.
+        "wake.sealWakeTicket" => {
+            let notifier = str_arg(req, "notifier")?;
+            let kind = str_arg(req, "kind")?;
+            let token = str_arg(req, "token")?;
+            let hour = u64_arg(req, "hour")?;
+
+            let bytes = data_encoding::BASE64
+                .decode(notifier.as_bytes())
+                .map_err(|_| "the notifier key is not base64".to_string())?;
+            let key = rotelyx_crypto::hybrid::HybridPublicKey::from_bytes(&bytes)
+                .map_err(|_| "the notifier key is not a key".to_string())?;
+
+            let kind = match kind.as_str() {
+                "apns" => rotelyx_crypto::TicketKind::Apns,
+                "fcm" => rotelyx_crypto::TicketKind::Fcm,
+                other => return Err(format!("no push service called {other}")),
+            };
+
+            let ticket = rotelyx_crypto::WakeTicket::seal(&key, kind, &token, hour)
+                .map_err(|e| format!("{e}"))?;
+            return Ok(json!(data_encoding::BASE64.encode(&ticket.to_bytes())));
+        }
+
         "key.create" => {
             let passphrase = str_arg(req, "passphrase")?;
             let key = engine(SessionKey::create(&passphrase))?;

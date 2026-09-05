@@ -1,0 +1,24 @@
+[package]
+name = "rotelyx-push"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+data-encoding.workspace = true
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+serde.workspace = true
+serde_json = "1"
+tokio.workspace = true
+tracing.workspace = true
+ring = "0.17"
+subtle.workspace = true
+sha2 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls"] }
+
+[dev-dependencies]
+# Two of these tests stand a real server up and check what is sent to it,
+# which is the only way to assert the shape of a request rather than the shape
+# of the code that builds one.
+axum = "0.8"

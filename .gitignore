@@ -32,6 +32,14 @@ security/ct/target/
 rotelyx-identity.*
 *.allow
 
+# The APNs signing key. Apple hands it over once and keeps no copy, so a
+# replacement means minting a new one and re-registering every device that had
+# a token under the old one. It signs the requests that wake somebody's phone,
+# and anybody holding it can send a notification to any device that has ever
+# installed this application.
+*.p8
+AuthKey_*
+
 # Swap files created for local testing
 /swapfile*
 

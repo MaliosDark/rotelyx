@@ -161,6 +161,35 @@ read all stored envelopes, retain them past TTL, and correlate timing.
   operator makes, not one the protocol enforces. **Design consequence:** the
   mailbox must never be the only copy, and clients must not treat mailbox
   acknowledgement as proof of deletion.
+- **Defended, and this is the part that had to be built rather than argued:**
+  waking a phone at once without holding what that would normally require.
+  Pushing to a device needs its push token, a token is stable for months, and a
+  tag rotates every hour: a mailbox storing `token -> tag` follows that token
+  across every rotation and re-links the whole sequence. So it does not store
+  one. A device seals its token to a **notifier's** key and leaves the result
+  under each tag; the mailbox holds sealed blobs it cannot read, and cannot tell
+  that two of them are one device, because each is sealed with fresh randomness
+  and no two share any bytes. On a deposit it hands the ticket on together with
+  several taken from unrelated tags, and is told back only a count.
+  The notifier opens tickets and pushes and keeps nothing at all: no registry,
+  no database, and **it is never told which tag a ticket came from, or which of
+  the ones it was handed mattered**. So the mailbox knows the tag and not the
+  device, the notifier knows the device and not the tag, and no mapping is
+  written down anywhere to be read later.
+- **What this does not defend, stated rather than left to be discovered.**
+  Running both servers is real time correlation: an operator holding both can
+  watch a ticket go out beside a deposit and pair them as it happens. That is
+  weaker than a stored table, which is why it is worth doing at all, and it is
+  the reason the two are meant to be operated apart. Nothing in the software can
+  check whether they are, exactly as with relay chaining under ADV-3.
+  The notifier and Apple both learn that some device was pushed at some moment.
+  No push scheme avoids that; the decoys are what stop it being one device's
+  timing rather than a set's, and a deployment that sets `--notifier-decoys 0`
+  gives that up.
+  Compare SimpleX, which reaches the same separation through a persistent
+  notifier identifier its notification server stores against the token, and
+  which therefore learns how many queues a device has and how often each
+  delivers. A ticket is one use and rotates with the tag it sits under.
 
 ### ADV-5: Server seizure / legal compulsion
 *Capability:* obtains everything ADV-3 and ADV-4 hold, plus future traffic,
@@ -455,6 +484,7 @@ foreign infrastructure: a promise in a document does not enforce itself.
 | `vault.rs` passphrase binding | A passphrase against the one a cached key was derived from |
 | `wake.rs` `secrets_match` | A device's revocation secret against the stored hash |
 | `store.rs` `revoke_invitation` | An invitation secret against the ones this device issued |
+| `rotelyx-notifier` caller secret | The secret the mailbox presents against the one the notifier holds |
 
 **Variable time and correct to be, because the values are public:**
 

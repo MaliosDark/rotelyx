@@ -20,6 +20,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # and its browser-only dependencies are gated to wasm32, so the same code that
 # runs in the browser runs here. Nothing in this crate reimplements protocol
 # logic, and if anything ever does, that is the bug.
+rotelyx-crypto = { path = "../rotelyx-crypto" }
 rotelyx-wasm = { path = "../rotelyx-wasm" }
 rotelyx-codec = { workspace = true }
 rotelyx-media = { path = "../rotelyx-media" }

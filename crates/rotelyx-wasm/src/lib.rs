@@ -1767,6 +1767,49 @@ impl SessionKey {
 ///
 /// The format of what goes in is entirely the caller's business. This function
 /// knows only how to seal bytes.
+/// Seal a push token to the notifier.
+///
+/// # What a ticket is for
+///
+/// A device leaves one of these under each tag it listens on, and the mailbox
+/// stores it without being able to read it. When something arrives at that
+/// tag, the mailbox hands the ticket to the notifier, which opens it and
+/// pushes. The mailbox knows the tag and not the device; the notifier knows
+/// the device and not the tag.
+///
+/// # Why one per tag, sealed separately
+///
+/// Every call produces different bytes for the same token, which is what makes
+/// the rows unlinkable. Sealing once and leaving the same string under several
+/// tags would put a repeated value in the mailbox's table, and following a
+/// repeated value across the rotation is exactly what the rotation prevents.
+///
+/// `notifier_b64` is the notifier's public key, which a client pins in its
+/// build. Asking a server for the key it should be sealed to hands that server
+/// the option of naming its own.
+#[wasm_bindgen(js_name = sealWakeTicket)]
+pub fn seal_wake_ticket(
+    notifier_b64: &str,
+    kind: &str,
+    token: &str,
+    hour: u64,
+) -> Result<String, Error> {
+    let bytes = BASE64
+        .decode(notifier_b64.as_bytes())
+        .map_err(|_| Error::new("the notifier key is not base64"))?;
+    let key = rotelyx_crypto::hybrid::HybridPublicKey::from_bytes(&bytes)
+        .map_err(|_| Error::new("the notifier key is not a key"))?;
+
+    let kind = match kind {
+        "apns" => rotelyx_crypto::TicketKind::Apns,
+        "fcm" => rotelyx_crypto::TicketKind::Fcm,
+        other => return Err(Error::new(&format!("no push service called {other}"))),
+    };
+
+    let ticket = rotelyx_crypto::WakeTicket::seal(&key, kind, token, hour).map_err(err)?;
+    Ok(BASE64.encode(&ticket.to_bytes()))
+}
+
 #[wasm_bindgen(js_name = sealBlob)]
 pub fn seal_blob(key: &SessionKey, data_b64: &str) -> Result<String, Error> {
     Ok(BASE64.encode(&seal_bytes(key, &decode(data_b64)?)?))
@@ -3318,5 +3361,59 @@ mod tests {
             e_long.len(),
             "a 2-character and a 400-character message must be indistinguishable"
         );
+    }
+}
+
+#[cfg(test)]
+mod wake_ticket_binding_tests {
+    use super::*;
+
+    const APNS: &str = "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0";
+
+    fn notifier() -> (String, rotelyx_crypto::hybrid::HybridSecretKey) {
+        let (secret, public) = rotelyx_crypto::HybridKem::generate();
+        (BASE64.encode(&public.to_bytes()), secret)
+    }
+
+    /// The binding produces something the notifier can actually open.
+    ///
+    /// Asserted across the boundary rather than inside the crypto, because
+    /// what breaks here is the encoding: a client that base64s what should be
+    /// raw, or reverses an argument, produces a ticket that seals cleanly and
+    /// opens to nothing, and nothing on the client would ever say so.
+    #[test]
+    fn a_sealed_ticket_opens_at_the_notifier() {
+        let (public_b64, secret) = notifier();
+
+        let sealed = seal_wake_ticket(&public_b64, "apns", APNS, 100).expect("seal");
+        let bytes = BASE64.decode(sealed.as_bytes()).expect("base64");
+        let ticket = rotelyx_crypto::WakeTicket::from_bytes(&bytes).expect("parse");
+
+        let opened = ticket.open(&secret, 100).expect("open");
+        assert_eq!(opened.token, APNS);
+        assert_eq!(opened.kind, rotelyx_crypto::TicketKind::Apns);
+    }
+
+    /// One device, one token, many tags, and nothing in common between them.
+    #[test]
+    fn sealing_twice_gives_nothing_to_match_on() {
+        let (public_b64, _secret) = notifier();
+
+        let one = seal_wake_ticket(&public_b64, "apns", APNS, 100).expect("seal");
+        let two = seal_wake_ticket(&public_b64, "apns", APNS, 100).expect("seal");
+
+        assert_ne!(one, two, "two tickets were the same string");
+    }
+
+    #[test]
+    fn a_key_that_is_not_one_is_refused() {
+        assert!(seal_wake_ticket("not base64", "apns", APNS, 100).is_err());
+        assert!(seal_wake_ticket(&BASE64.encode(b"too short"), "apns", APNS, 100).is_err());
+    }
+
+    #[test]
+    fn an_unknown_push_service_is_refused() {
+        let (public_b64, _) = notifier();
+        assert!(seal_wake_ticket(&public_b64, "carrier-pigeon", APNS, 100).is_err());
     }
 }
