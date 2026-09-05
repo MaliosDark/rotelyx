@@ -214,10 +214,14 @@ async fn wake(
             continue;
         };
 
+        // A ticket is the immediate path by definition, so the schedule does
+        // not enter into it. The field is what the registry sweeps on, and
+        // this device is not being swept.
         let device = Device {
             token: opened.token,
             kind: opened.kind.as_str().to_owned(),
             revoke_hash: String::new(),
+            on_schedule: false,
         };
 
         let pushed = match opened.kind {

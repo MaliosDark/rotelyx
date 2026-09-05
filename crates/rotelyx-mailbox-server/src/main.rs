@@ -530,6 +530,11 @@ fn now_seconds() -> u64 {
 // ---------------------------------------------------------------------------
 // Wire protocol
 // ---------------------------------------------------------------------------
+/// `serde` needs a function for a default, and `true` is not one.
+fn yes() -> bool {
+    true
+}
+
 
 /// Sent by the client.
 #[derive(Deserialize)]
@@ -590,6 +595,16 @@ enum Request {
         /// that phone. See [`crate::wake::Device::revoke_hash`].
         #[serde(default)]
         secret: String,
+
+        /// Whether this device wants the schedule as well as its tickets.
+        ///
+        /// Absent means yes, so a client that predates the field keeps the
+        /// behaviour it had. What saying no costs is on
+        /// [`rotelyx_push::Device::on_schedule`], and it is the caller's to
+        /// spend: a device woken only when something arrives for it has a
+        /// rhythm of its own, and the push service can see it.
+        #[serde(default = "yes")]
+        on_schedule: bool,
     },
 
     /// Stop being woken.
@@ -886,6 +901,7 @@ async fn handle_request(
             token,
             kind,
             secret,
+            on_schedule,
         } => {
             if !server.pushers.any() {
                 return Some(Reply::Error {
@@ -908,7 +924,7 @@ async fn handle_request(
                 });
             }
 
-            let device = wake::Device::registering(token, kind, &secret);
+            let device = wake::Device::choosing(token, kind, &secret, on_schedule);
             let accepted = server.wake_registry.lock().await.register(device);
 
             if !accepted {
@@ -925,7 +941,15 @@ async fn handle_request(
 
             server.save_wake().await;
             Some(Reply::WakeRegistered {
-                every_seconds: server.wake_every.as_secs(),
+                // The number this device will see rather than the server's,
+                // which for one that declined the schedule is never. A client
+                // told 300 and swept never would show a person an interval
+                // that does not happen.
+                every_seconds: if on_schedule {
+                    server.wake_every.as_secs()
+                } else {
+                    0
+                },
             })
         }
 
@@ -2185,7 +2209,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let stored = server.wake_registry.lock().await.all();
         assert_eq!(stored.len(), 1);
         let json = serde_json::to_value(&stored[0]).expect("json");
-        assert_eq!(json.as_object().expect("object").len(), 3);
+        assert_eq!(json.as_object().expect("object").len(), 4);
         assert!(json.get("tag").is_none());
     }
 

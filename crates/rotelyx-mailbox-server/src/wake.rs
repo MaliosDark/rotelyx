@@ -330,10 +330,18 @@ impl Registry {
     /// it. Waking once per row would break that with volume instead of timing:
     /// somebody holding a token could give that one device two pushes a cycle
     /// where everybody else gets one, and the push service can count.
+    /// Devices that asked for the schedule are the ones swept.
+    ///
+    /// The paragraph above is still the reason this returns one row per token,
+    /// and `Device::on_schedule` is where it stops being true of the whole
+    /// registry: a device that registered with the schedule declined is not
+    /// here, and is woken by its tickets alone. What that costs is written on
+    /// the field.
     pub fn to_wake(&self) -> Vec<Device> {
         let mut seen = std::collections::BTreeSet::new();
         self.devices
             .iter()
+            .filter(|d| d.on_schedule)
             .filter(|d| seen.insert(d.token.clone()))
             .cloned()
             .collect()
@@ -435,12 +443,51 @@ mod tests {
         assert_eq!(d.token.len(), 64);
         assert_eq!(d.kind, "apns");
 
-        // Serialised, it is three fields: where to wake, how, and what proves
-        // a revocation. If a fourth appears, somebody has to come here and say
-        // what the mailbox is now being told.
+        // Serialised, it is four fields: where to wake, how, what proves a
+        // revocation, and whether this device wants the schedule. If a fifth
+        // appears, somebody has to come here and say what the mailbox is now
+        // being told.
+        //
+        // The fourth is a preference about rhythm and not a fact about
+        // anybody's conversations: it says this device would rather be woken
+        // when something arrives than on the hour, and says nothing about what
+        // arrives, from whom, or under which tag. What it costs is on
+        // `Device::on_schedule`, and it is paid in what the push service can
+        // infer rather than in what this server stores.
         let json = serde_json::to_value(&d).unwrap();
-        assert_eq!(json.as_object().unwrap().len(), 3);
+        assert_eq!(json.as_object().unwrap().len(), 4);
         assert!(json.get("tag").is_none());
+    }
+
+    #[test]
+    fn a_device_that_declined_the_schedule_is_not_swept() {
+        let mut r = Registry::new();
+
+        let swept = Device::choosing("ab".repeat(32), "apns".into(), "a-secret", true);
+        let ticketed = Device::choosing("cd".repeat(32), "apns".into(), "b-secret", false);
+        assert!(r.register(swept.clone()));
+        assert!(r.register(ticketed.clone()));
+
+        // Both are registered, because both can be woken. Only one is on the
+        // sweep, and the other is reached by its tickets.
+        assert_eq!(r.len(), 2);
+        let woken = r.to_wake();
+        assert_eq!(woken.len(), 1);
+        assert_eq!(woken[0].token, swept.token);
+    }
+
+    #[test]
+    fn a_row_written_before_the_field_existed_is_swept() {
+        // Absent means yes, so a registry restored from a snapshot older than
+        // the choice keeps the behaviour it had rather than going quiet.
+        let old: Device = serde_json::from_value(serde_json::json!({
+            "token": "ef".repeat(32),
+            "kind": "apns",
+            "revoke_hash": "",
+        }))
+        .expect("a row from before the field");
+
+        assert!(old.on_schedule);
     }
 
     #[test]

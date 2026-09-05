@@ -87,6 +87,38 @@ pub struct Device {
     /// and is fixed by the device next registering.
     #[serde(default)]
     pub revoke_hash: String,
+
+    /// Whether this device wants the schedule as well as its tickets.
+    ///
+    /// # What choosing this costs, which the operator is not the one paying
+    ///
+    /// `Registry::to_wake` says every registered device is woken on the same
+    /// schedule on purpose, because a device woken on its own rhythm is a
+    /// device distinguishable by it. This field is that sentence made
+    /// optional, and the cost lands on whoever sets it.
+    ///
+    /// A deployment where some devices take the sweep and others do not has
+    /// two populations, and the push service can tell them apart without
+    /// reading anything: one receives pushes only when the sweep runs, the
+    /// other receives them when a message arrives. Inside the second, a
+    /// device's pushes are its correspondent's sending times, blunted only by
+    /// whatever decoys the notifier is configured to add.
+    ///
+    /// It exists because an iPhone cannot suppress a contentless wake without
+    /// an entitlement Apple grants on request, so until that arrives every
+    /// decoy is a blank notification somebody has to look at. Given a choice
+    /// between a user who turns notifications off entirely and one who accepts
+    /// a weaker guarantee knowingly, this is the second.
+    ///
+    /// Defaults to true, so a device that says nothing keeps the behaviour it
+    /// had and a snapshot written before this field restores unchanged.
+    #[serde(default = "yes")]
+    pub on_schedule: bool,
+}
+
+/// `serde` needs a function, and `true` is not one.
+fn yes() -> bool {
+    true
 }
 
 impl Device {
@@ -115,6 +147,16 @@ impl Device {
     /// Build one from what arrived on the wire, hashing the secret here so the
     /// caller cannot forget to.
     pub fn registering(token: String, kind: String, secret: &str) -> Self {
+        Self::choosing(token, kind, secret, true)
+    }
+
+    /// The same, for a device that has said whether it wants the schedule.
+    ///
+    /// Separate from [`Device::registering`] rather than a fourth argument on
+    /// it, so that every existing caller keeps the behaviour it had and the
+    /// one place that reads a client's choice is the one place that has to
+    /// name it.
+    pub fn choosing(token: String, kind: String, secret: &str, on_schedule: bool) -> Self {
         Self {
             token,
             kind,
@@ -123,6 +165,7 @@ impl Device {
             } else {
                 hash(secret)
             },
+            on_schedule,
         }
     }
 }
