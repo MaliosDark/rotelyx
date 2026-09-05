@@ -31,8 +31,8 @@
 //! envelope nobody acknowledges sits until its TTL.
 
 mod limits;
-mod vault;
 mod tickets;
+mod vault;
 mod wake;
 
 use std::collections::HashSet;
@@ -65,9 +65,9 @@ use tracing::{debug, info, warn};
 
 use rotelyx_mailbox::{Envelope, Mailbox, Tag, DEFAULT_TTL_SECONDS};
 
-use rotelyx_crypto::SEALED_TICKET_LEN;
 use rotelyx_capability as access;
 use rotelyx_capability::{Capability, Charge, Meter, Tier, Verifier};
+use rotelyx_crypto::SEALED_TICKET_LEN;
 
 /// How often expired envelopes are dropped. Expiry is also enforced on
 /// collection, so a missed sweep can never cause an expired envelope to be
@@ -534,7 +534,6 @@ fn now_seconds() -> u64 {
 fn yes() -> bool {
     true
 }
-
 
 /// Sent by the client.
 #[derive(Deserialize)]
@@ -1097,9 +1096,7 @@ async fn handle_request(
             // tags.
             if tickets.len() > MAX_TAGS_PER_SUBSCRIPTION {
                 return Some(Reply::Error {
-                    message: format!(
-                        "at most {MAX_TAGS_PER_SUBSCRIPTION} tickets per request"
-                    ),
+                    message: format!("at most {MAX_TAGS_PER_SUBSCRIPTION} tickets per request"),
                 });
             }
 
@@ -1208,7 +1205,7 @@ async fn handle_request(
             // wake and never a refused message. The envelope is already
             // stored by this point, so the worst case is the schedule, which
             // is what this server did before tickets existed.
-            notify(&server, tag).await;
+            notify(server, tag).await;
 
             server.counters.deposits.fetch_add(1, Ordering::Relaxed);
             Some(Reply::Stored)
@@ -1577,6 +1574,13 @@ fn router_stateful(
                 .expired
                 .fetch_add(dropped as u64, Ordering::Relaxed);
             let forgotten = sweeper.meter.lock().await.sweep(now_seconds() / 3600);
+
+            // Wake tickets go the same way. `Tickets::leave` prunes the tag it
+            // is writing to, which covers a device that keeps registering and
+            // misses entirely a tag nobody comes back to: those rows would sit
+            // there for as long as the process lived, unable to wake anybody,
+            // because the notifier refuses a ticket past its window.
+            sweeper.tickets.lock().await.sweep(now_seconds());
             if dropped > 0 || forgotten > 0 {
                 debug!(dropped, forgotten, "swept");
             }
@@ -1829,11 +1833,11 @@ async fn main() -> Result<()> {
                 );
             } else {
                 info!(
-                topic = %args.apns_topic,
-                sandbox = args.apns_sandbox,
-                every_seconds = args.wake_every,
-                "waking iPhones on a schedule, through Apple and nobody else"
-            );
+                    topic = %args.apns_topic,
+                    sandbox = args.apns_sandbox,
+                    every_seconds = args.wake_every,
+                    "waking iPhones on a schedule, through Apple and nobody else"
+                );
             }
             Some(Arc::new(apns))
         }

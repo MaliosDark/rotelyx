@@ -56,9 +56,13 @@ pub struct Tickets {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refused {
     /// This server is holding tickets under as many tags as it will.
+    ///
+    /// The only refusal there is. A tag that has reached [`MAX_PER_TAG`] drops
+    /// its oldest ticket rather than turning the new one away, because the
+    /// oldest is the one the notifier is closest to refusing anyway, and a
+    /// device that cannot leave a ticket is a device that waits without being
+    /// told why.
     Full,
-    /// This tag already has as many devices as it may.
-    TagFull,
 }
 
 impl Tickets {
@@ -149,6 +153,12 @@ impl Tickets {
         });
     }
 
+    /// How many tags hold at least one ticket.
+    ///
+    /// Read by the tests, which is the whole of its use: an operator asking
+    /// this would be asking how many conversations are live on the server, and
+    /// there is deliberately nowhere for that number to be reported to.
+    #[cfg(test)]
     pub fn tags(&self) -> usize {
         self.by_tag.len()
     }

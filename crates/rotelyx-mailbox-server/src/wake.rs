@@ -94,18 +94,11 @@ pub use rotelyx_push::{hash, sweep, Apns, Device, Fcm, Pushers};
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, bail, Context, Result};
-use data_encoding::BASE64URL_NOPAD;
-use p256::ecdsa::signature::Signer;
-use p256::ecdsa::{Signature, SigningKey};
-use p256::pkcs8::DecodePrivateKey;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use anyhow::{Context, Result};
+use serde::Deserialize;
 use subtle::ConstantTimeEq;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// How often a registered device is woken, when nothing says otherwise.
 ///
@@ -152,11 +145,6 @@ pub fn secret_is_long_enough(secret: &str) -> bool {
 /// registered it. A device needs one. The rest is somebody holding a token it
 /// was not given, and this is what bounds them without letting a refusal say so.
 pub const MAX_ROWS_PER_TOKEN: usize = 4;
-
-/// A push token is hex from Apple. Long enough to be one, short enough not to
-/// be a payload somebody is smuggling through.
-const TOKEN_MIN: usize = 32;
-const TOKEN_MAX: usize = 200;
 
 /// Every device this server will wake.
 ///
@@ -372,13 +360,62 @@ fn secrets_match(a: &str, b: &str) -> bool {
     a.len() == b.len() && bool::from(a.ct_eq(b))
 }
 
-
 /// Read a registry back from an encrypted snapshot.
+/// A device as it was written before `Device::on_schedule` existed.
+///
+/// Kept so a snapshot from an earlier version still opens. It is not a
+/// compatibility shim that can be deleted once "everybody has upgraded":
+/// nobody can see whether they have, because the file is on the operator's
+/// disk and the operator is whoever runs this.
+#[derive(Deserialize)]
+struct DeviceBefore {
+    token: String,
+    kind: String,
+    #[serde(default)]
+    revoke_hash: String,
+}
+
+impl From<DeviceBefore> for Device {
+    fn from(old: DeviceBefore) -> Self {
+        Self {
+            token: old.token,
+            kind: old.kind,
+            revoke_hash: old.revoke_hash,
+            // What it had before the choice existed.
+            on_schedule: true,
+        }
+    }
+}
+
 pub fn restore_from(path: &Path, passphrase: &str) -> Result<Registry> {
     match crate::vault::Vault::open(passphrase, path)? {
         Some(bytes) => {
-            let devices: Vec<Device> =
-                postcard::from_bytes(&bytes).context("decoding the wake registry")?;
+            // Read as it is written today, and failing that as it was written
+            // before `on_schedule` existed.
+            //
+            // # Why `serde(default)` is not enough here
+            //
+            // The snapshot is postcard, which is positional: there are no
+            // field names on the wire, so a reader expecting one more field
+            // than the writer produced runs off the end of the buffer. A
+            // default fills in a field that is *absent from a self-describing
+            // format*, and postcard is not one. The first deployment carrying
+            // the new field would not start, on a file it had written itself
+            // the day before, and the error would name the buffer rather than
+            // the change that caused it.
+            let devices: Vec<Device> = match postcard::from_bytes(&bytes) {
+                Ok(devices) => devices,
+                Err(_) => {
+                    let old: Vec<DeviceBefore> =
+                        postcard::from_bytes(&bytes).context("decoding the wake registry")?;
+                    warn!(
+                        devices = old.len(),
+                        "read a wake registry from before devices could decline the schedule; \
+                         every one of them keeps it"
+                    );
+                    old.into_iter().map(Device::from).collect()
+                }
+            };
             Ok(Registry::restore(devices))
         }
         None => Ok(Registry::new()),
@@ -399,19 +436,84 @@ pub fn save_to(path: &Path, passphrase: &str, registry: &Registry) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    /// A throwaway RSA key, generated for this test and used nowhere.
-    ///
+    use super::*;
 
-     /// A service account missing a field is refused when it is read, not when
-     /// The assertion is three base64url parts and says what Google requires.
-     /// What this actually sends, read off the wire by a server that is not
-    /// Google.
+    /// A registry written before a field existed still opens.
     ///
-    /// # Why this test exists
+    /// # Why this is not covered by anything else
     ///
-     /// A second push reuses the access token rather than minting another.
+    /// The snapshot is postcard, which is positional: no field names travel,
+    /// so a reader expecting one more field than the writer produced runs off
+    /// the end of the buffer. `#[serde(default)]` does not help, because a
+    /// default fills a field absent from a **self-describing** format and this
+    /// is not one.
     ///
-     /// A device registering for Android is accepted now, and was not before.
+    /// That is not theoretical. Adding `Device::on_schedule` stopped the
+    /// server starting, on a file it had written itself the day before, and
+    /// every test passed while it did: none of them opens a snapshot from an
+    /// earlier version, so the whole suite was green against a binary that
+    /// could not boot. It was found by restarting a real deployment.
+    ///
+    /// This is that missing test. The next field somebody adds fails here
+    /// rather than in production.
+    #[test]
+    fn a_registry_from_before_the_last_field_still_opens() {
+        /// Exactly what was written before `on_schedule` existed. Spelled out
+        /// rather than derived from `Device`, because a helper that followed
+        /// `Device` would change with it and stop testing anything.
+        #[derive(serde::Serialize)]
+        struct AsWrittenBefore {
+            token: String,
+            kind: String,
+            revoke_hash: String,
+        }
+
+        let dir = std::env::temp_dir().join("rotelyx-wake-oldsnapshot");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("wake");
+        let _ = std::fs::remove_file(&path);
+
+        let passphrase = "a passphrase long enough to be worth having";
+        let before = vec![
+            AsWrittenBefore {
+                token: "a".repeat(64),
+                kind: "apns".into(),
+                revoke_hash: String::new(),
+            },
+            AsWrittenBefore {
+                token: "b".repeat(64),
+                kind: "fcm".into(),
+                revoke_hash: "c".repeat(64),
+            },
+        ];
+
+        let bytes = postcard::to_allocvec(&before).expect("encode the old shape");
+        crate::vault::Vault::seal(passphrase, &path, &bytes).expect("seal");
+
+        let registry = restore_from(&path, passphrase).expect("a snapshot from before must open");
+        let devices = registry.snapshot();
+
+        assert_eq!(
+            devices.len(),
+            2,
+            "devices were lost reading an old snapshot"
+        );
+        assert_eq!(devices[0].token, "a".repeat(64));
+        assert_eq!(devices[1].kind, "fcm");
+        assert_eq!(devices[1].revoke_hash, "c".repeat(64));
+
+        // The field that did not exist takes the behaviour those devices had.
+        assert!(
+            devices.iter().all(|d| d.on_schedule),
+            "a device from before the choice existed was read as having declined it"
+        );
+    }
+
+    /// A device registering for Android is accepted now, and was not before.
+    ///
+    /// The registry takes a token and a service and checks the shape of both.
+    /// It used to refuse anything that was not APNs, which made an Android
+    /// phone a device the server would not remember.
     #[test]
     fn an_android_device_may_register() {
         let android = Device::registering("ab".repeat(32), "fcm".into(), "a-long-enough-secret");
@@ -424,11 +526,6 @@ mod tests {
         );
         assert!(!nonsense.valid(), "a service nothing calls was accepted");
     }
-
-    /// Form values are escaped, so the assertion arrives as it was signed.
-    ///
-     /// Google's word for a token that will never work again.
-     use super::*;
 
     fn device(token: &str) -> Device {
         Device::registering(token.into(), "apns".into(), "a-secret")

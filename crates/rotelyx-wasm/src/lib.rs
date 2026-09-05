@@ -1803,7 +1803,7 @@ pub fn seal_wake_ticket(
     let kind = match kind {
         "apns" => rotelyx_crypto::TicketKind::Apns,
         "fcm" => rotelyx_crypto::TicketKind::Fcm,
-        other => return Err(Error::new(&format!("no push service called {other}"))),
+        other => return Err(Error::new(format!("no push service called {other}"))),
     };
 
     let ticket = rotelyx_crypto::WakeTicket::seal(&key, kind, token, hour).map_err(err)?;
