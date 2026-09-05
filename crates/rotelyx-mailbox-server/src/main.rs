@@ -1104,6 +1104,12 @@ async fn handle_request(
                 }
             }
 
+            // A count and never a tag. An operator needs to know clients are
+            // leaving these at all, because a client that leaves none and one
+            // that leaves them under tags nobody deposits to look identical
+            // from here: both are silence.
+            info!(taken, "took wake tickets");
+
             Some(Reply::TicketsLeft { taken })
         }
 
