@@ -48,5 +48,7 @@ pub use path::MetadataResistantSelector;
 // Re-exported so nothing above this crate names the transport crate directly.
 // `rotelyx-net` is the single seam between Rotelyx and the machinery in
 // `crates/net/`, which keeps subsystem replacement to one file at a time.
-pub use rotelyx_transport::endpoint::{Connection, PathId, RecvStream, SendStream};
+pub use rotelyx_transport::endpoint::{
+    Connection, IncomingAddr, PathId, RecvStream, SendStream,
+};
 pub use rotelyx_transport::{EndpointAddr, EndpointId, RelayUrl, SecretKey, TransportAddr};

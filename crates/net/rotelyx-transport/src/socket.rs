@@ -124,9 +124,27 @@ pub(crate) const PATH_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 /// 5-15s, during which no relay traffic flows. Once the interface recovers, the relay
 /// actor reconnects (DNS + TCP + TLS + WebSocket upgrade), which adds another 1-2s.
 ///
-/// Set to match the connection-level idle timeout (30s) so the relay path survives
-/// as long as the connection itself.
-pub(crate) const RELAY_PATH_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Set to match the connection-level idle timeout so the relay path survives as
+/// long as the connection itself.
+///
+/// # Why this diverges from upstream, which uses thirty seconds
+///
+/// Upstream assumes a connection can have more than one path, and it usually
+/// does: a direct path and a relayed one, raced against each other. Under that
+/// assumption a relay going quiet costs a path, the direct one carries on, and
+/// thirty seconds is a sensible time to wait before giving up on the spare.
+///
+/// Rotelyx never has the spare. `PathPolicy::RelayOnly` is the design and not a
+/// preference, because a direct path would show a peer this device's address,
+/// which is the thing a relay is used to withhold. So the relay path is the
+/// only path, and giving up on it is giving up on the call.
+///
+/// Which makes thirty seconds the entire tolerance a voice call had for the
+/// relay being unreachable: a restart, a proxy dropping the websocket, a phone
+/// changing cell. `NetEndpoint::bind` sets the connection-level timeout to
+/// ninety for that reason, and this has to match or the path is closed
+/// underneath a connection that was willing to wait.
+pub(crate) const RELAY_PATH_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Maximum number of concurrent QUIC multipath paths per connection.
 ///

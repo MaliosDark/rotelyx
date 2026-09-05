@@ -6,13 +6,47 @@
 //! one place to check.
 
 use anyhow::{Context, Result};
-use rotelyx_transport::endpoint::{presets, Connection, RecvStream, SendStream};
+use std::time::Duration;
+
+use rotelyx_transport::endpoint::{
+    presets, Connection, QuicTransportConfig, RecvStream, SendStream,
+};
 use rotelyx_transport::{
     Endpoint, EndpointAddr, EndpointId, NetReportConfig, RelayMap, RelayMode, RelayUrl, SecretKey,
 };
 
 use crate::config::{NetConfig, RelayPolicy};
 use crate::path::MetadataResistantSelector;
+
+/// How long a connection survives hearing nothing back.
+///
+/// # Why this is set here rather than inherited
+///
+/// The transport already sends a keep-alive every five seconds, so a Rotelyx
+/// connection is never idle in the sense a proxy means by it. What this number
+/// governs is the opposite: how long a connection that *is* talking will wait
+/// when the answers stop coming, before it decides the peer is gone.
+///
+/// Upstream's default is thirty seconds, and thirty is a reasonable number for
+/// a connection that has more than one way to reach its peer. It races a direct
+/// path against a relayed one and keeps whichever answers, so a relay going
+/// quiet costs it a path and not the connection.
+///
+/// Rotelyx has no second path. `PathPolicy::RelayOnly` is not a preference, it
+/// is the whole design: a direct path would show a peer this device's address,
+/// which is the thing the relay exists to withhold. So one relay carries the
+/// entire call, and this timeout is the whole resilience budget: any
+/// interruption longer than it ends the call rather than costing it a path.
+/// Inheriting a number chosen for a connection that has a spare is how a call
+/// came to be given thirty seconds of tolerance that nobody picked.
+///
+/// Ninety seconds is three times that. Long enough to cross a relay restart, a
+/// proxy dropping a websocket and the reconnection after it, and a phone
+/// changing cell. The cost is the honest one: a peer that has genuinely gone
+/// away is noticed in ninety seconds rather than thirty. That is the right
+/// trade for a voice call, where the person can hang up and where a call that
+/// recovers is worth far more than one that ends promptly.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// A bound transport endpoint. Cheap to clone.
 #[derive(Debug, Clone)]
@@ -49,7 +83,50 @@ impl NetEndpoint {
             }
         };
 
-        let inner = Endpoint::builder(presets::Minimal)
+        let transport = QuicTransportConfig::builder()
+            .max_idle_timeout(Some(
+                IDLE_TIMEOUT.try_into().expect("well inside the QUIC range"),
+            ))
+            .build();
+
+        let mut builder = Endpoint::builder(presets::Minimal);
+
+        // A policy that forbids a direct path has the IP transports removed,
+        // rather than only being told not to choose one.
+        //
+        // # What this closes
+        //
+        // The selector in `path.rs` never returns a direct path under
+        // `RelayOnly`, and it is tested for that, and it was doing its job:
+        // measured on a live connection, the relay path was the selected one
+        // and application data went nowhere else.
+        //
+        // But a second path was open beside it, and its address was this
+        // machine's own. Opening it is how it gets measured, and measuring it
+        // means both ends offered their candidate addresses and probed each
+        // other to see which answered. By the time the selector declines to
+        // use that path, the peer already knows where this device is, which is
+        // the one thing `RelayOnly` is chosen for. The comment above that arm
+        // says a call must not become an address disclosure the moment hole
+        // punching succeeds; refusing to *select* the result was not enough to
+        // keep it.
+        //
+        // It also left the connection a direct path to fall back on. When the
+        // relay went away the selector had nothing to move to and kept what it
+        // had, which was the direct one, so a policy that promises never to go
+        // direct went direct exactly when the relay failed.
+        //
+        // With no IP transport there is no candidate to offer, nothing to
+        // probe, and no path to fall back on. The cost is stated plainly: this
+        // endpoint can now be reached only through a relay, so a relay failure
+        // ends the connection rather than quietly degrading it. That is the
+        // promise the policy makes.
+        if !config.paths().permits_direct() {
+            builder = builder.clear_ip_transports();
+        }
+
+        let inner = builder
+            .transport_config(transport)
             .secret_key(secret)
             .alpns(vec![alpn.to_vec()])
             .relay_mode(relay_mode.clone())
