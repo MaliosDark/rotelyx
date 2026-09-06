@@ -272,9 +272,27 @@ impl Apns {
     ///
     /// The payload says nothing. It carries a title so the push is an alert
     /// rather than a silent one, which is what keeps Apple from throttling it,
-    /// and `decoy` so the device's extension knows it may show nothing. The
-    /// message itself is never here: it is in the mailbox, which is where the
-    /// device goes to look, and this server could not read it if it tried.
+    /// and `decoy` so the device's extension knows whether it may show nothing.
+    /// The message itself is never here: it is in the mailbox, which is where
+    /// the device goes to look, and this server could not read it if it tried.
+    ///
+    /// # `decoy` is `Device::on_schedule` and not a constant
+    ///
+    /// It was written as a constant `true`, which was right when the sweep was
+    /// the only caller and wrong the moment the notifier became one. A ticket
+    /// only opens for a message that arrived, so a wake sent down that path is
+    /// never about nothing, and saying it might be cost the device the one
+    /// thing it needed to know.
+    ///
+    /// What it cost in practice: the extension asked the mailbox whether
+    /// anything was waiting, and answered zero whenever the app had already
+    /// collected it or the network was not there, and zero meant a blank
+    /// notification. An iPhone cannot drop one without an entitlement Apple
+    /// grants by hand. Told the truth, the extension has nothing to ask and
+    /// nothing to guess.
+    ///
+    /// The sweep still sends `true`, because a scheduled wake genuinely may
+    /// find nothing. That is what the flag was always for.
     pub async fn wake(&self, device: &Device) -> Result<()> {
         let bearer = self.bearer().await?;
 
@@ -289,7 +307,10 @@ impl Apns {
             // Apple keeps only the most recent per collapse id.
             .header("apns-collapse-id", "rotelyx-wake")
             .header("content-type", "application/json")
-            .body(r#"{"aps":{"alert":{"title":"Rotelyx"},"mutable-content":1},"decoy":true}"#)
+            .body(format!(
+                r#"{{"aps":{{"alert":{{"title":"Rotelyx"}},"mutable-content":1}},"decoy":{}}}"#,
+                device.on_schedule
+            ))
             .send()
             .await
             .context("calling Apple")?;
@@ -489,7 +510,9 @@ impl Fcm {
                     "priority": "high",
                     "collapse_key": "rotelyx-wake",
                 },
-                "data": { "decoy": "true" },
+                // The same as APNs above, and for the same reason: a wake
+                // the notifier sent is a message that exists.
+                "data": { "decoy": device.on_schedule.to_string() },
             }
         });
 
@@ -860,6 +883,88 @@ qv1shR1KSQ4H6tlaj+V8yNhKGRi6ME094biJSj4UXptd9IfhMt6r6s/LvcH3WU9Z\n\
         );
     }
 
+
+    /// A wake the notifier sent must not claim it might be nothing.
+    ///
+    /// This is the bug this test exists for. `decoy` was a constant `true`,
+    /// written when the scheduled sweep was the only caller. The notifier
+    /// became the second, and it wakes a device because a ticket opened, and a
+    /// ticket only opens for a message that was deposited.
+    ///
+    /// Told "this may be nothing", the phone's extension went and asked the
+    /// mailbox, and got zero whenever the application had already collected
+    /// the message or there was no signal. Zero produced an empty
+    /// notification, and an iPhone shows one of those as a blank banner rather
+    /// than showing nothing: dropping it needs an entitlement Apple grants by
+    /// hand. So a real message became a blank.
+    ///
+    /// The flag is `Device::on_schedule`, which the sweep sets and the
+    /// notifier clears, and this pins both ends of it.
+    #[tokio::test]
+    async fn a_wake_says_whether_it_might_find_nothing() {
+        use axum::{routing::post, Router};
+        use std::sync::{Arc, Mutex};
+
+        let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route(
+                "/token",
+                post(|| async { r#"{"access_token":"an-access-token","expires_in":3599}"# }),
+            )
+            .route(
+                "/v1/projects/{project}/messages:send",
+                post({
+                    let bodies = bodies.clone();
+                    move |body: String| async move {
+                        bodies.lock().expect("not poisoned").push(body);
+                        "{}"
+                    }
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let addr = listener.local_addr().expect("an address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let fcm = Fcm::new(&test_service_account())
+            .expect("a service account")
+            .at(format!("http://{addr}"));
+
+        // What the sweep wakes: registered for the clock, and may find nothing.
+        let swept = Device::registering("ab".repeat(32), "fcm".into(), "a-long-enough-secret");
+        assert!(swept.on_schedule, "a registration defaults to the schedule");
+        fcm.wake(&swept).await.expect("accepted");
+
+        // What the notifier wakes: built from an opened ticket, so a message
+        // exists. This is `crates/rotelyx-notifier/src/main.rs`.
+        let ticketed = Device {
+            token: "cd".repeat(32),
+            kind: "fcm".into(),
+            revoke_hash: String::new(),
+            on_schedule: false,
+        };
+        fcm.wake(&ticketed).await.expect("accepted");
+
+        let bodies = bodies.lock().expect("not poisoned");
+        assert_eq!(bodies.len(), 2, "both wakes should have been sent");
+
+        let swept: serde_json::Value = serde_json::from_str(&bodies[0]).expect("JSON");
+        assert_eq!(
+            swept["message"]["data"]["decoy"], "true",
+            "a scheduled wake may find nothing and has to say so"
+        );
+
+        let ticketed: serde_json::Value = serde_json::from_str(&bodies[1]).expect("JSON");
+        assert_eq!(
+            ticketed["message"]["data"]["decoy"], "false",
+            "a ticket only opens for a message that arrived, and a wake that \
+             claims otherwise is what turns it into a blank notification"
+        );
+    }
 
    /// Google's tokens last an hour and minting one is a round trip. A server
     /// that minted per push would add one to every wake, and would do it for
