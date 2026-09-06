@@ -110,6 +110,9 @@ const MAX_TICKET_CHARS: usize = 4 * SEALED_TICKET_LEN.div_ceil(3) + 4;
 /// expansion, with room to spare.
 const MAX_FRAME_BYTES: usize = 12 * 1024 * 1024;
 
+/// How much each connection keeps for reading and for writing.
+const SOCKET_BUFFER_BYTES: usize = 8 * 1024;
+
 #[derive(Parser)]
 #[command(
     name = "rotelyx-mailbox-server",
@@ -1331,6 +1334,8 @@ async fn ws_handler(
     };
 
     ws.max_message_size(MAX_FRAME_BYTES)
+        .read_buffer_size(SOCKET_BUFFER_BYTES)
+        .write_buffer_size(SOCKET_BUFFER_BYTES)
         .on_upgrade(move |socket| async move {
             // Held for the life of the socket and released on drop, so a handler
             // that returns early, panics, or is cancelled mid-await still gives
