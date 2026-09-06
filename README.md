@@ -15,6 +15,12 @@ No accounts, no phone numbers, and no servers belonging to anybody else.
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-8b8b8b?style=flat-square)](#licence)
 [![status](https://img.shields.io/badge/reviewed-6%20rounds%20internal-C8A76B?style=flat-square)](#security-status)
 
+<a href="https://play.google.com/store/apps/details?id=com.rotelyx.app">
+  <img src="docs/brand/google-play.png" alt="Get Rotelyx on Google Play" height="58">
+</a>
+
+**On Google Play.** Same source as this repository, signed and published by
+Ideoa Labs. iOS is not there yet.
 
 </div>
 
