@@ -293,6 +293,22 @@ impl Apns {
     ///
     /// The sweep still sends `true`, because a scheduled wake genuinely may
     /// find nothing. That is what the flag was always for.
+    ///
+    /// # Why the alert carries a body it expects to be replaced
+    ///
+    /// The extension writes the text, so the payload used to carry a title and
+    /// nothing else. That made the payload a notification with no body, and a
+    /// notification with no body is a blank banner: whenever the extension did
+    /// not get to run, which is a thing an operating system decides and not a
+    /// thing this code can promise, the person was shown an empty one.
+    ///
+    /// So the payload is a complete notification on its own. The extension
+    /// still replaces the text with a count when it runs, and when it does not
+    /// the notification is the same sentence rather than nothing at all.
+    ///
+    /// It says no more than the title did. The same words go to every device
+    /// on every wake, and nothing in them depends on who is being written to
+    /// or what was said.
     pub async fn wake(&self, device: &Device) -> Result<()> {
         let bearer = self.bearer().await?;
 
@@ -308,7 +324,7 @@ impl Apns {
             .header("apns-collapse-id", "rotelyx-wake")
             .header("content-type", "application/json")
             .body(format!(
-                r#"{{"aps":{{"alert":{{"title":"Rotelyx"}},"mutable-content":1}},"decoy":{}}}"#,
+                r#"{{"aps":{{"alert":{{"title":"Rotelyx","body":"New message"}},"mutable-content":1}},"decoy":{}}}"#,
                 device.on_schedule
             ))
             .send()
@@ -505,7 +521,7 @@ impl Fcm {
         let body = serde_json::json!({
             "message": {
                 "token": device.token,
-                "notification": { "title": "Rotelyx" },
+                "notification": { "title": "Rotelyx", "body": "New message" },
                 "android": {
                     "priority": "high",
                     "collapse_key": "rotelyx-wake",
