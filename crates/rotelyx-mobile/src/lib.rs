@@ -405,6 +405,11 @@ fn dispatch(req: &Value) -> Res {
         // the caller must deliver before anything else.
         "session.rekeyAfterRestore" => json!(engine(s.rekey_after_restore())?),
 
+        "session.trustRestoredState" => {
+            engine(s.trust_restored_state())?;
+            json!(true)
+        }
+
         "session.send" => {
             let text = str_arg(req, "text")?;
             json!(engine(s.send(&text))?)

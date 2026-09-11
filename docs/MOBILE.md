@@ -190,6 +190,7 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `session.send` | `text` | sealed message |
 | `session.receive` | `message` | text, or null for a commit |
 | `session.rekeyAfterRestore` | | commit, to be delivered |
+| `session.trustRestoredState` | | `true` |
 | `session.seal` | `ciphertext`, `timeBucket` | envelope |
 | `session.open` | `envelope`, `timeBucket`, `lookback` | ciphertext |
 | `session.sealForGroup` | `ciphertext`, `timeBucket` | array of envelopes |
@@ -227,6 +228,25 @@ and this call moves the epoch and hands back a commit the caller has to
 deliver. It cannot happen inside the restore, because a restore has no way to
 send anything, and a rekey nobody receives is the same failure from the other
 side.
+
+`session.trustRestoredState` is the other answer to the same question, and an
+application that can give it should. Rekeying works and it moves the epoch, and
+**two copies that move the epoch without seeing each other can never meet
+again**: each builds a commit at the same epoch and merges its own, so neither
+can process the other's, and that is not a dropped message but two
+conversations where there was one.
+
+So an application that seals its session after every send, every receipt and
+every commit, and that can tell a clean exit from being killed, says so here
+instead, and the copy sends at the epoch it is already at. One that cannot
+promise that must not call this: the cost of being wrong is that its messages
+are refused by the far side's replay window until the next commit from either
+end. That is a worse trade than a rekey for an application that is guessing,
+and a much better one than a permanent split for an application that knows.
+
+Receiving a commit settles the same debt on its own, because a commit is
+exactly what the rekey was for: generations nothing has spent. An application
+that answers a commit with a commit is building the collision described above.
 | `session.pollingTags` | `timeBucket`, `lookback` | array of hex |
 | `session.roster` | | array of labels |
 | `session.rosterDetail` | | JSON `[{"label":…,"key":…}]` |

@@ -1066,6 +1066,49 @@ impl Conversation {
     /// A commit has to reach the other side. `reopen` has no way to send one,
     /// and a rekey nobody receives leaves this copy talking to itself, which is
     /// the failure it exists to prevent, arrived at from the other direction.
+    /// Vouch for a reopened copy, so it may send without moving the epoch.
+    ///
+    /// # Why this exists
+    ///
+    /// [`Conversation::reopen`] assumes the worst, because a library cannot see
+    /// where its bytes came from: a copy read back from storage may be a second
+    /// device holding the same backup, or the same device rolled back, and both
+    /// send into a hole. So it demands a rekey, and [`Self::rekey_after_restore`]
+    /// moves the epoch to give the copy generations nothing has spent.
+    ///
+    /// That is correct and it is expensive, and the expense is not the commit.
+    /// It is that **two copies that rekey without seeing each other cannot ever
+    /// meet again.** Each builds a commit at epoch N and merges its own, so each
+    /// is at an epoch of its own and neither can process the other's commit,
+    /// which is for an epoch both have left. There is no recovery: it is not a
+    /// dropped message, it is two conversations where there was one. A caller
+    /// that reopens on every start pays that risk on every start.
+    ///
+    /// So a caller that **knows** its copy is the newest says so here, and the
+    /// copy sends at the epoch it is already at.
+    ///
+    /// # What a caller has to know before calling this
+    ///
+    /// That the state was written down after the last thing that moved it, and
+    /// that nothing else has used it since. An application that seals after
+    /// every send, every receipt and every commit, and that can tell a clean
+    /// exit from a kill, has that. One that seals only sometimes does not, and
+    /// for it this is unsafe.
+    ///
+    /// # What it costs when the caller is wrong
+    ///
+    /// The copy sends under a generation the far end has already seen, and the
+    /// far end refuses it: the replay window added for the EUROCRYPT insider
+    /// attack is what catches it. Those messages do not arrive. Nothing is
+    /// disclosed and nothing is forged, and the next commit from either side
+    /// clears it.
+    ///
+    /// That is a worse trade than a rekey for a caller that guesses, and a much
+    /// better one than a permanent split for a caller that knows.
+    pub fn trust_restored_state(&mut self) {
+        self.restored_needs_rekey = false;
+    }
+
     pub fn rekey_after_restore(&mut self, member: &Member) -> Result<Vec<u8>, GroupError> {
         let (commit, _welcome, _group_info) = self
             .group
@@ -1254,6 +1297,24 @@ impl Conversation {
                     .merge_staged_commit(&receiver.provider, *staged)
                     .map_err(mls)?;
                 let after = self.roster();
+
+                // Somebody else moved the epoch, so this copy is no longer
+                // behind and owes nothing.
+                //
+                // # Why this is the fix and not a tidy-up
+                //
+                // A commit is exactly what `rekey_after_restore` was for:
+                // generations this copy has not spent. Leaving the debt
+                // standing after receiving one meant a restored copy answered a
+                // commit with a commit of its own, for no reason, and two
+                // copies that commit at one epoch each merge their own and can
+                // never process the other's. So the two ends pushed each other
+                // in a circle, and every round was another chance to split.
+                //
+                // Clearing it here is what makes the ordinary case converge: the
+                // first side to move the epoch settles it, and the second side
+                // takes that instead of answering with its own.
+                self.restored_needs_rekey = false;
 
                 // Compared on the signature key, which is what MLS authenticates
                 // and what names a leaf. It used to compare the credential
@@ -2230,6 +2291,122 @@ mod tests {
         assert_ne!(
             a1.mailbox_tag_key(&alice).expect("k1"),
             a2.mailbox_tag_key(&alice).expect("k2")
+        );
+    }
+
+    /// A caller that knows its copy is the newest may send without a rekey.
+    ///
+    /// # Why this is worth a test of its own
+    ///
+    /// The refusal above is the safe default and it is not free. Two copies
+    /// that rekey without seeing each other each build a commit at the same
+    /// epoch and each merges its own, so neither can ever process the other's:
+    /// not a dropped message, two conversations where there was one. An
+    /// application that reopened on every start paid that risk every start,
+    /// and that is what was splitting two phones apart in the field.
+    ///
+    /// So the decision moved to the caller, who can see what the library
+    /// cannot: whether this state was written down after the last thing that
+    /// moved it. What is fixed here is that vouching lets it send **and leaves
+    /// the epoch alone**, because moving the epoch was the whole problem.
+    /// Two copies that both reopen settle on one epoch instead of two.
+    ///
+    /// # The split this closes
+    ///
+    /// Both ends were killed while live, so **both** come back owing a fresh
+    /// key. Whichever speaks first moves the epoch and says so. The other used
+    /// to take that commit, gain generations from it, and still believe it owed
+    /// a rekey, so it answered with a commit of its own. Two commits at one
+    /// epoch: each side merges its own and neither can process the other's,
+    /// because it is for an epoch both have left. Not a dropped message, two
+    /// conversations where there was one, and no way back.
+    ///
+    /// Receiving a commit is exactly what the rekey was for. Taking it settles
+    /// the debt, so the second side has nothing left to answer with.
+    #[test]
+    fn a_commit_from_the_other_side_settles_the_debt() {
+        let (alice, bob, a, _b) = conversation_of_two();
+        let group_id = a.group_id();
+
+        // Both come back from storage. This is the case: one side reopened is
+        // not, because then the other never owed anything and there was never
+        // a second commit to collide with.
+        let mut a2 = Conversation::reopen(&alice, &group_id)
+            .expect("reopen alice")
+            .expect("alice's group is there");
+        let mut b2 = Conversation::reopen(&bob, &group_id)
+            .expect("reopen bob")
+            .expect("bob's group is there");
+
+        assert!(
+            matches!(
+                a2.send(&alice, b"owing"),
+                Err(GroupError::RestoredAndNotRekeyed)
+            ),
+            "alice owes"
+        );
+        assert!(
+            matches!(
+                b2.send(&bob, b"owing"),
+                Err(GroupError::RestoredAndNotRekeyed)
+            ),
+            "and so does bob, which is what makes this the dangerous case"
+        );
+
+        // Alice speaks first: one commit, and the epoch moves once.
+        let commit = a2.rekey_after_restore(&alice).expect("alice rekeys");
+        b2.receive(&bob, &commit).expect("bob takes it");
+
+        // Bob now has generations he has not spent, so he owes nothing. Without
+        // that, this send fails and the only way on is a second commit at an
+        // epoch alice has already left, which is the split.
+        let ct = b2
+            .send(&bob, b"no commit needed")
+            .expect("bob sends without a rekey of his own");
+
+        assert_eq!(
+            a2.receive(&alice, &ct).expect("alice reads it").message(),
+            Some(b"no commit needed".to_vec()),
+            "the two ends are on one epoch and can still hear each other"
+        );
+    }
+
+    #[test]
+    fn a_vouched_copy_sends_without_moving_the_epoch() {
+        let (alice, bob, a, mut b) = conversation_of_two();
+
+        let mut reopened = Conversation::reopen(&alice, &a.group_id())
+            .expect("reopen")
+            .expect("the group is there");
+
+        let before = reopened.epoch();
+
+        assert!(
+            matches!(
+                reopened.send(&alice, b"unvouched"),
+                Err(GroupError::RestoredAndNotRekeyed)
+            ),
+            "the default is still to refuse, which is what protects a caller \
+             that cannot vouch for anything"
+        );
+
+        reopened.trust_restored_state();
+
+        let ct = reopened
+            .send(&alice, b"vouched for")
+            .expect("a vouched copy sends");
+
+        assert_eq!(
+            reopened.epoch(),
+            before,
+            "and it sends at the epoch it was already at: moving it is the \
+             thing that splits two copies apart for good"
+        );
+
+        assert_eq!(
+            b.receive(&bob, &ct).expect("receive").message(),
+            Some(b"vouched for".to_vec()),
+            "and the far end reads it"
         );
     }
 

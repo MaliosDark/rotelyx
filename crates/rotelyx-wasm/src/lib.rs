@@ -1129,6 +1129,22 @@ impl Session {
     /// the same sealed blob on a second device looks like, and a browser cannot
     /// tell that from an ordinary reload, so it does this every time. A commit
     /// is cheap and it also moves the keys forward.
+    /// Say that this reopened copy is the newest, so it may send as it is.
+    ///
+    /// The alternative is `rekeyAfterRestore`, which works and moves the epoch,
+    /// and two copies that move it without seeing each other can never meet
+    /// again. A caller that seals after everything that moves the state, and
+    /// can tell a clean exit from a kill, knows which of the two it needs. See
+    /// `Conversation::trust_restored_state` for what it costs to be wrong.
+    #[wasm_bindgen(js_name = trustRestoredState)]
+    pub fn trust_restored_state(&mut self) -> Result<(), Error> {
+        self.conversation
+            .as_mut()
+            .ok_or_else(|| Error::new("no conversation yet"))?
+            .trust_restored_state();
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = rekeyAfterRestore)]
     pub fn rekey_after_restore(&mut self) -> Result<String, Error> {
         let member = &self.member;

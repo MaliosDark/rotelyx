@@ -109,3 +109,16 @@ punching-*.tsv
 crates/rotelyx-codec/tests/speech-corpus/
 
 crates/rotelyx-codec/tests/speech-corpus-short/
+
+# The motion study for the logo.
+#
+# `docs/brand/rotelyx-motion.html` is a page for looking at six ways the mark
+# can assemble, and the rest are what it renders to: a GIF and three PNGs, three
+# and a half megabytes of pictures of a decision that is not made yet. The page
+# is the source and it is not needed to build anything.
+docs/brand/rotelyx-motion.html
+docs/brand/rotelyx-motion.md
+docs/brand/rotelyx-motion.svg
+docs/brand/rotelyx-motion*.png
+docs/brand/rotelyx-motion.gif
+docs/brand/check_motion.py
