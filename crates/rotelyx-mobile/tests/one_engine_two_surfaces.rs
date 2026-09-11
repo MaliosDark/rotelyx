@@ -31,6 +31,13 @@ const BROWSER_ONLY: &[(&str, &str)] = &[
       The phone needs all three the day there is one"),
     ("blinded", "TokenRequest, as above"),
     ("finish", "TokenRequest, as above"),
+    ("deviceConfirmation", "reachable as the `device.confirmation` operation, \
+      under its own name, as `protocolVersion` is. Not on a session handle \
+      because it is computed before there is one, over a key package that \
+      arrived from elsewhere"),
+    ("forDevice", "reachable as the optional `device` field on `session.new`, \
+      because the phone creates a session in one place and a second entry point \
+      would be two ways to do the same thing with one of them forgotten"),
     ("groupId", "introspection: the phone never needs the raw id"),
     ("newMeetingCode", "the phone mints codes in Dart, character for character, with a test on each side that reads the other's"),
     ("openUnder", "browser storage: the phone seals through the platform vault instead"),

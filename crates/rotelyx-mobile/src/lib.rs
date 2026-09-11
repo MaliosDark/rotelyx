@@ -173,9 +173,26 @@ fn dispatch(req: &Value) -> Res {
         "protocol.version" => return Ok(json!(rotelyx_wasm::protocol_version())),
         "protocol.maxMembers" => return Ok(json!(rotelyx_wasm::max_members())),
 
+        // Not on a session: this is computed before there is one, over a key
+        // package that arrived from somewhere else. Putting it on a handle
+        // would mean a device had to be admitted before it could be checked,
+        // which is the wrong way round.
+        "device.confirmation" => {
+            let package = str_arg(req, "keyPackage")?;
+            return Ok(json!(engine(rotelyx_wasm::device_confirmation(&package))?));
+        }
+
         "session.new" => {
             let label = str_arg(req, "label")?;
-            let session = engine(Session::new(&label))?;
+            // `device` is optional and empty means "the only one this person
+            // has", which is every caller that predates devices. So an old
+            // caller keeps getting exactly what it got before without knowing
+            // this field exists.
+            let device = req
+                .get("device")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let session = engine(Session::for_device(&label, device))?;
             let handle = next_handle();
             lock().sessions.insert(handle, session);
             return Ok(json!(handle));

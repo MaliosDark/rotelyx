@@ -159,7 +159,8 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `abi.version` | | `"1"` |
 | `protocol.version` | | version string |
 | `protocol.maxMembers` | | integer |
-| `session.new` | `label` | new handle |
+| `device.confirmation` | `keyPackage` | fifteen digits, grouped |
+| `session.new` | `label`, optional `device` | new handle |
 | `session.unseal` | `blob`, `key` | new handle |
 | `session.free` | `handle` | bool |
 | `key.create` | `passphrase` | key handle |
@@ -203,6 +204,44 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `session.recipientTags` | `timeBucket` | array of hex |
 | `session.commitRecipientTags` | `timeBucket` | array of hex |
 | `session.tagFor` | `timeBucket` | tag, hex |
+
+`device.confirmation` is the digits two devices of one person compare before
+one adds the other, and it is not on a session handle because it is computed
+**before** there is one: over a key package that arrived from somewhere else.
+Requiring a session first would mean admitting a device in order to check it.
+
+It is taken over the key package **as it arrived**, never over the copy of what
+was sent. That is the whole mechanism, and it is what lets the package travel by
+any route: a code on a screen, a string typed across, the mailbox, or read
+aloud. An attacker who substitutes it changes what the receiving end computes,
+so the two screens stop agreeing. `docs/DEVICES.md` has the routes and the one
+rule none of them may break, which is that a person has to see this.
+
+Fifteen digits rather than the safety number's thirty: compared once per device
+rather than rarely over a whole roster, and a number nobody finishes reading is
+a number nobody checks.
+
+`device` on `session.new` is optional and empty means "the only one this person
+has", which is what every caller sent before the field existed. Passing one makes
+this session a **device** of that person rather than the person: its own leaf,
+its own signing key, its own row in the roster, and removable on its own while
+the person stays.
+
+A device could instead share its person's key. That is simpler and wrong in the
+way that matters: a shared key cannot be taken from one device without being
+taken from all of them, so a lost phone would mean re-establishing every
+conversation everywhere, and nothing in the group could tell which device sent a
+message, so a stolen phone would be indistinguishable from its owner.
+
+**What a partner may conclude from it: very little on its own.** The credential
+says which person a device claims to belong to, and a credential is a claim. What
+makes it worth anything is who committed the Add, so an interface should say "a
+device was added by Ana" and not "Ana added a device". The first is what the
+group knows.
+
+The safety number moves when a device is added, because it is taken over the
+leaves. That is the point of it: a device nobody mentioned shows up as different
+digits the next time two people compare.
 
 `session.removeMember` takes the **signature key**, which `session.rosterDetail`
 carries and `session.roster` does not. That is not an oversight of the smaller
@@ -249,7 +288,7 @@ exactly what the rekey was for: generations nothing has spent. An application
 that answers a commit with a commit is building the collision described above.
 | `session.pollingTags` | `timeBucket`, `lookback` | array of hex |
 | `session.roster` | | array of labels |
-| `session.rosterDetail` | | JSON `[{"label":…,"key":…}]` |
+| `session.rosterDetail` | | JSON `[{"label":…,"key":…,"device":…}]` |
 | `session.removeMember` | `signatureKey` | commit, to be delivered |
 | `session.epoch` | | integer |
 | `session.memberCount` | | integer |

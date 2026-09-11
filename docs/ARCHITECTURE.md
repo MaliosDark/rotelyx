@@ -429,9 +429,9 @@ peer sees one consistent value across reconnections, and unrelated between
 conversations. Measured with a real relay: the identity is `ef53e87e`, one
 contact is shown `a82d5b96`, another `e875cc93`.
 
-This is what SimpleX means by having no user identifiers, arrived at from the
-other side. SimpleX gives each contact a queue of its own; Rotelyx gives each
-invitation an address of its own and each conversation a name of its own.
+This is what a competitor means by having no user identifiers, arrived at from
+the other side. That design gives each contact a queue of its own; Rotelyx gives
+each invitation an address of its own and each conversation a name of its own.
 
 **It costs no authentication.** An MLS credential is a label the member chooses,
 and nothing ever proved it belonged to anybody. What authenticates is the safety

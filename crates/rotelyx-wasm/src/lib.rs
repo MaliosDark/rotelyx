@@ -229,8 +229,40 @@ impl Session {
     /// and never who they are. Verify with the safety number.
     #[wasm_bindgen(constructor)]
     pub fn new(label: &str) -> Result<Session, Error> {
+        Self::for_device(label, "")
+    }
+
+    /// Create an identity that is one **device** of a person.
+    ///
+    /// # Why a device is its own leaf and not a shared key
+    ///
+    /// A person's devices could share one key. That is simpler and wrong in the
+    /// way that matters: a shared key cannot be taken from one device without
+    /// being taken from all of them, so a lost phone means re-establishing every
+    /// conversation everywhere. And nothing in the group could tell which device
+    /// sent a message, so a stolen phone would be indistinguishable from its
+    /// owner until somebody noticed by other means.
+    ///
+    /// Separate leaves make a device a member: its own signing key, its own row
+    /// in the roster, and removable on its own while the person stays. That
+    /// removal is a commit, so every partner sees it happen.
+    ///
+    /// # What a partner can and cannot conclude
+    ///
+    /// The credential says which person this device claims to belong to, and a
+    /// credential is only ever a claim. What makes it worth anything is **who
+    /// committed the Add**: a device is in the group because a member already in
+    /// it put it there. So an interface should say "a device was added by Ana"
+    /// rather than "Ana added a device". The first is what the group knows.
+    ///
+    /// The safety number moves when a device is added, because it is taken over
+    /// the leaves. That is the point: a device nobody mentioned shows up as
+    /// different digits the next time two people compare.
+    #[wasm_bindgen(js_name = forDevice)]
+    pub fn for_device(person: &str, device: &str) -> Result<Session, Error> {
         Ok(Session {
-            member: Member::new(label.as_bytes()).map_err(err)?,
+            member: Member::for_device(person.as_bytes(), device.as_bytes())
+                .map_err(err)?,
             conversation: None,
             tag_keys: Vec::new(),
             pending_pq: None,
@@ -763,6 +795,11 @@ impl Session {
                 serde_json::json!({
                     "label": String::from_utf8_lossy(&p.identity).into_owned(),
                     "key": BASE64.encode(&p.signature_key),
+                    // Empty for a person who has only ever had one device,
+                    // which is every member until one is added. Added rather
+                    // than replacing anything, so a caller that has never heard
+                    // of devices reads exactly what it read before.
+                    "device": String::from_utf8_lossy(&p.device).into_owned(),
                 })
             })
             .collect();
@@ -1247,6 +1284,68 @@ impl Session {
             .collect::<Vec<_>>()
             .join(" "))
     }
+}
+
+/// The digits two devices compare before one adds the other.
+///
+/// # What this is for
+///
+/// Adding a device is an addition to **every conversation its person is in**, so
+/// a substituted key package is the worst outcome available here. This is what
+/// catches one.
+///
+/// It is taken over the key package **as it arrived**, never over the one that
+/// was meant to arrive. That is the whole mechanism: an attacker who swaps the
+/// package changes what the receiving end computes, the two screens stop
+/// agreeing, and a person notices. Anything that computes this from a local copy
+/// of what was sent is a version of this function that protects nothing while
+/// looking identical in every honest test.
+///
+/// # Why this lets the route be chosen freely
+///
+/// Because the security is here rather than in the channel, the package may
+/// arrive by a code on a screen, a string typed across, the mailbox, or somebody
+/// reading it aloud. `docs/DEVICES.md` lists them and says why none of them is a
+/// lesser option. The one thing no route may skip is a person looking at this.
+///
+/// # Why it is shorter than a safety number
+///
+/// Fifteen digits against thirty. A safety number is compared rarely and covers
+/// a whole roster; this is compared once per device and covers one key package,
+/// and a number nobody finishes reading is a number nobody checks. Fifteen
+/// digits is a one in `10^15` chance of a substitution passing unnoticed, which
+/// is far beyond what an attacker gets to retry: a mismatch is seen the first
+/// time and the pairing is abandoned.
+///
+/// Same derivation and same grouping as the safety number, deliberately. One
+/// construction to review rather than two.
+#[wasm_bindgen(js_name = deviceConfirmation)]
+pub fn device_confirmation(key_package_b64: &str) -> Result<String, Error> {
+    let raw = BASE64
+        .decode(key_package_b64.trim().as_bytes())
+        .map_err(|e| Error::new(format!("that key package is not readable: {e}")))?;
+
+    if raw.is_empty() {
+        return Err(Error::new("that key package is empty"));
+    }
+
+    let mut hasher = blake3::Hasher::new_derive_key("rotelyx device confirmation v1");
+    // Length first, for the reason the safety number gives: so that two values
+    // cannot be run together into a sequence a third would also produce.
+    hasher.update(&(raw.len() as u64).to_be_bytes());
+    hasher.update(&raw);
+
+    let mut out = [0u8; 15];
+    hasher.finalize_xof().fill(&mut out);
+
+    Ok(out
+        .chunks(5)
+        .map(|c| {
+            let n = c.iter().fold(0u64, |a, &b| (a << 8) | b as u64);
+            format!("{:05}", n % 100_000)
+        })
+        .collect::<Vec<_>>()
+        .join(" "))
 }
 
 // ---------------------------------------------------------------------------
@@ -3425,6 +3524,121 @@ mod wake_ticket_binding_tests {
     fn a_key_that_is_not_one_is_refused() {
         assert!(seal_wake_ticket("not base64", "apns", APNS, 100).is_err());
         assert!(seal_wake_ticket(&BASE64.encode(b"too short"), "apns", APNS, 100).is_err());
+    }
+
+    #[test]
+    fn two_devices_of_one_person_are_two_members_and_move_the_number() {
+        // What this pins: a device is a leaf, it is removable on its own, and
+        // adding one is visible to the other side as different digits. The last
+        // part is the whole reason a safety number exists, and a device added
+        // quietly is exactly the addition it has to catch.
+        let mut ana = Session::for_device("ana", "phone").expect("ana's phone");
+        let mut bo = Session::new("bo").expect("bo");
+
+        ana.found().expect("ana starts");
+        let invitation = ana.invite(&bo.key_package().expect("package")).expect("invite");
+        bo.join(&invitation.welcome, &invitation.ratchet_tree)
+            .expect("bo joins");
+
+        let before = ana.safety_number().expect("number");
+        assert_eq!(
+            before,
+            bo.safety_number().expect("number"),
+            "two people in one conversation read the same digits"
+        );
+
+        // Ana's second device, added by Ana's first.
+        let mut laptop = Session::for_device("ana", "laptop").expect("ana's laptop");
+        let second = ana
+            .invite(&laptop.key_package().expect("package"))
+            .expect("ana adds her laptop");
+        bo.receive(&second.commit).expect("bo sees the addition");
+        laptop
+            .join(&second.welcome, &second.ratchet_tree)
+            .expect("the laptop joins");
+
+        assert_ne!(
+            ana.safety_number().expect("number"),
+            before,
+            "a device was added and the number did not move, so nobody \
+             comparing digits would ever catch one that was added quietly"
+        );
+        assert_eq!(
+            ana.safety_number().expect("number"),
+            bo.safety_number().expect("number"),
+            "and both ends still agree on what it is now"
+        );
+
+        // The roster says which leaf is which device, and says it for the
+        // person who has only ever had one as well.
+        let detail = ana.roster_detail().expect("roster");
+        let seen: serde_json::Value = serde_json::from_str(&detail).expect("json");
+        let rows = seen.as_array().expect("an array");
+        assert_eq!(rows.len(), 3, "two of Ana's and one of Bo's");
+
+        let devices: Vec<String> = rows
+            .iter()
+            .filter(|r| r["label"] == "ana")
+            .map(|r| r["device"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(
+            devices.contains(&"phone".to_string()) && devices.contains(&"laptop".to_string()),
+            "both of Ana's devices are named, got {devices:?}"
+        );
+
+        let bo_row = rows.iter().find(|r| r["label"] == "bo").expect("bo is there");
+        assert_eq!(
+            bo_row["device"], "",
+            "somebody who has never added a device carries no device, rather \
+             than carrying a made-up one"
+        );
+    }
+
+    #[test]
+    fn a_substituted_key_package_makes_the_two_confirmations_differ() {
+        // The test the design document asks for by name, because the mistake it
+        // guards against is invisible in every honest test: a confirmation
+        // computed from the local copy of what was *sent* agrees with itself
+        // perfectly and protects nothing.
+        let laptop = Session::for_device("ana", "laptop").expect("laptop");
+        let mine = laptop.key_package().expect("package");
+
+        // What the first device would show, over what it received.
+        let honest = device_confirmation(&mine).expect("confirmation");
+
+        // Both ends, honestly, reach the same digits.
+        assert_eq!(
+            honest,
+            device_confirmation(&mine).expect("confirmation"),
+            "two devices holding the same package must read the same digits or \
+             nobody can compare anything"
+        );
+
+        // Somebody else's package arrives instead. This is the whole attack:
+        // whoever's package is added is in every conversation the person has.
+        let attacker = Session::for_device("ana", "laptop").expect("attacker");
+        let swapped = attacker.key_package().expect("package");
+        assert_ne!(swapped, mine, "two identities produce two packages");
+
+        assert_ne!(
+            honest,
+            device_confirmation(&swapped).expect("confirmation"),
+            "a substituted key package produced the same digits, so the person \
+             comparing them would have approved somebody else's device into \
+             every conversation they are in"
+        );
+    }
+
+    #[test]
+    fn a_confirmation_refuses_what_it_cannot_read() {
+        // Rather than hashing the empty string and showing somebody a perfectly
+        // stable set of digits for nothing at all, which is the shape of a
+        // check that always passes.
+        assert!(device_confirmation("").is_err(), "empty");
+        assert!(
+            device_confirmation("not base64 at all !!!").is_err(),
+            "unreadable"
+        );
     }
 
     #[test]

@@ -96,8 +96,8 @@ hole-punch.
   carries a **name** of its own, derived from the invitation secret both sides
   hold, so no two of them are shown the same name inside the conversation
   either. That defeats a **passive observer** and it defeats **correspondents
-  comparing notes**, which is the whole of what SimpleX means by having no user
-  identifiers.
+  comparing notes**, which is the whole of what a competitor means by having no
+  user identifiers.
   A middle draft of this line said the opposite, and was right at the time: the
   addresses differed and the identity did not, because a client put its
   long-lived key in every MLS credential. Measured after the change, with a real
@@ -186,7 +186,7 @@ read all stored envelopes, retain them past TTL, and correlate timing.
   No push scheme avoids that; the decoys are what stop it being one device's
   timing rather than a set's, and a deployment that sets `--notifier-decoys 0`
   gives that up.
-  Compare SimpleX, which reaches the same separation through a persistent
+  Compare a competitor, which reaches the same separation through a persistent
   notifier identifier its notification server stores against the token, and
   which therefore learns how many queues a device has and how often each
   delivers. A ticket is one use and rotates with the tag it sits under.
@@ -381,6 +381,40 @@ Stated so that scope creep has something to be refused against.
 - **Account recovery without a trust anchor.** Losing every device means losing
   the identity. Any recovery mechanism that does not require a key the user
   holds is a backdoor, and Rotelyx will not ship one.
+- **Protection of stored history on a phone somebody else is holding.** Changed
+  deliberately, and the reasoning is below rather than hidden in a commit.
+
+### What the stored history is protected from, after the passphrase was removed
+
+The vault used to be opened by a passphrase, so its key existed only in
+somebody's head and in memory while the application ran. A phone that was off,
+or seized before it was unlocked, yielded nothing readable.
+
+It now opens with thirty two random bytes kept beside the data, and the
+passphrase is not asked for at all.
+
+| | passphrase | device key |
+|---|---|---|
+| Another application on the phone | no | no |
+| The phone, off or never unlocked | **nothing readable** | readable by whoever can read the file |
+| Somebody holding it unlocked | **nothing readable** | readable |
+
+The second row is the trade and it is a real one. What was bought with it: an
+application that starts, and notifications whose message can be read without
+typing first. A notification that demands a passphrase before the message behind
+it can be read is a notification people stop opening, and a messenger nobody
+opens protects nothing.
+
+What still stands: the per-conversation PIN, for anybody who wants the second
+row answered; the operating system's own sandbox, which is what the first row
+rests on and always did; and, since this change, **backups are refused by both
+platforms**, because a key beside its data means a backup carries the lock and
+the key together into somebody else's cloud. That is `allowBackup="false"` with
+`dataExtractionRules` on Android and an excluded container on iOS.
+
+A vault made by a passphrase before this is left alone: it still asks, because
+the data under it opens only with what somebody knows and replacing the key
+would throw that history away.
 
 ---
 
@@ -441,13 +475,45 @@ underneath does not move the answer quietly.
 | A sender jumping far ahead of a receiver | Bounded at a thousand skipped generations, about seven milliseconds of derivation, then refused |
 | A message replayed into a reinstalled device | Refused. A reinstall is a new member added by a commit that moves the epoch, and the captured message belongs to an epoch that member never had |
 
-**The sender is now stopped rather than left talking to itself.** A copy
-reopened from storage refuses to send until it has rekeyed: `send` returns
-`RestoredAndNotRekeyed`, and `rekey_after_restore` moves the epoch and hands
-back the commit the caller has to deliver. It used to succeed, have the receiver
-drop the message, and tell nobody, so to the person holding the device their
-messages simply stopped arriving. Confidentiality held and availability did not,
-silently.
+**The sender is stopped rather than left talking to itself.** A copy reopened
+from storage refuses to send: `send` returns `RestoredAndNotRekeyed`. It used to
+succeed, have the receiver drop the message, and tell nobody, so to the person
+holding the device their messages simply stopped arriving. Confidentiality held
+and availability did not, silently.
+
+**There are two ways out of that refusal, and the second was added later.**
+
+`rekey_after_restore` moves the epoch and hands back a commit the caller has to
+deliver. It is correct and it is not free: **two copies that move the epoch
+without seeing each other can never meet again.** Each builds a commit at the
+same epoch and merges its own, so neither can process the other's, which is for
+an epoch both have left. That is not a dropped message. It is two conversations
+where there was one, with no way back, and an application that reopened on every
+start paid that risk on every start. It was observed in the field before it was
+understood here.
+
+`trust_restored_state` is the other way. A caller that **knows** its copy is the
+newest says so, and the copy sends at the epoch it is already at. The default is
+still to refuse, so nothing changed for a caller that cannot promise anything.
+
+**What that costs, stated rather than implied.** A caller that vouches wrongly
+sends under a generation the far end has already seen, and the far end refuses
+it: the first row of the table above is what catches it. Those messages do not
+arrive. Nothing is disclosed and nothing is forged, and the next commit from
+either side clears it. So the guarantee in row one is unchanged; what changed is
+that the *sender* is no longer stopped in advance when its caller has vouched.
+
+**Who may vouch.** Only an application that seals its session after everything
+that moves the ratchet, and that can tell a clean exit from being killed. The
+mobile application does both, and marks its own state unvouchable the moment a
+session is put to use, so a process killed while a conversation was live comes
+back unable to vouch and rekeys once. An application that seals only sometimes
+must not call it.
+
+**And receiving a commit settles the same debt**, because a commit is exactly
+what the rekey was for: generations nothing has spent. Leaving the debt standing
+after receiving one is what made two restored copies answer each other with
+commits in a loop, and every round was another chance at the split above.
 
 **Three of the four are inherited.** The forward-secrecy deletion, the forward
 distance limit of a thousand and the epoch check are the library's behaviour,
