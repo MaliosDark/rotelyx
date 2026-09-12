@@ -10,7 +10,7 @@
 
 No accounts, no phone numbers, and no servers belonging to anybody else.
 
-[![tests](https://img.shields.io/badge/tests-1%2C222%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
+[![tests](https://img.shields.io/badge/tests-1%2C285%20passing-6a31ee?style=flat-square)](docs/CONTRIBUTING.md)
 [![rust](https://img.shields.io/badge/rust-1.85%2B-6a31ee?style=flat-square)](#try-it)
 [![licence](https://img.shields.io/badge/licence-AGPL--3.0-8b8b8b?style=flat-square)](#licence)
 [![status](https://img.shields.io/badge/reviewed-6%20rounds%20internal-C8A76B?style=flat-square)](#security-status)
@@ -248,7 +248,7 @@ Measured between two processes through a relay: 991 frames sent and 944
 received in twenty seconds, 79 ms of audio queued, nothing dropped. Two desktop
 windows calling each other over the production relay is a test rather than a
 story, `two_desktops_calling`, and it asserts on what arrives rather than on
-what was sent, because sending proves nothing. It is not one of the 1,222: it
+what was sent, because sending proves nothing. It is not one of the 1,285: it
 needs the live relay and mailbox, so it is marked `#[ignore]` and run
 deliberately, and a test that needs the network is one people learn to re-run
 when it is slow rather than believe when it fails.

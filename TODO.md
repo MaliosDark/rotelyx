@@ -130,10 +130,29 @@ nobody can read is a list nobody uses.
 
 ### 5. Multi device
 
-- [?] Which device authorises the next one, and what the user sees when it
-      happens
+- [x] Which device authorises the next one, and what the user sees when it
+      happens. **Done 12 September 2026.** A second device is a second leaf,
+      added by a commit everybody sees, and the two screens show the same
+      fifteen digits over the key package as received before it is let in.
+      `docs/DEVICES.md`. What is still open is a real test with two phones
+      belonging to one person, which has not happened
 
 ### 6. Audio calls
+
+- [x] **Group calls beyond a handful.** Done 12 September 2026: the relay holds
+      rooms and a call with more than two members dials one. Thirty two seats,
+      the frame format's limit. What remains is below
+- [ ] **Nobody has held a group call that large.** Three participants on a test
+      bench through a real relay, and that is all. A room of thirty two on real
+      phones on real networks is a measurement nobody has taken, and the relay's
+      egress at that size (one copy of every speaker per listener) has been
+      calculated and not observed
+- [ ] **Speakers and listeners.** Thirty two is the ceiling on people
+      *sending*. A listener needs no seat until it speaks, and the group holds
+      up to a thousand members, so a room could hold far more listeners than
+      speakers the way a large voice chat does elsewhere. The forwarder gives
+      every participant a seat today; separating the two is the change, and
+      the relay's bandwidth is the cost
 
 - [ ] **Retuning the allocator needs ears, not SNR.** The energy is all at the
       bottom of the spectrum, so optimising signal to noise would strip the top,
@@ -378,9 +397,11 @@ nobody can read is a list nobody uses.
 
 ### 7. Mobile clients
 
-- [!] **iOS needs a Mac**, and no amount of wanting changes that. The targets and
-      the `xcframework` step are in `scripts/build-mobile ios` and have never
-      been run
+- [x] ~~iOS needs a Mac~~. It has one, and iOS is in TestFlight as of
+      12 September 2026. Not on the App Store: the review submission is the
+      open item, and Apple's guideline 1.2 asks for blocking, reporting,
+      published contact and a day's response time, all of which are now built
+      and written
 - [ ] Background lifecycle. iOS will not hold a socket, and every design
       decision downstream of "the phone hosts it" collides with this
 - [?] Whether to ship the browser harness as a Tauri shell or write native
@@ -415,6 +436,8 @@ nobody can read is a list nobody uses.
       must be made without the define. One line, and the kind of line that gets
       shipped because it was true for every build during the work
 
-- [ ] `android/key.properties` does not exist, so every release APK is signed
-      with the debug key and cannot be uploaded anywhere. Stated in the build
-      output every time and easy to stop reading
+- [x] ~~`android/key.properties` does not exist~~. It does, the AAB was
+      signed with it and is on Google Play. Left here struck through rather
+      than deleted because the next machine this is built on will not have the
+      file, and the build output will say so in a line that is easy to stop
+      reading

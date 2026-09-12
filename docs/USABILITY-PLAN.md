@@ -71,6 +71,8 @@ exactly as it is today.
 added by a commit the other side saw, and removing one from the other stops it
 receiving.
 
+
+**Built.** `Member::for_device`, one leaf per device, and the fifteen digits that decide whether to let one in. `docs/DEVICES.md`. Not yet tried with two real phones belonging to one person.
 ---
 
 ## 2. Joining a group without the founder awake
@@ -88,6 +90,8 @@ answer it, and the part where an answer can wait.
 **What it must not become.** A join that anybody who has the link can perform
 unseen. Admission stays an act a member takes, and it stays visible in a commit.
 
+
+**Built.** Invitations carry an expiry, a number of admissions and whether somebody inside must approve; a knock reaches a phone that is not looking; and admitting anybody now takes two members, so the founder being asleep is the ordinary case rather than a special one.
 ---
 
 ## 3. Handing over history, with consent, in the open
@@ -105,6 +109,8 @@ The reason to build it is that people do this anyway by screenshot, badly and
 invisibly. The reason it is third rather than first is that it is worth nothing
 until 2 has made groups bearable to join.
 
+
+**Built.** `Signal.history`: one person's copy, forced to that person's name, older than anything the receiver holds, and delivered to the whole group.
 ---
 
 ## 4. An interface for bots and agents
@@ -149,6 +155,8 @@ where nobody comparing two applications will find it.
 Written last because a claim is worth making after the four things above have
 made the product worth choosing for other reasons too.
 
+
+**Built.** The section "What a group costs, and why it is a tree" in `docs/ARCHITECTURE.md`, and the same on the website. Nobody is named.
 ---
 
 ## What is deliberately not on this list

@@ -127,7 +127,7 @@ section from the ledger breaks the build, which is checked by deleting one.
 cargo test --workspace
 ```
 
-**678 tests** in the workspace and 544 more under `crates/net/`, 1,222 in all, plus 11 in the issuer crate that is not published here. The
+**741 tests** in the workspace and 544 more under `crates/net/`, 1,285 in all, plus 11 in the issuer crate that is not published here. The
 distribution matters more than the count:
 
 | Suite | Tests | What it proves |

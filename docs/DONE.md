@@ -1139,6 +1139,12 @@ measurement, and a number nobody wrote down has to be measured again.
       feature, and the gap between a component existing and a feature working is
       how three guarantees in this project ended up documented and unenforced.
 
+      **12 September 2026: a client calls it.** The relay holds rooms
+      (`rotelyx-relay/src/room.rs`), the production relay runs one, and a call
+      with more than two members dials it. Three participants through a real
+      relay in `scripts/room-test`, in CI. The paragraph above stays because it
+      was true for a month and says why a ticked box is not a feature.
+
       **The leak this item named turned out to be two leaks, and one of them
       closes.** Sizes were the first: speech is not a constant bit rate, a coded
       frame of silence is smaller than a vowel, so datagram lengths alone are a

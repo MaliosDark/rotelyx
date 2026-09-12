@@ -75,6 +75,17 @@ hole-punch.
   replace it with something worse: the peer learning this device's address. So
   every client selects `RelayOnly` and this stays. Mitigations: what the relay
   sees are keys and not people; self-hosted relays; rotate relay selection.
+- **Not defended, and new: a room.** A group call's media meets at the relay
+  now, in a room the relay holds. It sees which seats are in which room and
+  when each one speaks, which with silence not forwarded is the rhythm of the
+  conversation: who interrupts whom, who goes quiet. It saw that a call was
+  happening between these endpoints when it carried them to each other; now it
+  sees it in one place. It still does not learn who anybody is: an endpoint on
+  a call is a transport key made for that call, and the room id is derived
+  from the call's binding and names nothing outside the group. It cannot read
+  a frame, because the media key is exported from the MLS epoch and the relay
+  is not in the group. `crates/rotelyx-relay/src/room.rs` and
+  `crates/rotelyx-media/src/forward.rs` say the rest.
 - **The one design that changes this is built, and off unless asked for.**
   Chaining two relays leaves the first knowing who sends and the second knowing
   who receives, so no single operator holds the pair. `docs/RELAY-CHAINING.md`
