@@ -126,6 +126,27 @@ read all stored envelopes, retain them past TTL, and correlate timing.
 - **Defended:** sender identity: sealed sender means the envelope carries no
   sender field, and a caller presenting nothing is given a fresh capability id
   per connection, so the mailbox has no value tying its deposits together.
+- **Defended, and it is a rule the clients keep rather than the mailbox:**
+  **one connection asks about one conversation.** The mailbox holds every tag,
+  which is fine, because a tag on its own names nothing and they rotate. What
+  it must never be handed is which tags go together. A connection that
+  subscribes to the tags of two conversations has told the mailbox that those
+  conversations belong to one device, and from there to a person's social
+  graph is a matter of waiting.
+
+  This has been broken twice in the phone client, both times to make something
+  work that people rightly expected to work: noticing a call in a group nobody
+  had open, and receiving in conversations that were not on screen. Both times
+  every test passed, because the guard looked for the shape of the previous
+  change. It is now an object in the client (`SocketOwnership`) that every
+  subscription passes through and that refuses a second conversation, a device
+  listening on several conversations opens a socket for each, and the test
+  checks the object and counts the call sites rather than matching a pattern.
+
+  **If you need the client to listen on more than one conversation, open more
+  than one connection.** The mailbox meters new connections at sixty a minute
+  with a burst of twenty, so they are opened a few at a time; that is the
+  cost, and it is the right one to pay.
 - **Not defended for a paying sender:** a bought token carries a random 16 byte
   id, and the meter counts against it, so the mailbox can tie together every
   deposit made under one token. The id names nobody, which is not the same as
