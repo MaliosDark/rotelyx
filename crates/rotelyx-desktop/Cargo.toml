@@ -23,6 +23,8 @@ rotelyx-net.workspace = true
 # mailbox, which is the only place a phone can be reached.
 rotelyx-wasm = { path = "../rotelyx-wasm" }
 rotelyx-mailbox-client = { path = "../rotelyx-mailbox-client" }
+# For the addressing bucket, which must be the same number in every client.
+rotelyx-mailbox = { path = "../rotelyx-mailbox" }
 
 # No Node, no bundler. The frontend is plain HTML served from `ui/`, so the
 # only toolchain needed to build this is cargo.

@@ -38,5 +38,8 @@
 pub mod envelope;
 pub mod store;
 
-pub use envelope::{Bucket, Envelope, EnvelopeError, Tag, TagKey};
+pub use envelope::{
+    bucket_at, Bucket, Envelope, EnvelopeError, Tag, TagKey, LOOKBACK_FOR_FORTY_HOURS,
+    TAG_BUCKET_SECONDS,
+};
 pub use store::{Mailbox, StoreError, DEFAULT_TTL_SECONDS, MAX_PER_TAG};

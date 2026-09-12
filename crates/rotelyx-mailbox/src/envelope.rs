@@ -156,6 +156,79 @@ impl Bucket {
 /// Derive it from an MLS exporter secret rather than reusing a message key.
 pub struct TagKey(Zeroizing<[u8; 32]>);
 
+/// How long one addressing bucket lasts, in seconds.
+///
+/// # Why it is here and not computed by each caller
+///
+/// It was computed by each caller, as `now / 3600`, in the terminal client, the
+/// desktop client, the phone and the browser. Four copies of one number that
+/// have to agree exactly: a caller that disagrees derives a different tag,
+/// deposits where nobody is listening, and nothing anywhere raises an error.
+/// The envelope simply sits until it expires. One constant, imported.
+///
+/// # Why it is still an hour, written down rather than left implied
+///
+/// A tag is a pseudonym for a recipient that lasts as long as the bucket, so a
+/// shorter bucket means less material an operator can hang on any one name,
+/// which is the clustering key the published statistical disclosure attacks
+/// need. Shortening it is the obvious improvement and it is not free, because
+/// the same number decides how long a device can be away and still find its
+/// mail.
+///
+/// The binding constraint is the number of tags one subscription may carry,
+/// which the server caps at 64 so that a connection cannot ask about half the
+/// mailbox. A recipient covers `lookback + 1` buckets, so:
+///
+/// | Bucket | Tags for the grace period | Grace |
+/// |---|---|---|
+/// | 1 hour | 40 | 40 hours |
+/// | 30 minutes | 64 | 32 hours |
+/// | 10 minutes | 64 | 10.6 hours |
+/// | 10 minutes | 240 | 40 hours, over the cap |
+///
+/// A phone is offline overnight, so a grace period under about a day is a
+/// phone that stops finding messages left while its owner was asleep. That is
+/// the trade, and it is a decision about the product rather than about the
+/// cryptography, which is why it is written here instead of being quietly
+/// taken.
+///
+/// One more cost is easy to miss: a wake ticket is left under **each** tag, so
+/// the number of tags is also the number of seals a phone performs every time
+/// it resubscribes.
+pub const TAG_BUCKET_SECONDS: u64 = 3600;
+
+/// A lookback that covers roughly forty hours of being away, in buckets.
+///
+/// Derived from [`TAG_BUCKET_SECONDS`] rather than written down, so changing
+/// the bucket cannot quietly change how long a device may be away with it.
+/// That coupling is the whole reason both live in this file.
+pub const LOOKBACK_FOR_FORTY_HOURS: u64 = (40 * 3600 / TAG_BUCKET_SECONDS) - 1;
+
+/// The two numbers above are one pair, and these fail the build rather than a
+/// test if somebody changes either alone.
+///
+/// A subscription carries at most 64 tags, which the server enforces. The
+/// grace period costs one tag per bucket, so shortening the bucket without
+/// checking this turns a privacy improvement into a phone that silently stops
+/// receiving what arrived while it was asleep. That is a defect nothing would
+/// report, which is exactly the kind this project keeps finding.
+const _: () = assert!(
+    (LOOKBACK_FOR_FORTY_HOURS + 1) * TAG_BUCKET_SECONDS == 40 * 3600,
+    "the lookback no longer covers the grace period it is named for"
+);
+const _: () = assert!(
+    LOOKBACK_FOR_FORTY_HOURS < 64,
+    "covering forty hours needs more tags than a subscription may carry"
+);
+
+/// Which bucket a wall clock time falls in.
+///
+/// Time is a parameter rather than something read here, so skew stays an
+/// explicit concern instead of a hidden one, and every test is deterministic.
+pub fn bucket_at(unix_seconds: u64) -> u64 {
+    unix_seconds / TAG_BUCKET_SECONDS
+}
+
 impl TagKey {
     pub fn new(bytes: [u8; 32]) -> Self {
         Self(Zeroizing::new(bytes))
@@ -830,5 +903,39 @@ mod tests {
     fn tag_key_debug_never_leaks() {
         let k = TagKey::new([1u8; 32]);
         assert_eq!(format!("{k:?}"), "TagKey(<redacted>)");
+    }
+}
+
+#[cfg(test)]
+mod bucket_tests {
+    use super::*;
+
+    /// Two clients a few seconds apart must land in the same bucket almost
+    /// always, and when they do not, the lookback is what covers it.
+    #[test]
+    fn a_boundary_is_covered_by_looking_back() {
+        let key = TagKey::new([7u8; 32]).for_member(b"carol");
+
+        let just_before = bucket_at(TAG_BUCKET_SECONDS - 1);
+        let just_after = bucket_at(TAG_BUCKET_SECONDS);
+        assert_ne!(just_before, just_after, "the boundary moved nothing");
+
+        // A sender one second before the boundary, a recipient polling one
+        // second after it, still meet.
+        let deposited = key.tag_for_epoch(just_before);
+        let polled = key.polling_tags(just_after, LOOKBACK_FOR_FORTY_HOURS);
+        assert!(
+            polled.contains(&deposited),
+            "an envelope left a second before a boundary became unreachable"
+        );
+    }
+
+    /// The whole point of the constant: one number, not four.
+    #[test]
+    fn the_bucket_is_what_bucket_at_divides_by() {
+        assert_eq!(bucket_at(0), 0);
+        assert_eq!(bucket_at(TAG_BUCKET_SECONDS - 1), 0);
+        assert_eq!(bucket_at(TAG_BUCKET_SECONDS), 1);
+        assert_eq!(bucket_at(TAG_BUCKET_SECONDS * 40), 40);
     }
 }

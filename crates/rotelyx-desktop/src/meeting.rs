@@ -129,13 +129,19 @@ fn shuffle<T>(items: &mut [T]) -> Result<()> {
     Ok(())
 }
 
-/// Hours since the Unix epoch, the same formula both clients use.
+/// Which addressing bucket the clock is in.
+///
+/// The divisor is imported rather than written here. It used to be `/ 3600` in
+/// this file, in the terminal client, on the phone and in the browser: four
+/// copies of one number that have to agree exactly, and a client that disagrees
+/// deposits under a tag nobody is listening on with no error anywhere.
 fn bucket() -> Result<u64> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("the clock is before 1970")?
-        .as_secs()
-        / 3600)
+    Ok(rotelyx_mailbox::bucket_at(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("the clock is before 1970")?
+            .as_secs(),
+    ))
 }
 
 /// Carry on a conversation that is already on disk.
