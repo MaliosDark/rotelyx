@@ -62,7 +62,11 @@ impl Wire {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     /// The session is up and the group is this large at this epoch.
-    Ready { members: usize, epoch: u64 },
+    ///
+    /// `me` is the label this member is known by in the conversation, which a
+    /// bot needs so it can tell when it is being spoken to. Without it a bot
+    /// answers everything or nothing, and both are the wrong bot.
+    Ready { me: String, members: usize, epoch: u64 },
 
     /// The digits that say nobody is in the middle, and the name they belong
     /// to.
@@ -192,6 +196,13 @@ pub enum Command {
     Send { text: String },
     /// Ask for the membership again, unprompted by any change.
     Members,
+    /// Put a member out of the conversation, by the label the roster uses.
+    ///
+    /// A removal is a commit every member sees, and it does not need a second
+    /// member: what takes two is letting somebody in. A bot that moderates a
+    /// group is a bot that can do this, and the people in the group can see
+    /// it did.
+    Remove { who: String },
     /// Leave.
     Quit,
 }
@@ -236,6 +247,10 @@ mod tests {
             }
         );
         assert_eq!(parse(r#"{"do":"members"}"#).unwrap(), Command::Members);
+        assert_eq!(
+            parse(r#"{"do":"remove","who":"4f2a"}"#).unwrap(),
+            Command::Remove { who: "4f2a".into() }
+        );
         assert_eq!(parse(r#"{"do":"quit"}"#).unwrap(), Command::Quit);
     }
 
@@ -276,6 +291,7 @@ mod tests {
         // halfway.
         for event in [
             Event::Ready {
+                me: "a".into(),
                 members: 2,
                 epoch: 1,
             },

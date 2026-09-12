@@ -219,6 +219,21 @@ macro_rules! aside {
     };
 }
 
+/// The identity this member is in the roster under.
+///
+/// The roster names leaves by the credential they joined with, and the member
+/// knows its own signature key, so the match is on the key MLS authenticates
+/// rather than on anything self-asserted.
+fn conversation_label(conversation: &Conversation, me: &Member) -> Vec<u8> {
+    let mine = me.signature_key();
+    conversation
+        .roster()
+        .into_iter()
+        .find(|p| p.signature_key == mine)
+        .map(|p| p.identity)
+        .unwrap_or_default()
+}
+
 /// Wall-clock epoch. The library takes time as a parameter so it stays
 /// testable; somebody has to read a clock, and this is the somebody.
 fn now_epoch() -> Result<u64> {
@@ -413,6 +428,7 @@ async fn chat(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     wire.emit(&Event::Ready {
+        me: short_id(&conversation_label(&conversation, me)),
         members: conversation.member_count(),
         epoch: conversation.epoch(),
     });
@@ -436,6 +452,41 @@ async fn chat(
                             wire.emit(&Event::Members {
                                 count: conversation.member_count(),
                             });
+                            continue;
+                        }
+                        Ok(BotCommand::Remove { who }) => {
+                            let target = conversation
+                                .roster()
+                                .into_iter()
+                                .find(|p| short_id(&p.identity) == who);
+                            match target {
+                                None => wire.emit(&Event::refused(format!(
+                                    "nobody in this conversation is {who}"
+                                ))),
+                                Some(p) => match conversation.remove(me, &p.signature_key) {
+                                    Err(e) => wire.emit(&Event::refused(format!("cannot remove {who}: {e}"))),
+                                    Ok(commit) => {
+                                        // Sent, then applied: the commit is
+                                        // addressed at the epoch the others are
+                                        // still on, and settling first would
+                                        // put this member one ahead of the
+                                        // frame it is about to send.
+                                        if let Err(e) = Frame::new(FrameKind::Message, commit)
+                                            .write(&mut send)
+                                            .await
+                                        {
+                                            wire.emit(&Event::refused(format!("sending the removal: {e}")));
+                                        } else if let Err(e) = conversation.settle(me) {
+                                            wire.emit(&Event::refused(format!("applying the removal: {e}")));
+                                        } else {
+                                            wire.emit(&Event::Left { who });
+                                            wire.emit(&Event::Members {
+                                                count: conversation.member_count(),
+                                            });
+                                        }
+                                    }
+                                },
+                            }
                             continue;
                         }
                         Ok(BotCommand::Quit) => None,

@@ -26,7 +26,11 @@ rotelyx --identity bot.key connect <code> --bot --relay https://relay.example
 ```
 
 `examples/echo-bot.py` is a working one in about eighty lines, most of them
-comments.
+comments. `bot-examples/` holds ten ready to run, the ones people ask for on
+every messenger (reminders, polls, expenses, moderation, alerts, an
+assistant, and so on), each with a README that says what it sees, and a pair
+of agents that negotiate with each other over a channel neither a platform
+nor the model provider can read.
 
 ## The interface
 

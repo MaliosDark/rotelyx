@@ -224,6 +224,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: ./scripts/room-test
 
+  bot-examples:
+    # The six bots that need no model, each given an instruction through a
+    # real relay by a program playing the person, and each has to answer with
+    # the right thing. A README that says "/poll" beside a bot that no longer
+    # answers it is the failure this catches.
+    name: the example bots answer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: ./bot-examples/test.sh
+
   timing:
     # The codec has to fit in a fraction of one core or a call does not run.
     # That bound cannot be asserted inside `cargo test --workspace`, which runs
