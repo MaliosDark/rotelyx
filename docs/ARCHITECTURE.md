@@ -132,6 +132,48 @@ separation is a design rule, not an accident.
 
 ---
 
+## What a group costs, and why it is a tree
+
+A group here is one MLS group: one key schedule, one epoch, and a ratchet tree
+whose leaves are the members. The alternative, and the one the nearest
+competitor builds on, is a mesh of one-to-one connections, where a group of `n`
+people is `n(n-1)/2` pairwise channels with no shared state at all.
+
+The difference shows up in the operation groups actually do all day, which is
+not sending a message. It is **changing the keys**: somebody joins, somebody
+leaves, a device is added, a copy is restored. Every one of those has to reach
+everybody.
+
+| | a mesh of pairs | a ratchet tree |
+|---|---|---|
+| Members hold the same key schedule | no, `n(n-1)/2` separate ones | yes, one |
+| Work to rekey for everybody | linear in the members | logarithmic |
+| A removal that actually removes | every pair has to be told and every pair has to comply | one commit, and the removed member is not in the tree that produced the next epoch |
+| Who can see a membership change | whoever was told | everybody, because it is in the commit that moves the epoch |
+
+The last row is the one worth the most and is the least visible in a feature
+list. A mesh has no place for a group to agree on who is in it, so "who is in
+this group" is whatever each member has been told separately, and a member who
+is not told is a member who does not know. Here it is a property of the epoch:
+a message encrypted at epoch `n+1` can only be read by the leaves that were in
+the tree when `n+1` was derived, so an addition nobody mentioned is an addition
+that changed the safety number.
+
+**What this does not buy.** Delivery. A message still leaves one deposit per
+member in the mailbox, because a shared address would tell the operator the
+group exists, how large it is and how often it speaks. The tree makes the
+*cryptography* cheap; the fanout is the price of the mailbox being blind, and it
+is paid on purpose. See `docs/USABILITY-PLAN.md` for why a shared tag per group
+is refused.
+
+**And it is not free.** MLS is a specification with a real implementation
+underneath it, and this project carries that dependency rather than writing its
+own. `docs/UPSTREAM.md` records what that costs, including two advisories that
+are open because moving the version means moving the whole MLS stack onto
+release candidates.
+
+---
+
 ## Post quantum protection
 
 ### The problem
