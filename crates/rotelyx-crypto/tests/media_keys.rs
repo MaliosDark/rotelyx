@@ -30,10 +30,15 @@ fn group(n: usize) -> (Vec<Member>, Vec<Conversation>) {
         // two: the founder asks, everybody hears the request, and the first
         // joiner turns it into a commit.
         let (commit, welcome) = if joined.is_empty() {
-            founder
+            let made = founder
                 .invite(&members[0], kp.key_package())
                 .map(|(c, w)| (c, Some(w)))
-                .expect("invite")
+                .expect("invite");
+            // Before the welcome and the tree are read. Both name the epoch the
+            // commit creates, and an unapplied commit is an epoch that does not
+            // exist yet.
+            founder.settle(&members[0]).expect("apply our own commit");
+            made
         } else {
             let proposal = founder
                 .propose_invite(&members[0], kp.key_package())
@@ -48,7 +53,9 @@ fn group(n: usize) -> (Vec<Member>, Vec<Conversation>) {
                     .expect("hear the proposal");
             }
 
-            joined[0].confirm_additions(&members[1]).expect("confirm")
+            let made = joined[0].confirm_additions(&members[1]).expect("confirm");
+            joined[0].settle(&members[1]).expect("apply our own commit");
+            made
         };
         let welcome = welcome.expect("a welcome for the joiner");
 
@@ -159,6 +166,9 @@ fn a_membership_change_rekeys_the_call() {
         .confirm_additions(&members[1])
         .expect("confirm");
     let welcome = welcome.expect("a welcome for carol");
+    conversations[1]
+        .settle(&members[1])
+        .expect("apply our own commit");
     let tree = conversations[1].ratchet_tree().expect("tree");
 
     conversations[0]

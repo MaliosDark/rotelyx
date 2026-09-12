@@ -26,6 +26,7 @@ fn pair() -> (Member, Member, Conversation, Conversation) {
     let mut a = Conversation::create(&alice).expect("create");
     let kp = bob.key_package().expect("key package");
     let (_commit, welcome) = a.invite(&alice, kp.key_package()).expect("invite bob");
+    a.settle(&alice).expect("apply our own commit");
     let tree = a.ratchet_tree().expect("tree");
     let b = Conversation::join(&bob, &welcome, &tree).expect("bob joins");
 
@@ -84,6 +85,7 @@ fn two_members_between_them_can() {
     // Bob confirms, and now it happens.
     let (commit, welcome) = b.confirm_additions(&bob).expect("bob confirms");
     let welcome = welcome.expect("a welcome for carol");
+    b.settle(&bob).expect("apply our own commit");
     let change = a
         .receive(&alice, &commit)
         .expect("alice applies it")
@@ -140,6 +142,7 @@ fn first_contact_is_exempt_because_there_is_nobody_else_yet() {
     let mut a = Conversation::create(&alice).expect("create");
     let kp = bob.key_package().expect("key package");
     let (_commit, welcome) = a.invite(&alice, kp.key_package()).expect("invite");
+    a.settle(&alice).expect("apply our own commit");
     let tree = a.ratchet_tree().expect("tree");
 
     let b = Conversation::join(&bob, &welcome, &tree).expect("bob joins");
@@ -159,6 +162,7 @@ fn a_person_adding_their_own_device_is_not_admitting_anybody() {
     let mut a = Conversation::create(&alice).expect("create");
     let kp = bob.key_package().expect("key package");
     let (_commit, welcome) = a.invite(&alice, kp.key_package()).expect("invite bob");
+    a.settle(&alice).expect("apply our own commit");
     let tree = a.ratchet_tree().expect("tree");
     let mut b = Conversation::join(&bob, &welcome, &tree).expect("bob joins");
 
@@ -195,6 +199,7 @@ fn somebody_elses_device_is_not_your_device() {
     let mut a = Conversation::create(&alice).expect("create");
     let kp = bob.key_package().expect("key package");
     let (_commit, welcome) = a.invite(&alice, kp.key_package()).expect("invite bob");
+    a.settle(&alice).expect("apply our own commit");
     let tree = a.ratchet_tree().expect("tree");
     let mut b = Conversation::join(&bob, &welcome, &tree).expect("bob joins");
 
@@ -238,6 +243,7 @@ mod admins {
         let mut a = Conversation::create(&alice).expect("create");
         let kp = bob.key_package().expect("kp");
         let (_c, welcome) = a.invite(&alice, kp.key_package()).expect("invite bob");
+        a.settle(&alice).expect("apply our own commit");
         let mut b =
             Conversation::join(&bob, &welcome, &a.ratchet_tree().expect("tree")).expect("bob joins");
 
@@ -245,6 +251,7 @@ mod admins {
         let proposal = a.propose_invite(&alice, kp.key_package()).expect("propose");
         b.receive(&bob, &proposal).expect("bob hears it");
         let (commit, welcome) = b.confirm_additions(&bob).expect("bob confirms");
+        b.settle(&bob).expect("apply our own commit");
         a.receive(&alice, &commit).expect("alice applies");
         let mut c = Conversation::join(
             &carol,
@@ -256,6 +263,7 @@ mod admins {
         let commit = a
             .set_admins(&alice, &[b"alice".to_vec()])
             .expect("name the admins");
+        a.settle(&alice).expect("apply our own commit");
         b.receive(&bob, &commit).expect("bob applies");
         c.receive(&carol, &commit).expect("carol applies");
 
@@ -307,6 +315,7 @@ mod admins {
         b.receive(&bob, &proposal).expect("bob hears it");
 
         let (commit, welcome) = a.confirm_additions(&alice).expect("alice commits");
+        a.settle(&alice).expect("apply our own commit");
         let change = b
             .receive(&bob, &commit)
             .expect("bob applies it")
@@ -347,6 +356,7 @@ mod admins {
         let commit = b
             .remove(&bob, &alices_leaf)
             .expect("bob removes alice");
+        b.settle(&bob).expect("apply our own commit");
         c.receive(&carol, &commit).expect("carol applies");
         let _ = a.receive(&alice, &commit);
 
@@ -359,6 +369,7 @@ mod admins {
         let proposal = b.propose_invite(&bob, kp.key_package()).expect("propose");
         c.receive(&carol, &proposal).expect("carol hears it");
         let (commit, _welcome) = c.confirm_additions(&carol).expect("carol commits");
+        c.settle(&carol).expect("apply our own commit");
 
         b.receive(&bob, &commit).expect("bob applies it");
         assert_eq!(b.member_count(), 3, "the group could not admit anybody");

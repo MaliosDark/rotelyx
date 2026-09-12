@@ -522,6 +522,15 @@ impl Driver {
                                 ),
                             })
                         }
+                        // Two changes at one moment, and the other one
+                        // stood. Said out loud: what was asked for here did
+                        // not happen.
+                        Ok(Received::OurCommitLost { .. }) => self.emit(Event::Error {
+                            text: "somebody else changed the group at the same moment and theirs \
+                                   stood. What was asked for here did not happen"
+                                .into(),
+                        }),
+                        Ok(Received::TheirCommitLost) => {}
                         Ok(Received::Nothing) => {}
                         Err(e) => self.emit(Event::Error { text: format!("decrypt failed: {e}") }),
                     }

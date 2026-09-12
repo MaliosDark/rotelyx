@@ -105,6 +105,12 @@ fn two_people_pair_and_talk() {
          reported as {applied}"
     );
 
+    // Applied once the other side has it. Until then this session is still
+    // standing where the other one is, which is what lets it take a commit
+    // made at the same moment instead of its own, and a session that never
+    // settles stays behind while everybody else moves on.
+    ok(json!({"op": "session.settle", "handle": ana}));
+
     // Both sides agree on who is present and on which epoch they are in. If
     // these differ, everything below would still appear to work and the
     // messages would be unreadable, which is the failure this catches.

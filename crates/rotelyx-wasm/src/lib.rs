@@ -348,6 +348,24 @@ impl Session {
             .ok_or_else(|| Error::new("no conversation yet: call found() first"))?;
 
         let (commit, welcome) = group.invite(member, &kp).map_err(err)?;
+
+        // Applied here rather than held, and the reason is a limit worth
+        // stating rather than hiding.
+        //
+        // Everywhere else a commit is held so that a commit somebody made at
+        // the same moment can be taken instead. An addition cannot do that:
+        // the ratchet tree handed to the joiner describes the epoch this
+        // commit creates, and a commit that has not been applied is an epoch
+        // that does not exist yet. Deferring it would mean handing somebody an
+        // invitation to a group that may never happen.
+        //
+        // So an addition keeps the old race and a rekey, a removal and a
+        // change of who decides do not. That is a smaller hole than it was,
+        // because an addition already takes two members and two of those
+        // landing at one instant is a far narrower window than two devices
+        // reopening at once, which is the case this cost a week over.
+        group.settle(member).map_err(err)?;
+
         let tree = group.ratchet_tree().map_err(err)?;
 
         self.sync_tag_keys()?;
@@ -408,6 +426,41 @@ impl Session {
         Ok(BASE64.encode(&commit))
     }
 
+    /// Apply this member's own commit, once it is somewhere the others can
+    /// get it.
+    ///
+    /// Until this is called the member is still at the old epoch, which is
+    /// what lets it take somebody else's commit instead of its own when the
+    /// two were made at the same moment. After it, that door is shut.
+    ///
+    /// A caller that never calls this stays where it is and the change it
+    /// asked for never happens, so the rule is: deposit the commit, then
+    /// settle, then deliver any welcome. Delivering a welcome first would hand
+    /// somebody an invitation to an epoch that may never exist.
+    ///
+    /// Returns whether there was anything to settle.
+    pub fn settle(&mut self) -> Result<bool, Error> {
+        let member = &self.member;
+        let group = self
+            .conversation
+            .as_mut()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+        let settled = group.settle(member).map_err(err)?;
+        if settled {
+            self.sync_tag_keys()?;
+        }
+        Ok(settled)
+    }
+
+    /// Whether this member is holding a commit it has not applied.
+    #[wasm_bindgen(js_name = isHoldingACommit)]
+    pub fn is_holding_a_commit(&self) -> bool {
+        self.conversation
+            .as_ref()
+            .map(|c| c.is_holding_a_commit())
+            .unwrap_or(false)
+    }
+
     /// Ask the group to admit somebody. Nothing changes until another member
     /// confirms it.
     ///
@@ -445,6 +498,10 @@ impl Session {
             .ok_or_else(|| Error::new("no conversation yet: call found() first"))?;
 
         let (commit, welcome) = group.confirm_additions(member).map_err(err)?;
+
+        // Applied straight away, for the reason written against `invite`: the
+        // tree below describes the epoch this commit creates.
+        group.settle(member).map_err(err)?;
         let welcome = welcome
             .ok_or_else(|| Error::new("those proposals admit nobody, so there is no welcome"))?;
         let tree = group.ratchet_tree().map_err(err)?;
@@ -712,7 +769,34 @@ impl Session {
             .as_mut()
             .ok_or_else(|| Error::new("no conversation yet"))?;
 
-        let outcome = group.receive(member, &bytes).map_err(err)?;
+        // An admission the group refuses is not an error and must not be
+        // reported as one.
+        //
+        // # Why this is the difference between a rule and a silence
+        //
+        // A refusal means the sender moved to an epoch this member did not.
+        // From here on their messages are unreadable, which is precisely the
+        // shape of the failure this project spent a week chasing: two ends at
+        // two epochs with nothing saying so. Handed back as a thrown error it
+        // reached the phone as "a message failed to decrypt", which is untrue,
+        // invisible, and describes the wrong thing.
+        //
+        // So it comes back as an outcome. The message was processed and
+        // deliberately not applied, and the person is owed that sentence.
+        let outcome = match group.receive(member, &bytes) {
+            Ok(outcome) => outcome,
+            Err(
+                refusal @ (rotelyx_crypto::GroupError::AddedWithoutASecondMember
+                | rotelyx_crypto::GroupError::AddedBySomebodyWhoIsNotAnAdmin),
+            ) => {
+                return serde_json::to_string(&serde_json::json!({
+                    "kind": "refused",
+                    "why": refusal.to_string(),
+                }))
+                .map_err(|e| Error::new(format!("{e}")));
+            }
+            Err(other) => return Err(err(other)),
+        };
 
         // A commit moves the epoch, so the tag key must follow it.
         self.sync_tag_keys()?;
@@ -797,6 +881,37 @@ impl Session {
                     "by": by.as_ref().map(|p| short(&p.identity)),
                     "joining": joining,
                 })
+            }
+            // Somebody else changed the group at the same moment and theirs
+            // stood. The change asked for on this device did not happen, and
+            // only the caller knows what it was, so only the caller can ask
+            // again. Reported beside what did happen, so an interface can say
+            // both in one breath.
+            rotelyx_crypto::Received::OurCommitLost { instead } => {
+                let mut value = serde_json::json!({ "kind": "supersededByAnother" });
+                if let rotelyx_crypto::Received::MembershipChanged(change) = *instead {
+                    value["added"] = serde_json::json!(change
+                        .added
+                        .iter()
+                        .map(|p| short(&p.identity))
+                        .collect::<Vec<_>>());
+                    value["removed"] = serde_json::json!(change
+                        .removed
+                        .iter()
+                        .map(|p| short(&p.identity))
+                        .collect::<Vec<_>>());
+                    value["members"] = serde_json::json!(self
+                        .conversation
+                        .as_ref()
+                        .map(|c| c.member_count())
+                        .unwrap_or(0));
+                }
+                value
+            }
+            // Theirs was discarded and this device's own stood. The other side
+            // reaches the same answer, so there is nothing to do.
+            rotelyx_crypto::Received::TheirCommitLost => {
+                serde_json::json!({ "kind": "nothing" })
             }
             rotelyx_crypto::Received::Nothing => serde_json::json!({ "kind": "nothing" }),
         };
@@ -967,14 +1082,19 @@ impl Session {
 
         let commit = group.remove(member, &key).map_err(err)?;
 
-        // The removal is merged locally by `Group::remove`, so this side is
-        // already at the new epoch and needs its key before it addresses
-        // anybody.
-        self.sync_tag_keys()?;
+        // Held rather than applied, like every commit that does not have to
+        // hand somebody a welcome. Two people reaching for the same removal at
+        // the same moment is not a contrived case, and until `settle` is
+        // called this device is still standing where the others are and can
+        // take theirs instead of its own.
+        //
+        // The caller deposits the commit and then settles. Never the other way
+        // round: sealing addresses the epoch the others are still on, which is
+        // what moves them off it.
         Ok(BASE64.encode(&commit))
     }
 
-    /// The tag this member listens on.    /// The tag this member listens on.
+    /// The tag this member listens on.
     ///
     /// Derived from the group's pinned key and this member's own signature
     /// key, so every other member computes the same value for us and nobody
@@ -1127,13 +1247,37 @@ impl Session {
         commit_b64: &str,
         time_bucket: u64,
     ) -> Result<Vec<String>, Error> {
-        if self.tag_keys.len() < 2 {
-            return Err(Error::new(
-                "no previous epoch to address: a commit before the group has moved once \
-                 has nobody waiting for it",
-            ));
-        }
-        let key = &self.tag_keys[self.tag_keys.len() - 2].1;
+        // Address the epoch the others are still on, which is not always the
+        // one before this session's.
+        //
+        // A commit that has been applied leaves this session one ahead of
+        // everybody, so the recipients are at the previous key. A commit that
+        // is being held has not moved anything yet, so this session is still
+        // standing where the recipients are and the current key is theirs.
+        //
+        // Getting this wrong is close to invisible. The envelopes land under
+        // tags nobody is listening on, both sides go on showing the same safety
+        // number, and the commit simply never arrives.
+        let held = self
+            .conversation
+            .as_ref()
+            .map(|c| c.is_holding_a_commit())
+            .unwrap_or(false);
+
+        let key = if held {
+            let Some((_, key)) = self.tag_keys.last() else {
+                return Err(Error::new("no conversation yet"));
+            };
+            key
+        } else {
+            if self.tag_keys.len() < 2 {
+                return Err(Error::new(
+                    "no previous epoch to address: a commit before the group has moved once \
+                     has nobody waiting for it",
+                ));
+            }
+            &self.tag_keys[self.tag_keys.len() - 2].1
+        };
         self.seal_with(key, commit_b64, time_bucket)
     }
 
@@ -2448,6 +2592,7 @@ mod tests {
             !is_message(&bob.receive(&commit).expect("apply commit")),
             "a commit carries no plaintext"
         );
+        alice.settle().expect("apply our own commit");
         assert_eq!(alice.epoch(), bob.epoch());
 
         let wire = alice.send("hello from the browser").expect("send");
@@ -2680,6 +2825,8 @@ mod tests {
                 "a commit carries no plaintext"
             );
         }
+        // Applied once everybody has it, and not before.
+        group[0].settle().expect("apply our own commit");
 
         let epoch = group[0].epoch();
         assert!(epoch > epoch_before);
@@ -2932,6 +3079,11 @@ mod tests {
         group[0]
             .receive(&commit)
             .expect("the other side applies the rekey");
+
+        // Applied once the other side has it. Between the two lines above this
+        // session is still standing where the other one is, which is what lets
+        // a rekey they made at the same moment be taken instead of this one.
+        reopened.settle().expect("apply our own rekey");
 
         let ciphertext = reopened.send("vuelvo a estar").expect("send");
         let envelopes = reopened.seal_for_group(&ciphertext, slot).expect("seal");

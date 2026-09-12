@@ -25,6 +25,7 @@ fn conversation_of_two() -> (Member, Member, Conversation, Conversation, TagKey,
     let mut a = Conversation::create(&alice).expect("create");
     let bob_kp = bob.key_package().expect("key package");
     let (_commit, welcome) = a.invite(&alice, bob_kp.key_package()).expect("invite");
+    a.settle(&alice).expect("settle before the welcome is used");
     let tree = a.ratchet_tree().expect("ratchet tree");
     let b = Conversation::join(&bob, &welcome, &tree).expect("join");
 
@@ -142,6 +143,11 @@ fn the_post_quantum_commit_survives_the_mailbox() {
     let commit = a.commit_pq_secret(&alice, &alice_secret).expect("commit");
     let envelope = Envelope::seal(sender_tags.tag_for_epoch(5), &commit).expect("seal");
     mailbox.deposit(envelope, 0).expect("deposit");
+
+    // Applied once it is somewhere Bob can get it, and not before. Sealing
+    // addresses it at the epoch Bob is still on, which is the whole reason the
+    // order is this way round.
+    a.settle(&alice).expect("apply our own commit");
 
     let collected = mailbox.collect_many(&recipient_tags.polling_tags(5, 1), 1);
     assert_eq!(collected.len(), 1);

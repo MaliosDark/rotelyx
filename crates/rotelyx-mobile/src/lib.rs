@@ -386,6 +386,8 @@ fn dispatch(req: &Value) -> Res {
             let labels = str_arg(req, "labels")?;
             json!({ "commit": engine(s.set_admins(&labels))? })
         }
+        "session.settle" => json!({ "settled": engine(s.settle())? }),
+        "session.isHoldingACommit" => json!(s.is_holding_a_commit()),
         "session.propose" => {
             let kp = str_arg(req, "keyPackage")?;
             json!({ "proposal": engine(s.propose(&kp))? })

@@ -155,6 +155,7 @@ fn messages() {
     let mut group = Conversation::create(&alice).expect("create");
     let bundle = bob.key_package().expect("kp");
     let (_commit, welcome) = group.invite(&alice, bundle.key_package()).expect("invite");
+    group.settle(&alice).expect("settle");
     let tree = group.ratchet_tree().expect("tree");
     let mut theirs = Conversation::join(&bob, &welcome, &tree).expect("join");
 
@@ -205,6 +206,7 @@ fn groups() {
             let (commit, _welcome) = group
                 .invite(&founder, bundle.key_package())
                 .expect("invite");
+            group.settle(&founder).expect("settle");
             last = commit.len();
         }
 

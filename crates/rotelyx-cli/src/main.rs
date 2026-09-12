@@ -566,6 +566,28 @@ async fn chat(
                                     )));
                                 }
                             }
+                            // Somebody else changed the group at the same
+                            // moment and theirs stood. The change asked for
+                            // here did not happen, and nothing else is going
+                            // to say so.
+                            Received::OurCommitLost { instead } => {
+                                wire.emit(&Event::refused(
+                                    "somebody else changed the group at the same moment and \
+                                     theirs stood. What was asked for here did not happen",
+                                ));
+                                if let Received::MembershipChanged(change) = *instead {
+                                    for who in &change.added {
+                                        wire.emit(&Event::Joined { who: short_id(&who.identity) });
+                                    }
+                                    for who in &change.removed {
+                                        wire.emit(&Event::Left { who: short_id(&who.identity) });
+                                    }
+                                    wire.emit(&Event::Members {
+                                        count: conversation.member_count(),
+                                    });
+                                }
+                            }
+                            Received::TheirCommitLost => {}
                             Received::Nothing => {}
                         }
                     }

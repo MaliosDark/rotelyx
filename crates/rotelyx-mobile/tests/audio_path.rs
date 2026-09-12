@@ -61,6 +61,12 @@ fn paired() -> (u64, u64) {
     let commit = control(json!({"op": "session.commitPq", "handle": ana}));
     control(json!({"op": "session.receive", "handle": beto, "message": commit}));
 
+    // Applied once the other side has it. A commit is held until then so that
+    // one made at the same moment by somebody else can be taken instead, and a
+    // caller that never settles stays behind while everybody else moves on,
+    // which here means a call whose audio never decodes.
+    control(json!({"op": "session.settle", "handle": ana}));
+
     (ana, beto)
 }
 

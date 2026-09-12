@@ -184,6 +184,8 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `session.invite` | `keyPackage` | `{commit, welcome, ratchetTree}` |
 | `session.propose` | `keyPackage` | `{proposal}` |
 | `session.confirm` | | `{commit, welcome, ratchetTree}` |
+| `session.settle` | | `{settled}` |
+| `session.isHoldingACommit` | | bool |
 | `session.admins` | | JSON array of labels |
 | `session.setAdmins` | `labels` (JSON array) | `{commit}` |
 | `session.join` | `welcome`, `ratchetTree` | null |

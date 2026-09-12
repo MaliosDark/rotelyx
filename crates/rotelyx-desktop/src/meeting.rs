@@ -193,6 +193,16 @@ pub async fn resume(
             for envelope in envelopes {
                 mailbox.deposit(&envelope).await?;
             }
+
+            // Applied only once every copy of it is in the mailbox.
+            //
+            // Until then this device is still at the epoch the others are on,
+            // so a rekey somebody else made at the same moment can still be
+            // taken instead of this one. Two devices reopening at once is
+            // exactly how two ends used to end up at two epochs neither could
+            // leave, and settling before the deposit would put that window
+            // back.
+            session.settle().map_err(to_anyhow)?;
         }
         Err(e) => {
             return Err(anyhow::anyhow!(
@@ -569,6 +579,11 @@ impl Meeting {
         let founding = !self.joined;
         let invitation = self.session.invite(key_package).map_err(to_anyhow)?;
 
+        // Before the welcome is handed over or the count is read. A welcome
+        // names the epoch the commit creates, and a commit that has not been
+        // applied is an epoch that does not exist yet.
+        self.session.settle().map_err(to_anyhow)?;
+
         // Who arrived, and how many are in the conversation now.
         //
         // Said rather than counted silently: a commit can remove one member and
@@ -640,6 +655,11 @@ impl Meeting {
                     for envelope in envelopes {
                         mailbox.deposit(&envelope).await?;
                     }
+
+                    // Applied once every copy is deposited, and not before.
+                    // Sealing addresses the epoch the guest is still on, which
+                    // is the whole reason the order is this way round.
+                    self.session.settle().map_err(to_anyhow)?;
                 }
                 // Said rather than swallowed. This was written as an empty arm
                 // on the reasoning that it could not happen, which is how a
@@ -935,6 +955,13 @@ impl Meeting {
                 {
                     mailbox.deposit(&envelope).await?;
                 }
+
+                // Applied once every copy is deposited. Sealing addresses the
+                // epoch the others are still on, which is what moves them off
+                // it, and until this line runs this device is still there with
+                // them: a removal somebody else made at the same moment can
+                // still be taken instead of this one.
+                self.session.settle().map_err(to_anyhow)?;
 
                 self.resubscribe(mailbox).await?;
                 self.say_who_is_here();

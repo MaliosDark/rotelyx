@@ -228,6 +228,13 @@ pub async fn host_resuming(
                 .await
                 .context("sending the rekey")?;
 
+            // Applied only once it is on the wire. Until then this copy is
+            // still at the epoch the other side is on, so a rekey they made at
+            // the same moment can still be taken instead of this one.
+            conversation
+                .settle(&saved_member)
+                .context("applying our own rekey")?;
+
             Ok(Opened::Resumed {
                 member: saved_member,
                 conversation,
@@ -294,6 +301,12 @@ async fn host_from_key_package(
     let (_commit, welcome) = conversation
         .invite(me, &key_package)
         .context("inviting the peer")?;
+
+    // Before the welcome is used: a welcome names the epoch the commit
+    // creates, and an unapplied commit is an epoch that does not exist yet.
+    conversation
+        .settle(me)
+        .context("applying the founding commit")?;
     let tree = conversation
         .ratchet_tree()
         .context("exporting ratchet tree")?;

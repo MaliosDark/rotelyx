@@ -165,6 +165,13 @@ pub enum GroupError {
     #[error("there are no proposals waiting to be confirmed")]
     NothingToConfirm,
 
+    #[error(
+        "a commit arrived for epoch {theirs} and this member is at {ours}. Somebody \
+         changed the group at the same moment this member did and both changes were \
+         applied, so this conversation and theirs are no longer the same one"
+    )]
+    TheGroupHasSplit { theirs: u64, ours: u64 },
+
     #[error("a group cannot have {count} admins: the list carries at most 255")]
     TooManyAdmins { count: usize },
 
@@ -749,6 +756,28 @@ pub enum Received {
     },
     /// Handled, and nothing for the caller to do.
     Nothing,
+
+    /// Somebody else committed at the same epoch as this member, and the tie
+    /// went to theirs.
+    ///
+    /// Their commit has been applied, and this member's own has been dropped
+    /// as though it had never been made. The change this member asked for did
+    /// **not** happen, and only the caller knows what it was, so only the
+    /// caller can ask for it again. A member added this way is not in the
+    /// group and any welcome prepared for them is worthless.
+    OurCommitLost {
+        /// What applying theirs did, so a caller can report the arrival as
+        /// well as the loss.
+        instead: Box<Received>,
+    },
+
+    /// The reverse: somebody else committed at the same epoch and the tie went
+    /// to this member's.
+    ///
+    /// Theirs was discarded unread and this member's own has been applied. The
+    /// other side is running the same comparison and will reach the same
+    /// answer, so there is nothing to send and nothing to do.
+    TheirCommitLost,
 }
 
 impl Received {
@@ -808,6 +837,39 @@ pub struct Conversation {
 
     /// Sequence numbers already spent by each sender at `seq_epoch`.
     seen_seq: std::collections::HashMap<openmls::prelude::LeafNodeIndex, SeenFrom>,
+
+    /// The commit this member last applied, by hash.
+    ///
+    /// The mailbox redelivers until something is collected, so the same commit
+    /// arrives more than once as a matter of course. Without this, a
+    /// redelivery and a genuine split look identical from here: both are a
+    /// commit for an epoch this member has already left.
+    last_applied: Option<[u8; 32]>,
+
+    /// This member's own commit, made and sent and not yet merged.
+    ///
+    /// # Why a commit is not applied the moment it is made
+    ///
+    /// Two members that commit at one epoch each used to merge their own
+    /// immediately. After that neither could process the other's, because a
+    /// commit names the epoch it was built at and both had left it. That is not
+    /// a dropped message: it is two conversations where there was one, with no
+    /// way back, and nothing anywhere saying so.
+    ///
+    /// Every other system solves this with a server that orders commits and
+    /// rejects the losers. There is no such server here on purpose, and a
+    /// mailbox that cannot see epochs cannot be one.
+    ///
+    /// So the commit is held instead. While it is held this member is still at
+    /// the old epoch and can still process somebody else's commit for it, and
+    /// when two arrive at once both sides run the same comparison over the same
+    /// two byte strings and reach the same answer about which one stands. The
+    /// loser drops its own and takes the winner's. They converge.
+    ///
+    /// The bytes are kept rather than only the group's pending state, because
+    /// the comparison is over what was actually sent and both sides have to be
+    /// comparing the same thing.
+    pending: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Conversation {
@@ -869,6 +931,8 @@ impl Conversation {
             seq_epoch,
             sent_seq: 0,
             seen_seq: std::collections::HashMap::new(),
+            last_applied: None,
+            pending: None,
         }
     }
 
@@ -1219,8 +1283,71 @@ impl Conversation {
             .update_group_context_extensions(&by.provider, extensions, &by.signer)
             .map_err(mls)?;
 
-        self.group.merge_pending_commit(&by.provider).map_err(mls)?;
-        commit.tls_serialize_detached().map_err(codec)
+        let bytes = commit.tls_serialize_detached().map_err(codec)?;
+        self.hold(bytes.clone(), by)?;
+        Ok(bytes)
+    }
+
+    /// Hold a commit this member just made, unmerged.
+    ///
+    /// Called by everything that makes one. A member that already holds one
+    /// settles it first: two of its own outstanding at once would be two
+    /// changes to the same epoch by the same person, which is a bug here
+    /// rather than a race with anybody.
+    fn hold(&mut self, bytes: Vec<u8>, member: &Member) -> Result<(), GroupError> {
+        if self.pending.is_some() {
+            self.settle(member)?;
+        }
+        self.pending = Some(bytes);
+        Ok(())
+    }
+
+    /// Apply this member's own commit, and stop being able to change its mind.
+    ///
+    /// Until this is called the member is still at the old epoch, which is what
+    /// lets it take somebody else's commit instead of its own when the two
+    /// raced. After it is called that door is shut, so a caller should settle
+    /// once its commit is somewhere the other members can get it, and not
+    /// before.
+    ///
+    /// Returns whether there was anything to settle, so a caller can say so
+    /// without asking twice.
+    ///
+    /// **A welcome must not be delivered before this.** The welcome is for the
+    /// epoch the commit creates, and a commit dropped in favour of somebody
+    /// else's is an epoch that never happened: the joiner would be holding an
+    /// invitation to a group that does not exist.
+    pub fn settle(&mut self, member: &Member) -> Result<bool, GroupError> {
+        let Some(ours) = self.pending.take() else {
+            return Ok(false);
+        };
+        self.last_applied = Some(*blake3::hash(&ours).as_bytes());
+        self.group
+            .merge_pending_commit(&member.provider)
+            .map_err(mls)?;
+        Ok(true)
+    }
+
+    /// Whether this member is holding a commit it has not applied.
+    pub fn is_holding_a_commit(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// Which of two commits made at one epoch stands.
+    ///
+    /// # Why a hash and not a clock or a leaf index
+    ///
+    /// Both sides have to reach the same answer from what they both hold, with
+    /// nothing to ask. They hold exactly two things in common: the two commits.
+    /// A clock is not shared, and a leaf index would make the same member win
+    /// every race, so one member could keep the group to itself by committing
+    /// whenever anybody else did.
+    ///
+    /// The hash of the commit is neither. It is the same value on both sides,
+    /// it is not a value either side chooses (the commit carries fresh key
+    /// material), and over many races it is even.
+    fn wins(theirs: &[u8], ours: &[u8]) -> bool {
+        blake3::hash(theirs).as_bytes() < blake3::hash(ours).as_bytes()
     }
 
     /// Ask the group to admit somebody, without admitting them.
@@ -1287,15 +1414,13 @@ impl Conversation {
             .commit_to_pending_proposals(&committer.provider, &committer.signer)
             .map_err(mls)?;
 
-        self.group
-            .merge_pending_commit(&committer.provider)
-            .map_err(mls)?;
-
         let welcome = welcome
             .map(|w| w.tls_serialize_detached().map_err(codec))
             .transpose()?;
 
-        Ok((commit.tls_serialize_detached().map_err(codec)?, welcome))
+        let bytes = commit.tls_serialize_detached().map_err(codec)?;
+        self.hold(bytes.clone(), committer)?;
+        Ok((bytes, welcome))
     }
 
     /// Invite a member, returning the commit to broadcast and the welcome to
@@ -1314,12 +1439,11 @@ impl Conversation {
             )
             .map_err(mls)?;
 
-        self.group
-            .merge_pending_commit(&inviter.provider)
-            .map_err(mls)?;
+        let bytes = commit.tls_serialize_detached().map_err(codec)?;
+        self.hold(bytes.clone(), inviter)?;
 
         Ok((
-            commit.tls_serialize_detached().map_err(codec)?,
+            bytes,
             welcome.tls_serialize_detached().map_err(codec)?,
         ))
     }
@@ -1366,11 +1490,9 @@ impl Conversation {
             .remove_members(&remover.provider, &remover.signer, &[target.index])
             .map_err(mls)?;
 
-        self.group
-            .merge_pending_commit(&remover.provider)
-            .map_err(mls)?;
-
-        commit.tls_serialize_detached().map_err(codec)
+        let bytes = commit.tls_serialize_detached().map_err(codec)?;
+        self.hold(bytes.clone(), remover)?;
+        Ok(bytes)
     }
 
     /// The public ratchet tree, needed out of band by a joining member.
@@ -1517,9 +1639,7 @@ impl Conversation {
             .into_contents();
 
         let out = commit.tls_serialize_detached().map_err(codec)?;
-        self.group
-            .merge_pending_commit(&member.provider)
-            .map_err(mls)?;
+        self.hold(out.clone(), member)?;
         self.restored_needs_rekey = false;
         Ok(out)
     }
@@ -1567,9 +1687,7 @@ impl Conversation {
             .tls_serialize_detached()
             .map_err(codec)?;
 
-        self.group
-            .merge_pending_commit(&member.provider)
-            .map_err(mls)?;
+        self.hold(out.clone(), member)?;
         Ok(out)
     }
 
@@ -1638,6 +1756,73 @@ impl Conversation {
 
         let msg = MlsMessageIn::tls_deserialize(&mut &bytes[..]).map_err(codec)?;
         let protocol = msg.try_into_protocol_message().map_err(mls)?;
+
+        // A commit for an epoch this member has already left.
+        //
+        // Two things look like this and only one is a problem. The mailbox
+        // redelivers until something is collected, so the commit this member
+        // applied a moment ago arrives again as a matter of course. That is
+        // the first, and it is nothing.
+        //
+        // The second is the failure this whole file is arranged to prevent: a
+        // different commit, made at the same epoch by somebody who applied
+        // theirs while this member applied its own. Neither can process the
+        // other's from here, and there is no way back. It used to surface as
+        // "Message epoch differs from the group\'s epoch", which is true,
+        // opaque, and says nothing about what a person should do.
+        if protocol.content_type() == openmls::prelude::ContentType::Commit
+            && protocol.epoch().as_u64() < self.group.epoch().as_u64()
+        {
+            let seen = *blake3::hash(bytes).as_bytes();
+            if self.last_applied == Some(seen) {
+                return Ok(Received::Nothing);
+            }
+            return Err(GroupError::TheGroupHasSplit {
+                theirs: protocol.epoch().as_u64(),
+                ours: self.group.epoch().as_u64(),
+            });
+        }
+
+        // Two members committed at one epoch, and this is the moment that used
+        // to end a conversation.
+        //
+        // This member has not applied its own yet, so it is still at the epoch
+        // the one that arrived was built at and can still take it. Both sides
+        // run the same comparison over the same two commits and reach the same
+        // answer, so whichever side loses drops its own and takes the other's.
+        // They end at one epoch instead of two.
+        //
+        // Deciding before processing, because processing is what consumes the
+        // message: after that there is nothing left to weigh.
+        if let Some(ours) = self.pending.clone() {
+            // A commit, read off the framing rather than by processing it.
+            // Processing is what consumes the message, and the decision about
+            // which of two commits stands has to be made while both are still
+            // in hand.
+            if protocol.content_type() == openmls::prelude::ContentType::Commit {
+                if Self::wins(bytes, &ours) {
+                    // Theirs stands. Drop ours and carry on as if it had never
+                    // been made. The caller is told, because the change it
+                    // asked for did not happen and only the caller knows what
+                    // it was.
+                    self.group
+                        .clear_pending_commit(receiver.provider.storage())
+                        .map_err(|e| GroupError::Mls(format!("{e:?}")))?;
+                    self.pending = None;
+
+                    let taken = self.receive(receiver, bytes)?;
+                    return Ok(Received::OurCommitLost {
+                        instead: Box::new(taken),
+                    });
+                }
+
+                // Ours stands. Theirs is discarded unread: the other side is
+                // running this same comparison and will drop it too, then take
+                // ours when it arrives.
+                self.settle(receiver)?;
+                return Ok(Received::TheirCommitLost);
+            }
+        }
 
         let processed = self
             .group
@@ -1723,6 +1908,7 @@ impl Conversation {
                 self.group
                     .merge_staged_commit(&receiver.provider, *staged)
                     .map_err(mls)?;
+                self.last_applied = Some(*blake3::hash(bytes).as_bytes());
                 let after = self.roster();
 
                 // Somebody else moved the epoch, so this copy is no longer
@@ -1827,6 +2013,7 @@ mod tests {
         let bob_kp = bob.key_package().expect("key package");
         let tree_before = a.ratchet_tree().expect("tree");
         let (_commit, welcome) = a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().unwrap_or(tree_before);
 
         let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
@@ -1850,6 +2037,11 @@ mod tests {
         let (_commit, welcome) = a
             .invite(&alice, bob.key_package().expect("kp").key_package())
             .expect("invite");
+
+        // Before the welcome and the tree are used. Both name the epoch the
+        // commit creates, and a commit that has not been applied is an epoch
+        // that does not exist yet.
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().expect("tree");
         let b = Conversation::join(&bob, &welcome, &tree).expect("join");
         (alice, bob, a, b)
@@ -2043,6 +2235,7 @@ mod tests {
         let bob_kp = bob.key_package().expect("bob key package");
         let (_first_commit, welcome_b) =
             a.invite(&alice, bob_kp.key_package()).expect("invite bob");
+        a.settle(&alice).expect("apply our own commit");
         let mut b = Conversation::join(&bob, &welcome_b, &a.ratchet_tree().expect("tree"))
             .expect("bob joins");
 
@@ -2055,6 +2248,7 @@ mod tests {
         b.receive(&bob, &proposal).expect("bob hears the proposal");
         let (second_commit, welcome_c) = b.confirm_additions(&bob).expect("bob confirms");
         let welcome_c = welcome_c.expect("a welcome for carol");
+        b.settle(&bob).expect("apply our own commit");
 
         // And Alice has to hear it too, or she stays an epoch behind and reads
         // nothing that follows.
@@ -2124,6 +2318,7 @@ mod tests {
             .rekey_after_restore(&alice)
             .expect("rekey after restore");
         b.receive(&bob, &commit).expect("bob applies the rekey");
+        reopened.settle(&alice).expect("apply our own rekey");
 
         let ct = reopened
             .send(&alice, b"and now it arrives")
@@ -2245,6 +2440,7 @@ mod tests {
         let (_commit, welcome) = a
             .invite(&alice, reinstalled.key_package().expect("kp").key_package())
             .expect("invite the reinstalled device");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().expect("tree");
         let mut fresh = Conversation::join(&reinstalled, &welcome, &tree).expect("rejoin");
 
@@ -2333,6 +2529,7 @@ mod tests {
             .expect("reopen")
             .expect("the group is in the storage");
         reopened.rekey_after_restore(&restored).expect("rekey");
+        reopened.settle(&restored).expect("apply our own rekey");
         let second = reopened.epoch();
         assert!(second > first, "the rekey did not advance the epoch");
 
@@ -2363,6 +2560,7 @@ mod tests {
             .invite(&alice_phone, bob.key_package().expect("kp").key_package())
             .expect("invite bob");
         let _ = commit;
+        phone.settle(&alice_phone).expect("apply our own commit");
         let mut bobs = Conversation::join(&bob, &welcome, &phone.ratchet_tree().expect("tree"))
             .expect("bob joins");
 
@@ -2374,6 +2572,7 @@ mod tests {
             )
             .expect("add the laptop");
         let outcome = bobs.receive(&bob, &commit).expect("bob sees the add");
+        phone.settle(&alice_phone).expect("apply our own commit");
         let change = outcome.membership_change().expect("bob was not told");
         assert_eq!(change.added.len(), 1);
         assert_eq!(change.added[0].identity, b"alice");
@@ -2540,6 +2739,7 @@ mod tests {
         let (_commit, welcome) = a
             .invite(&alice, bob.key_package().expect("kp").key_package())
             .expect("invite bob");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().expect("tree");
         let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
         assert_eq!(b.member_count(), 2);
@@ -2576,6 +2776,7 @@ mod tests {
         let mut a = Conversation::create(&alice).expect("create");
         let bob_kp = bob.key_package().expect("kp");
         let (_c, _w) = a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
 
         let secret = b"deadbeef-secret-marker";
         let ct = a.send(&alice, secret).expect("send");
@@ -2594,6 +2795,7 @@ mod tests {
         let bob_kp = bob.key_package().expect("kp");
         let tree_before = a.ratchet_tree().unwrap();
         let (_c, welcome) = a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().unwrap_or(tree_before);
 
         let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
@@ -2622,6 +2824,7 @@ mod tests {
 
         let bob_kp = bob.key_package().expect("kp");
         a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
 
         assert!(a.epoch() > before, "adding a member must advance the epoch");
     }
@@ -2655,6 +2858,7 @@ mod tests {
         let mut a = Conversation::create(&alice).expect("create");
         let bob_kp = bob.key_package().expect("kp");
         let (_c, welcome) = a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().expect("tree");
         let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
 
@@ -2676,6 +2880,7 @@ mod tests {
             .expect("process commit")
             .message()
             .is_none());
+        a.settle(&alice).expect("apply our own commit");
 
         assert!(
             a.epoch() > epoch_before,
@@ -2705,6 +2910,7 @@ mod tests {
         let mut a = Conversation::create(&alice).expect("create");
         let bob_kp = bob.key_package().expect("kp");
         let (_c, welcome) = a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().expect("tree");
         let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
 
@@ -2722,6 +2928,7 @@ mod tests {
         let mut a = Conversation::create(&alice).expect("create");
         let bob_kp = bob.key_package().expect("kp");
         let (_c, welcome) = a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().expect("tree");
         let b = Conversation::join(&bob, &welcome, &tree).expect("join");
 
@@ -2745,6 +2952,7 @@ mod tests {
 
         let bob_kp = bob.key_package().expect("kp");
         a.invite(&alice, bob_kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
         let after = a.mailbox_tag_key(&alice).expect("after");
 
         assert_ne!(
@@ -2828,6 +3036,7 @@ mod tests {
         // Alice speaks first: one commit, and the epoch moves once.
         let commit = a2.rekey_after_restore(&alice).expect("alice rekeys");
         b2.receive(&bob, &commit).expect("bob takes it");
+        a2.settle(&alice).expect("alice applies her own");
 
         // Bob now has generations he has not spent, so he owes nothing. Without
         // that, this send fails and the only way on is a second commit at an

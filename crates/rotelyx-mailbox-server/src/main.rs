@@ -2661,6 +2661,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let mut a = Conversation::create(&alice).expect("create");
         let kp = bob.key_package().expect("kp");
         let (_commit, welcome) = a.invite(&alice, kp.key_package()).expect("invite");
+        a.settle(&alice).expect("apply our own commit");
         let tree = a.ratchet_tree().expect("tree");
         let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
 
@@ -2842,6 +2843,9 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         deposit(&mut host_ws, seal_under(&meeting, &commit).expect("seal")).await;
         assert_eq!(recv_json(&mut host_ws).await["op"], "stored");
 
+        // Applied once it is somewhere the guest can get it, and not before.
+        host.settle().expect("apply our own commit");
+
         // ---- guest joins, stages, then applies the commit ----
         let pushed = recv_json(&mut guest_ws).await;
         assert_eq!(pushed["op"], "envelope");
@@ -3001,6 +3005,9 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         )
         .await;
         assert_eq!(recv_step(&mut host_ws, "#4").await["op"], "stored");
+
+        // Applied once it is somewhere the guest can get it, and not before.
+        host.settle().expect("apply our own commit");
 
         let welcome = unb64(
             &open_under(
