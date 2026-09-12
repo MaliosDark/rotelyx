@@ -55,6 +55,12 @@ use crate::{MediaError, SenderKeys, MAX_SENDERS};
 /// What a forwarder refuses.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ForwardError {
+    #[error(
+        "the first datagram on a room connection has to be the join, and this was \
+         {len} bytes of something else"
+    )]
+    NotAJoin { len: usize },
+
     #[error("the call already has {MAX_SENDERS} participants")]
     Full,
 
@@ -84,6 +90,70 @@ pub struct Forwarder {
 }
 
 /// Where one arriving datagram goes.
+/// The first datagram on a room connection, and nothing else, starts with
+/// this.
+///
+/// # Why the join format lives here
+///
+/// The relay parses it and every client builds it, and they are not compiled
+/// together. A format written in two places is two formats that can disagree,
+/// and the failure when they do is a participant the room never seats, which
+/// nothing reports.
+pub const JOIN_MAGIC: &[u8; 7] = b"RXROOM1";
+
+/// A room id is this long. Derived by the group from the call binding, so
+/// every member computes the same one and nobody outside can.
+pub const ROOM_ID_LEN: usize = 32;
+
+/// What a participant's first datagram says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Join {
+    pub room: [u8; ROOM_ID_LEN],
+    pub seat: u8,
+}
+
+/// Build the join a participant sends before anything else.
+pub fn join_datagram(room: &[u8; ROOM_ID_LEN], seat: u8) -> Vec<u8> {
+    let mut out = Vec::with_capacity(JOIN_MAGIC.len() + ROOM_ID_LEN + 1);
+    out.extend_from_slice(JOIN_MAGIC);
+    out.extend_from_slice(room);
+    out.push(seat);
+    out
+}
+
+/// Read a join out of the first datagram, or say why it is not one.
+///
+/// A join is `JOIN_MAGIC ‖ room id ‖ seat` and nothing else, so its length is
+/// fixed and a media frame, which is longer, can never be mistaken for one.
+pub fn parse_join(datagram: &[u8]) -> Result<Join, ForwardError> {
+    let want = JOIN_MAGIC.len() + ROOM_ID_LEN + 1;
+    if datagram.len() != want || &datagram[..JOIN_MAGIC.len()] != JOIN_MAGIC {
+        return Err(ForwardError::NotAJoin {
+            len: datagram.len(),
+        });
+    }
+    let mut room = [0u8; ROOM_ID_LEN];
+    room.copy_from_slice(&datagram[JOIN_MAGIC.len()..JOIN_MAGIC.len() + ROOM_ID_LEN]);
+    Ok(Join {
+        room,
+        seat: datagram[want - 1],
+    })
+}
+
+/// The room a call meets in, from the call's own binding.
+///
+/// Every member holds the binding and nobody else does, so every member
+/// computes the same room and a relay is handed thirty two bytes that name
+/// nothing outside the group.
+pub fn room_for(call: &crate::CallBinding) -> [u8; ROOM_ID_LEN] {
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+    let hk = Hkdf::<Sha256>::new(Some(b"rotelyx room v1"), call.as_bytes());
+    let mut out = [0u8; ROOM_ID_LEN];
+    hk.expand(b"room id", &mut out).expect("32 bytes is a valid length");
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Routed {
     /// The participants this copy is for. Never includes the sender.

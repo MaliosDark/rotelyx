@@ -56,7 +56,7 @@ use tracing::{Instrument, debug, error, info, info_span, instrument};
 use self::http_server::{BytesBody, HyperError, HyperResult};
 use crate::{
     defaults::DEFAULT_KEY_CACHE_CAPACITY,
-    http::{AUTH_TOKEN_URL_QUERY_PARAM, CIRCUIT_KEY_PATH, ProtocolVersion, RELAY_PROBE_PATH},
+    http::{AUTH_TOKEN_URL_QUERY_PARAM, CIRCUIT_KEY_PATH, ProtocolVersion, RELAY_PROBE_PATH, ROOM_PATH},
     quic::server::{QuicServer, QuicSpawnError, ServerHandle as QuicServerHandle},
     tls::CaTlsConfig,
 };
@@ -899,7 +899,8 @@ impl Server {
                         Method::GET,
                         CIRCUIT_KEY_PATH,
                         Box::new(circuit_key_handler),
-                    );
+                    )
+                    .request_handler(Method::GET, ROOM_PATH, Box::new(room_handler));
                 if let Some(cfg) = relay_config.limits.client_rx {
                     builder = builder.client_rx_ratelimit(cfg);
                 }
@@ -1238,6 +1239,19 @@ pub fn publish_circuit_key(endpoint_id: String, key: String) {
     let _ = CIRCUIT_KEY.set(format!("{endpoint_id} {key}"));
 }
 
+/// Where this relay's room answers, for group calls.
+///
+/// An endpoint address, which a client dials the way it dials any peer. It is
+/// published for the same reason the circuit key is: it names a forwarder that
+/// cannot read what it forwards, and nothing about it is secret.
+static ROOM_ADDR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Publishes the room's address. Called by the binary before serving, only
+/// when it runs one.
+pub fn publish_room_addr(addr: String) {
+    let _ = ROOM_ADDR.set(addr);
+}
+
 
 /// The landing page, with a status block rendered on each request.
 ///
@@ -1379,6 +1393,25 @@ struct Health {
 /// A relay that does not chain answers the same way a relay that has never
 /// heard of circuits does, which is what lets a caller find out without a
 /// special case.
+/// The room's address, or 404 when this relay runs no room.
+fn room_handler(
+    _r: Request<Incoming>,
+    response: ResponseBuilder,
+) -> HyperResult<Response<BytesBody>> {
+    let Some(addr) = ROOM_ADDR.get() else {
+        return response
+            .status(StatusCode::NOT_FOUND)
+            .body(body_empty())
+            .map_err(|err| Box::new(err) as HyperError);
+    };
+    response
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .header("Cache-Control", "no-store")
+        .body(Box::new(Full::from(addr.clone())) as BytesBody)
+        .map_err(|err| Box::new(err) as HyperError)
+}
+
 fn circuit_key_handler(
     _r: Request<Incoming>,
     response: ResponseBuilder,

@@ -15,6 +15,10 @@ path = "src/main.rs"
 [dependencies]
 rotelyx-relay-proto = { path = "../net/rotelyx-relay-proto", features = ["server"] }
 rotelyx-net.workspace = true
+rotelyx-core.workspace = true
+serde_json = "1"
+# The routing decision for a group call's media. The relay adds the sockets.
+rotelyx-media = { path = "../rotelyx-media" }
 
 # Opening a circuit descriptor is the same hybrid construction the message
 # layer uses, so this binary links it.
@@ -51,6 +55,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# Three participants in a room: the test is a client, so it needs the client
+# side of the media and the transport, and the same encodings a phone uses.
+rotelyx-core.workspace = true
+blake3.workspace = true
+serde_json = "1"
+
 # Only the tests build a `ClientRequest`, which needs request parts.
 http = "1"
 

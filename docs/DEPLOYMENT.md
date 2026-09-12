@@ -382,7 +382,47 @@ start on an empty allowlist rather than falling open. A relay that silently
 serves the whole internet is the failure nobody notices, because it works
 perfectly.
 
-### 4a. Circuits, which are off
+### 4a. Rooms, for group calls
+
+```sh
+rotelyx-relay --bind 0.0.0.0:3340 --open \
+    --identity /etc/rotelyx/relay.id \
+    --room https://relay.example.com
+```
+
+Without a room, a call between more than two people does not exist: two of the
+members hear each other and the rest hear nothing. With one, each participant
+sends the relay one stream and receives everybody else's from it, which is how
+every messenger that keeps group calls end to end encrypted does it. The relay
+cannot read a frame. What it sees is written in `crates/rotelyx-relay/src/room.rs`.
+
+`--identity` is required, because the room is an endpoint of the relay's own
+and an endpoint is a key. Keep the identity file: the room's address is derived
+from it, and a relay that loses its identity has a room nobody's client can
+find.
+
+The value of `--room` is the relay's **public** URL, the one clients are
+configured with. It goes into the room's address, and the bind address is not
+something anybody outside can dial.
+
+On start the relay prints one line:
+
+```
+room address: eyJpZCI6...
+```
+
+and serves the same string at `GET /room`. Put it in the client configuration
+as `room`, beside the relay URL. The client dials it for any call with more than
+two members and never for a call between two, so a relay without a room changes
+nothing about calls that already worked.
+
+A room seats up to 32, which is the frame format's limit and also where the two
+largest competitors stop. Every listener costs the relay one copy of every
+speaker's stream, at about 20 kbit/s each, and silence is not forwarded, so a
+room of 32 with three people talking is a little under 2 Mbit/s out. A relay
+holds 256 rooms at once and refuses the 257th rather than degrading.
+
+### 4b. Circuits, which are off
 
 A relay does nothing about circuits unless its operator asks. Two separate
 decisions, and they are separate because they expose different things.
@@ -419,7 +459,7 @@ file refuses to start rather than falling open, like the allowlist. Without
 warning at startup. The comparison against the list is exact: a near miss is not
 a match.
 
-### 4b. Whose relay it is
+### 4c. Whose relay it is
 
 The landing page can carry an operator's name and mark:
 

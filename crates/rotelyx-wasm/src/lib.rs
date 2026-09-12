@@ -426,6 +426,35 @@ impl Session {
         Ok(BASE64.encode(&commit))
     }
 
+    /// The datagram that seats this member in the call's room, base64.
+    ///
+    /// A room is where a group call's media meets: each participant sends
+    /// the relay one stream and receives everybody else's from it. This is
+    /// the first datagram a participant sends on the room connection, and it
+    /// names the room, derived from the call so every member computes the
+    /// same one and nobody outside can, and the seat, which is this member's
+    /// sender index so the frames that follow are routed as its own.
+    ///
+    /// `call` is the call's id as the client holds it, whose UTF-8 bytes are
+    /// the binding handed to the codec, so the room and the media keys agree about which
+    /// call this is.
+    #[wasm_bindgen(js_name = roomJoin)]
+    pub fn room_join(&self, call: &str) -> Result<String, Error> {
+        let binding = rotelyx_media::CallBinding::new(call.as_bytes()).map_err(err)?;
+        let seat = self.sender_index()?;
+        if seat >= rotelyx_media::MAX_SENDERS {
+            return Err(Error::new(format!(
+                "this member is seat {seat} and a call seats {}",
+                rotelyx_media::MAX_SENDERS
+            )));
+        }
+        let room = rotelyx_media::forward::room_for(&binding);
+        Ok(BASE64.encode(&rotelyx_media::forward::join_datagram(
+            &room,
+            u8::try_from(seat).expect("checked against MAX_SENDERS"),
+        )))
+    }
+
     /// Apply this member's own commit, once it is somewhere the others can
     /// get it.
     ///

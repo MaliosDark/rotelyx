@@ -212,6 +212,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: ./scripts/bot-test
 
+  room:
+    # Three participants in one room through a real relay. The forwarding
+    # decision is unit tested; this is the sockets, the seats and the fan out,
+    # which is the part a person notices and the part nothing ran until now.
+    name: three participants share one room
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/room-test
+
   timing:
     # The codec has to fit in a fraction of one core or a call does not run.
     # That bound cannot be asserted inside `cargo test --workspace`, which runs

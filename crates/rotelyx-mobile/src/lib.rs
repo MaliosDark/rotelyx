@@ -399,6 +399,10 @@ fn dispatch(req: &Value) -> Res {
         }
         "session.settle" => json!({ "settled": engine(s.settle())? }),
         "session.isHoldingACommit" => json!(s.is_holding_a_commit()),
+        "session.roomJoin" => {
+            let call = str_arg(req, "call")?;
+            json!(engine(s.room_join(&call))?)
+        }
         "session.propose" => {
             let kp = str_arg(req, "keyPackage")?;
             json!({ "proposal": engine(s.propose(&kp))? })

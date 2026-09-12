@@ -32,6 +32,7 @@ mod access;
 mod circuit;
 mod dial;
 mod limits;
+mod room;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -104,6 +105,24 @@ struct Cli {
     /// will dial and refuse the rest.
     #[arg(long, requires = "identity")]
     chain: bool,
+
+    /// Hold rooms for group calls.
+    ///
+    /// Each participant in a call sends this relay one stream and receives
+    /// everybody else's from it, instead of sending a copy to each of the
+    /// others. Without a room a call between more than two people does not
+    /// exist. The relay cannot read what it forwards; what it can see is
+    /// written in `room.rs`.
+    ///
+    /// Needs `--identity`: the room is an endpoint of this relay's own, reached
+    /// through this relay the way any endpoint is, and its address is served
+    /// at `/room` for clients to read.
+    ///
+    /// The value is this relay's public URL, the one clients are configured
+    /// with, because that URL goes into the room's address and the bind
+    /// address is not something anybody outside can dial.
+    #[arg(long, value_name = "PUBLIC_URL", requires = "identity")]
+    room: Option<String>,
 
     /// The relays this one will chain to, one URL per line. `#` starts a
     /// comment.
@@ -318,6 +337,42 @@ async fn main() -> Result<()> {
     let config = ServerConfig::new(Some(relay), None);
 
     let server = Server::spawn(config).await.context("starting relay")?;
+    if let Some(public) = cli.room.as_deref() {
+        let secret = identity.as_ref().expect("clap requires it");
+        let url: rotelyx_net::RelayUrl = public
+            .parse()
+            .with_context(|| format!("{public} is not a relay URL"))?;
+        // Reached through this relay, so a phone that only ever dials through
+        // a relay reaches the room the same way. RelayOnly, because a room's
+        // address is not something anybody's IP should be handed to.
+        let config = rotelyx_net::NetConfig::new(
+            rotelyx_net::RelayPolicy::SelfHosted(vec![url.clone()]),
+            rotelyx_net::PathPolicy::RelayOnly,
+        );
+        let endpoint = rotelyx_net::NetEndpoint::bind(secret.clone(), config, rotelyx_core::ALPN)
+            .await
+            .context("binding the room endpoint")?;
+        // Encoded exactly as a phone encodes its own: the IPs stripped, the
+        // relay put in their place, JSON, base64url. A phone dials this with
+        // the same code it dials a person with.
+        let mut addr = endpoint.addr();
+        addr.addrs
+            .retain(|a| !matches!(a, rotelyx_net::TransportAddr::Ip(_)));
+        addr.addrs
+            .insert(rotelyx_net::TransportAddr::Relay(url.clone()));
+        let json = serde_json::to_vec(&addr).context("encoding the room address")?;
+        let addr = data_encoding::BASE64URL_NOPAD.encode(&json);
+        println!("room address: {addr}");
+        rotelyx_relay_proto::server::publish_room_addr(addr);
+        let rooms = std::sync::Arc::new(room::Rooms::default());
+        tokio::spawn(async move {
+            if let Err(e) = room::serve(endpoint, rooms).await {
+                tracing::error!(error = %e, "the room stopped accepting");
+            }
+        });
+        tracing::info!("holding rooms for group calls");
+    }
+
     tracing::info!(bind = %cli.bind, "relay running");
     println!("relay listening on http://{}", cli.bind);
     println!();

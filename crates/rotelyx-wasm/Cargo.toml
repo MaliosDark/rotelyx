@@ -15,6 +15,9 @@ crate-type = ["cdylib", "rlib"]
 rotelyx-core = { path = "../rotelyx-core", default-features = false }
 rotelyx-crypto = { path = "../rotelyx-crypto", features = ["js"] }
 rotelyx-mailbox = { path = "../rotelyx-mailbox" }
+# The room a group call meets in is derived from the call binding, and the
+# derivation has to be the one the relay and every client share.
+rotelyx-media = { path = "../rotelyx-media" }
 
 wasm-bindgen = "0.2"
 js-sys = "0.3"

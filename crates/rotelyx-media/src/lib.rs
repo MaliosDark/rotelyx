@@ -251,7 +251,9 @@ impl CallBinding {
         Ok(Self(bytes.to_vec()))
     }
 
-    fn as_bytes(&self) -> &[u8] {
+    /// The bytes, for deriving things every holder of the binding must derive
+    /// identically: sender keys here, the room id in [`forward`].
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }

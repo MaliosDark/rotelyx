@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Three participants in one room, through a real relay.
+#
+# Everything about the forwarding decision runs inside one process. This is
+# the part that cannot: three endpoints that never connect to each other, each
+# sending one stream to the relay's room and receiving the other two back from
+# it, over a real socket. Before the room existed, a call between more than two
+# people did not.
+#
+# Plain http on loopback, so no certificate is needed.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+PORT=${ROOM_PORT:-34223}
+STATE=$(mktemp -d)
+trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$STATE"' EXIT
+
+cargo build -p rotelyx-relay
+
+./target/debug/rotelyx-relay \
+	--bind "127.0.0.1:$PORT" --open \
+	--identity "$STATE/relay.id" \
+	--room "http://127.0.0.1:$PORT" \
+	>"$STATE/relay.log" 2>&1 &
+
+for _ in $(seq 100); do
+	grep -q "relay listening" "$STATE/relay.log" && break
+	sleep 0.1
+done
+if ! grep -q "relay listening" "$STATE/relay.log"; then
+	echo "the relay did not start:" >&2
+	cat "$STATE/relay.log" >&2
+	exit 1
+fi
+
+ADDR=$(grep "^room address:" "$STATE/relay.log" | sed 's/^room address: *//')
+[ -n "$ADDR" ] || { echo "the relay printed no room address" >&2; cat "$STATE/relay.log" >&2; exit 1; }
+
+# The address is also served, because that is how a phone learns it.
+SERVED=$(curl -s "http://127.0.0.1:$PORT/room")
+[ "$SERVED" = "$ADDR" ] || { echo "/room served '$SERVED', the log said '$ADDR'" >&2; exit 1; }
+
+ROOM_RELAY_URL="http://127.0.0.1:$PORT" ROOM_ADDR="$ADDR" \
+	cargo test -p rotelyx-relay --test three_in_a_room -- --ignored --nocapture
+
+echo
+echo "relay:"
+sed 's/^/  /' "$STATE/relay.log" | tail -4

@@ -24,6 +24,16 @@ pub const RELAY_PROBE_PATH: &str = "/ping";
 /// two constants that can disagree.
 pub const CIRCUIT_KEY_PATH: &str = "/circuit-key";
 
+/// Where a relay says where its room is, for a group call to dial.
+///
+/// A room is a place a call's media goes and comes back from: each phone
+/// sends one stream to it and receives everybody else's, instead of sending
+/// one copy to each of the others. The address is an endpoint address like
+/// any other and is published rather than shared, because it names a
+/// forwarder and not a person. Same reasoning as [`CIRCUIT_KEY_PATH`] for why
+/// the path lives here.
+pub const ROOM_PATH: &str = "/room";
+
 /// The HTTP path a captive portal check probes, expecting 204 No Content.
 ///
 /// Here for the same reason as [`CIRCUIT_KEY_PATH`]: the side that asks is the
