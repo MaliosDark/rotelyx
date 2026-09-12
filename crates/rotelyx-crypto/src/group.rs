@@ -158,6 +158,23 @@ pub enum GroupError {
     NotApplication,
 
     #[error(
+        "a commit added somebody on the authority of the member that sent it,          and this group requires a second member to confirm an addition"
+    )]
+    AddedWithoutASecondMember,
+
+    #[error("there are no proposals waiting to be confirmed")]
+    NothingToConfirm,
+
+    #[error("a group cannot have {count} admins: the list carries at most 255")]
+    TooManyAdmins { count: usize },
+
+    #[error(
+        "a commit admitted somebody, and the member that sent it is not one of \
+         the people this group allows to admit"
+    )]
+    AddedBySomebodyWhoIsNotAnAdmin,
+
+    #[error(
         "this conversation was reopened from storage and has not rekeyed. \
          Call `rekey_after_restore` and send the commit before sending messages"
     )]
@@ -421,6 +438,7 @@ impl Member {
     /// server that maps identities to packages is a social-graph oracle.
     pub fn key_package(&self) -> Result<KeyPackageBundle, GroupError> {
         KeyPackage::builder()
+            .leaf_node_capabilities(capabilities())
             .build(
                 CIPHERSUITE,
                 &self.provider,
@@ -517,6 +535,88 @@ pub struct Participant {
     pub well_formed: bool,
 }
 
+/// Where a group keeps the list of members allowed to admit people.
+///
+/// # Why this is in the group context and not in a message
+///
+/// A rule about who may do something is worth exactly as much as the agreement
+/// about who that is. Put the list in an application message and it becomes
+/// "whatever each member was last told", which is the failure this whole design
+/// avoids everywhere else: two members can hold two different lists and both
+/// believe they are enforcing the same policy.
+///
+/// The group context is hashed into the key schedule, so every member at an
+/// epoch has bit for bit the same list, and changing it is a commit that moves
+/// the epoch and is visible like any other. There is no version of "I was not
+/// told" here.
+///
+/// A private use extension type. MLS reserves 0xF000 to 0xFFFF for exactly
+/// this: values nobody registers and nobody else will collide with.
+const ADMINS_EXTENSION: u16 = 0xF001;
+
+/// What every leaf here declares it understands.
+///
+/// MLS refuses a group context carrying an extension the members have not said
+/// they support, and it is right to: a member that cannot read the group's own
+/// rules cannot be held to them, and a group where half the members silently
+/// ignore the policy is worse than one with no policy. So the capability is
+/// declared by every key package this crate mints, whether or not the group it
+/// ends up in ever names an admin.
+fn capabilities() -> openmls::prelude::Capabilities {
+    openmls::prelude::Capabilities::new(
+        None,
+        None,
+        Some(&[openmls::prelude::ExtensionType::Unknown(ADMINS_EXTENSION)]),
+        None,
+        None,
+    )
+}
+
+/// The admin list on the wire: `count ‖ (len ‖ identity)*`.
+///
+/// Person identities rather than signature keys, so a person's admin standing
+/// does not evaporate when they add a second device or rotate a leaf. The
+/// identity is what a credential carries and what the rest of this file
+/// compares people by.
+fn encode_admins(admins: &[Vec<u8>]) -> Result<Vec<u8>, GroupError> {
+    let mut out = vec![u8::try_from(admins.len()).map_err(|_| GroupError::TooManyAdmins {
+        count: admins.len(),
+    })?];
+    for who in admins {
+        out.push(u8::try_from(who.len()).map_err(|_| GroupError::PersonTooLong { len: who.len() })?);
+        out.extend_from_slice(who);
+    }
+    Ok(out)
+}
+
+/// The inverse, refusing anything malformed rather than reading what it can.
+///
+/// A truncated list is not a shorter list: it is a list this member cannot be
+/// sure of, and a policy enforced from a half read list is worse than no
+/// policy, because everybody believes it is running.
+fn decode_admins(bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let mut at = 0usize;
+    let count = *bytes.first()? as usize;
+    at += 1;
+
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len = *bytes.get(at)? as usize;
+        at += 1;
+        let who = bytes.get(at..at + len)?;
+        at += len;
+        out.push(who.to_vec());
+    }
+
+    // Trailing bytes mean this was encoded by something that does not agree
+    // with us about the format, and guessing which half is right is how a
+    // policy silently becomes two policies.
+    if at != bytes.len() {
+        return None;
+    }
+    Some(out)
+}
+
 /// The largest `person` a credential can carry, so the one byte length prefix
 /// is enough and a longer one is refused rather than silently truncated.
 const MAX_PERSON_LEN: usize = 255;
@@ -581,6 +681,22 @@ impl Participant {
 pub struct MembershipChange {
     pub added: Vec<Participant>,
     pub removed: Vec<Participant>,
+    /// The member whose commit did it.
+    ///
+    /// # Why a change without this was only half told
+    ///
+    /// ADV-7 is satisfied by saying that somebody arrived. It is not satisfied
+    /// by leaving the group to guess who let them in. "Somebody joined" is a
+    /// fact nobody can act on; "she added him" is one the other members can
+    /// weigh against what they know, and it is the only thing that makes an
+    /// addition answerable to the people it happened to.
+    ///
+    /// MLS authenticates the committer, so this is not an assertion the sender
+    /// makes about itself. It was being computed and thrown away.
+    ///
+    /// `None` only for a commit from outside the group's own membership, which
+    /// an application should show as unattributed rather than as anybody.
+    pub by: Option<Participant>,
 }
 
 /// What arrived.
@@ -614,6 +730,23 @@ pub enum Received {
     /// The membership changed. Show this to the user: see ADV-7 in the threat
     /// model, where surfacing it is a security control rather than a nicety.
     MembershipChanged(MembershipChange),
+
+    /// A member asked for somebody to be admitted, and nothing has happened
+    /// yet.
+    ///
+    /// This is the half of an addition that a person can still do something
+    /// about, so it is the half worth interrupting them for. Any other member
+    /// turns it into a change with [`Conversation::confirm_additions`], and
+    /// until one does, the group is unchanged and the proposer alone cannot
+    /// change it.
+    ///
+    /// `by` is `None` for a proposal from outside the group's membership,
+    /// which cannot be confirmed into anything and should be shown as
+    /// unattributed.
+    AdditionProposed {
+        by: Option<Participant>,
+        joining: Vec<Participant>,
+    },
     /// Handled, and nothing for the caller to do.
     Nothing,
 }
@@ -694,9 +827,26 @@ impl Conversation {
     /// key package advertises, and the mismatch only surfaces when the first
     /// member is added.
     pub fn create(founder: &Member) -> Result<Self, GroupError> {
+        // Declared from the start, empty, rather than added the day somebody
+        // names an admin. A required capability introduced later would have to
+        // be rejected by every member that joined before it, which would turn
+        // naming an admin into a way of splitting the group.
+        let required = openmls::prelude::Extensions::single(
+            openmls::prelude::Extension::RequiredCapabilities(
+                openmls::prelude::RequiredCapabilitiesExtension::new(
+                    &[openmls::prelude::ExtensionType::Unknown(ADMINS_EXTENSION)],
+                    &[],
+                    &[],
+                ),
+            ),
+        )
+        .map_err(mls)?;
+
         let config = MlsGroupCreateConfig::builder()
             .ciphersuite(CIPHERSUITE)
             .padding_size(PADDING_SIZE)
+            .capabilities(capabilities())
+            .with_group_context_extensions(required)
             .build();
 
         let group = MlsGroup::new(
@@ -906,6 +1056,246 @@ impl Conversation {
                 m.signature_key.as_slice().to_vec(),
             )
         })
+    }
+
+    /// Whether a commit admits somebody on the say so of the member that sent
+    /// it.
+    ///
+    /// True when any Add in the commit was proposed by the committer, which
+    /// covers both shapes that means: an Add created inline by
+    /// `add_members`, whose sender is the committer, and an Add proposed
+    /// separately by the same member and then committed by them.
+    ///
+    /// An Add from a sender that is not a member of the group at all is also
+    /// refused here. An external party cannot be the second pair of eyes,
+    /// because it is not one of the people the decision is about.
+    fn added_on_one_authority(
+        &self,
+        staged: &openmls::prelude::StagedCommit,
+        committer: Option<openmls::prelude::LeafNodeIndex>,
+    ) -> bool {
+        // A group of one is a person on their own, and the first person they
+        // admit is the whole reason the conversation exists. Asking for a
+        // second member there asks for somebody who by definition is not
+        // there yet. First contact is exempt, and only first contact: the
+        // moment there are two, the rule applies.
+        if self.group.members().count() <= 1 {
+            return false;
+        }
+
+        let committer_person = committer
+            .and_then(|at| self.participant_at(at))
+            .filter(|p| p.well_formed);
+
+        staged.add_proposals().any(|add| {
+            let proposed_by_committer = match add.sender() {
+                openmls::prelude::Sender::Member(proposer) => Some(*proposer) == committer,
+                // Not a member of the group, so not one of the people the
+                // decision is about, so not a second pair of eyes.
+                _ => true,
+            };
+
+            if !proposed_by_committer {
+                return false;
+            }
+
+            // Somebody adding another device of their own is not admitting
+            // anybody: it is the same person appearing twice, which is what a
+            // leaf per device means. Requiring a second member there would
+            // make a person's own laptop wait on somebody else's attention,
+            // for no gain, since that person is already in the room.
+            let joining = Participant::from_credential(
+                add.add_proposal()
+                    .key_package()
+                    .leaf_node()
+                    .credential()
+                    .serialized_content(),
+                Vec::new(),
+            );
+
+            match &committer_person {
+                Some(who) => !who.same_person_as(&joining),
+                None => true,
+            }
+        })
+    }
+
+    /// Whether a commit admits somebody and was sent by a member this group
+    /// does not allow to admit people.
+    ///
+    /// False when the group has named nobody, and false when it has named
+    /// people who have all since left: see [`admin_rule_applies`].
+    ///
+    /// [`admin_rule_applies`]: Self::admin_rule_applies
+    fn added_by_somebody_who_may_not(
+        &self,
+        staged: &openmls::prelude::StagedCommit,
+        committer: Option<openmls::prelude::LeafNodeIndex>,
+    ) -> bool {
+        if staged.add_proposals().next().is_none() {
+            return false;
+        }
+        let Some(admins) = self.admin_rule_applies() else {
+            return false;
+        };
+
+        // An unattributable commit cannot be an admin's, whatever it carries.
+        let Some(who) = committer.and_then(|at| self.participant_at(at)) else {
+            return true;
+        };
+        !(who.well_formed && admins.contains(&who.identity))
+    }
+
+    /// Who this group allows to admit people, or empty when it allows
+    /// everybody.
+    ///
+    /// Read out of the group context, so it is the same list for every member
+    /// at this epoch rather than whatever each was last told.
+    pub fn admins(&self) -> Vec<Vec<u8>> {
+        self.group
+            .extensions()
+            .iter()
+            .find_map(|e| match e {
+                openmls::prelude::Extension::Unknown(ADMINS_EXTENSION, data) => {
+                    decode_admins(&data.0)
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether the admin rule is running here.
+    ///
+    /// A list with nobody on it, or a list whose people have all left, is not
+    /// a group that admits nobody: it is a group that has lost its admins, and
+    /// a policy that locks a conversation shut for ever is a worse outcome than
+    /// the one it was protecting against. So the rule stands down, and the two
+    /// member rule underneath it does not.
+    ///
+    /// Signal solves this on a server that can be asked to fix it. There is no
+    /// such server here, so it has to be a property of the rule.
+    fn admin_rule_applies(&self) -> Option<Vec<Vec<u8>>> {
+        let admins = self.admins();
+        if admins.is_empty() {
+            return None;
+        }
+        let roster = self.roster();
+        let any_present = admins.iter().any(|who| {
+            roster
+                .iter()
+                .any(|p| p.well_formed && &p.identity == who)
+        });
+        any_present.then_some(admins)
+    }
+
+    /// Name the members allowed to admit people, as a commit to broadcast.
+    ///
+    /// An empty list turns the rule off, which is the default a group starts
+    /// with. Anybody in the group can send this, and the reason is the same as
+    /// everywhere else: there is nobody above the members to authorise it, and
+    /// the commit is visible to everybody, so a member quietly making itself
+    /// the only admin is a commit the others watch arrive.
+    ///
+    /// It does not narrow who may **ask**. A member who is not an admin can
+    /// still propose somebody, which is what a request to join looks like from
+    /// the inside. What it narrows is who may turn a request into a member.
+    pub fn set_admins(
+        &mut self,
+        by: &Member,
+        admins: &[Vec<u8>],
+    ) -> Result<Vec<u8>, GroupError> {
+        let mut extensions = self.group.extensions().clone();
+        let encoded = encode_admins(admins)?;
+
+        // Replaces rather than appends: two admin lists in one context is two
+        // policies, and nothing downstream could say which one is running.
+        let _ = extensions.add_or_replace(openmls::prelude::Extension::Unknown(
+            ADMINS_EXTENSION,
+            openmls::prelude::UnknownExtension(encoded),
+        ));
+
+        let (commit, _welcome, _group_info) = self
+            .group
+            .update_group_context_extensions(&by.provider, extensions, &by.signer)
+            .map_err(mls)?;
+
+        self.group.merge_pending_commit(&by.provider).map_err(mls)?;
+        commit.tls_serialize_detached().map_err(codec)
+    }
+
+    /// Ask the group to admit somebody, without admitting them.
+    ///
+    /// # Why an addition is a request here and not an act
+    ///
+    /// A member with the group key can add anybody, and every other member
+    /// merges the commit because MLS says it is valid. That is one careless or
+    /// compromised device away from a participant nobody chose, sitting in the
+    /// conversation reading everything said from then on. It does not matter
+    /// whether that participant is a person or a program: "is a bot" is not a
+    /// property anything can check, so the rule cannot be about bots. It has to
+    /// be about additions.
+    ///
+    /// So an addition takes two members. This is the first half: a proposal,
+    /// broadcast to the group, which changes nothing on its own. Any **other**
+    /// member turns it into a commit with [`confirm_additions`]. The proposer
+    /// cannot, and a commit that tries is refused by everybody on receipt, so
+    /// the rule is not a convention the sender is trusted to follow.
+    ///
+    /// It is deliberately not blocking. The proposal waits in the group until
+    /// somebody else opens the application, which is the same shape as an
+    /// invitation that works while the person who issued it is asleep. Nobody
+    /// has to be awake at the same time as anybody.
+    ///
+    /// [`confirm_additions`]: Self::confirm_additions
+    pub fn propose_invite(
+        &mut self,
+        proposer: &Member,
+        key_package: &KeyPackage,
+    ) -> Result<Vec<u8>, GroupError> {
+        let (proposal, _reference) = self
+            .group
+            .propose_add_member(&proposer.provider, &proposer.signer, key_package)
+            .map_err(mls)?;
+
+        proposal.tls_serialize_detached().map_err(codec)
+    }
+
+    /// Turn the additions somebody else proposed into a commit.
+    ///
+    /// Returns the commit to broadcast and the welcome for the people being
+    /// admitted, exactly as [`invite`] does, because from the joiner's side
+    /// nothing about this is different.
+    ///
+    /// The caller must not be the member that proposed them. Nothing here
+    /// enforces that, because enforcing it here would only protect a client
+    /// that wanted to be protected: the check that matters is the one every
+    /// receiver runs in [`receive`], which is where a commit built by
+    /// something other than this code is caught.
+    ///
+    /// [`invite`]: Self::invite
+    /// [`receive`]: Self::receive
+    pub fn confirm_additions(
+        &mut self,
+        committer: &Member,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), GroupError> {
+        if self.group.pending_proposals().next().is_none() {
+            return Err(GroupError::NothingToConfirm);
+        }
+
+        let (commit, welcome, _group_info) = self
+            .group
+            .commit_to_pending_proposals(&committer.provider, &committer.signer)
+            .map_err(mls)?;
+
+        self.group
+            .merge_pending_commit(&committer.provider)
+            .map_err(mls)?;
+
+        let welcome = welcome
+            .map(|w| w.tls_serialize_detached().map_err(codec))
+            .transpose()?;
+
+        Ok((commit.tls_serialize_detached().map_err(codec)?, welcome))
     }
 
     /// Invite a member, returning the commit to broadcast and the welcome to
@@ -1293,6 +1683,43 @@ impl Conversation {
                 // and update at once, and the difference between who was in the
                 // group and who is in it now is the thing a person needs told.
                 let before = self.roster();
+
+                // Resolved before the merge, against the epoch the commit was
+                // sent at. A committer that removed itself is not in the roster
+                // afterwards, and "who did this" is worth most in exactly that
+                // case.
+                let by = sender.and_then(|at| self.participant_at(at));
+
+                // The second half of the two member rule, and the half that is
+                // worth anything.
+                //
+                // A commit that carries an Add the committer also proposed is
+                // one member admitting somebody on their own authority. MLS
+                // considers it perfectly valid, which is the point: nothing in
+                // the protocol is going to stop it, and a sender cannot be
+                // trusted to stop itself. Every receiver refuses it instead, so
+                // a commit built by hand, by an older client, or by something
+                // written to get around this is refused by the group rather
+                // than by the sender's conscience.
+                //
+                // Refused before the merge, so the epoch does not move. The
+                // member who tried is the one left behind, which is the correct
+                // way round.
+                if self.added_on_one_authority(&staged, sender) {
+                    return Err(GroupError::AddedWithoutASecondMember);
+                }
+
+                // And, where a group has named them, the member that committed
+                // has to be one of the people allowed to admit.
+                //
+                // This narrows who may turn a request into a member. It does
+                // not narrow who may ask: a member who is not an admin still
+                // proposes, which is what a request to join looks like from
+                // inside the group, and an admin decides.
+                if self.added_by_somebody_who_may_not(&staged, sender) {
+                    return Err(GroupError::AddedBySomebodyWhoIsNotAnAdmin);
+                }
+
                 self.group
                     .merge_staged_commit(&receiver.provider, *staged)
                     .map_err(mls)?;
@@ -1342,7 +1769,39 @@ impl Conversation {
                 Ok(Received::MembershipChanged(MembershipChange {
                     added,
                     removed,
+                    by,
                 }))
+            }
+            // Somebody asked for a member to be admitted.
+            //
+            // Kept rather than dropped, because a proposal that is not stored
+            // is a proposal nobody else can confirm, and the whole point of
+            // splitting an addition in two is that the second half is done by
+            // a different member on a different device.
+            //
+            // Reported as well as stored: this is the moment the group finds
+            // out that somebody wants to let a person in, which is the moment
+            // it is worth anybody's attention. Afterwards it is already done.
+            ProcessedMessageContent::ProposalMessage(proposal) => {
+                let by = sender.and_then(|at| self.participant_at(at));
+
+                let joining: Vec<Participant> = match proposal.proposal() {
+                    openmls::prelude::Proposal::Add(add) => vec![Participant::from_credential(
+                        add.key_package().leaf_node().credential().serialized_content(),
+                        Vec::new(),
+                    )],
+                    _ => Vec::new(),
+                };
+
+                self.group
+                    .store_pending_proposal(receiver.provider.storage(), *proposal)
+                    .map_err(|e| GroupError::Mls(format!("{e:?}")))?;
+
+                if joining.is_empty() {
+                    return Ok(Received::Nothing);
+                }
+
+                Ok(Received::AdditionProposed { by, joining })
             }
             _ => Ok(Received::Nothing),
         }
@@ -1587,17 +2046,22 @@ mod tests {
         let mut b = Conversation::join(&bob, &welcome_b, &a.ratchet_tree().expect("tree"))
             .expect("bob joins");
 
+        // Two members now, so admitting a third takes both of them: Alice asks
+        // and Bob confirms.
         let carol_kp = carol.key_package().expect("carol key package");
-        let (second_commit, welcome_c) = a
-            .invite(&alice, carol_kp.key_package())
-            .expect("invite carol");
+        let proposal = a
+            .propose_invite(&alice, carol_kp.key_package())
+            .expect("alice proposes carol");
+        b.receive(&bob, &proposal).expect("bob hears the proposal");
+        let (second_commit, welcome_c) = b.confirm_additions(&bob).expect("bob confirms");
+        let welcome_c = welcome_c.expect("a welcome for carol");
 
-        // Bob has to hear Carol arrive, or he stays an epoch behind and reads
+        // And Alice has to hear it too, or she stays an epoch behind and reads
         // nothing that follows.
-        b.receive(&bob, &second_commit)
-            .expect("bob applies the commit");
+        a.receive(&alice, &second_commit)
+            .expect("alice applies the commit");
 
-        let mut c = Conversation::join(&carol, &welcome_c, &a.ratchet_tree().expect("tree"))
+        let mut c = Conversation::join(&carol, &welcome_c, &b.ratchet_tree().expect("tree"))
             .expect("carol joins");
 
         for text in [b"first ".as_slice(), b"second", b"third "] {
@@ -2080,22 +2544,30 @@ mod tests {
         let mut b = Conversation::join(&bob, &welcome, &tree).expect("join");
         assert_eq!(b.member_count(), 2);
 
-        // Alice adds Carol. Bob has to find out, and find out who.
-        let (commit, _welcome) = a
-            .invite(&alice, carol.key_package().expect("kp").key_package())
-            .expect("invite carol");
-        let outcome = b.receive(&bob, &commit).expect("process the commit");
+        // Alice asks for Carol and Bob confirms. Alice has to find out, and
+        // find out who did it as well as who arrived.
+        let proposal = a
+            .propose_invite(&alice, carol.key_package().expect("kp").key_package())
+            .expect("propose carol");
+        b.receive(&bob, &proposal).expect("bob hears the proposal");
+        let (commit, _welcome) = b.confirm_additions(&bob).expect("bob confirms");
+        let outcome = a.receive(&alice, &commit).expect("process the commit");
 
         let change = outcome
             .membership_change()
-            .expect("Bob was not told that somebody joined his conversation");
+            .expect("Alice was not told that somebody joined her conversation");
         assert!(change.removed.is_empty());
         assert_eq!(change.added.len(), 1, "the wrong number of arrivals");
         assert_eq!(
             change.added[0].identity, b"carol-device-1",
             "the arrival was reported without saying who it was"
         );
-        assert_eq!(b.member_count(), 3);
+        assert_eq!(
+            change.by.as_ref().map(|p| p.identity.clone()),
+            Some(b"bob-device-1".to_vec()),
+            "the arrival was reported without saying who let them in"
+        );
+        assert_eq!(a.member_count(), 3);
     }
 
     #[test]

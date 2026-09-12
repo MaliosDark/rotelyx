@@ -24,17 +24,47 @@ fn group(n: usize) -> (Vec<Member>, Vec<Conversation>) {
 
     for i in 1..n {
         let kp = members[i].key_package().expect("key package");
-        let (commit, welcome) = founder
-            .invite(&members[0], kp.key_package())
-            .expect("invite");
-        let tree = founder.ratchet_tree().expect("tree");
 
-        for (offset, existing) in joined.iter_mut().enumerate() {
-            existing
-                .receive(&members[offset + 1], &commit)
-                .expect("apply commit");
+        // The first arrival is first contact and the founder admits them
+        // alone. After that the group has two members, so an addition takes
+        // two: the founder asks, everybody hears the request, and the first
+        // joiner turns it into a commit.
+        let (commit, welcome) = if joined.is_empty() {
+            founder
+                .invite(&members[0], kp.key_package())
+                .map(|(c, w)| (c, Some(w)))
+                .expect("invite")
+        } else {
+            let proposal = founder
+                .propose_invite(&members[0], kp.key_package())
+                .expect("propose");
+
+            // Everybody, not only the member who will confirm it. A commit
+            // that carries an Add by reference cannot be processed by anybody
+            // who never saw the proposal it refers to.
+            for (offset, existing) in joined.iter_mut().enumerate() {
+                existing
+                    .receive(&members[offset + 1], &proposal)
+                    .expect("hear the proposal");
+            }
+
+            joined[0].confirm_additions(&members[1]).expect("confirm")
+        };
+        let welcome = welcome.expect("a welcome for the joiner");
+
+        // Everybody except whoever sent the commit has to apply it.
+        if !joined.is_empty() {
+            founder
+                .receive(&members[0], &commit)
+                .expect("founder applies the commit");
+            for (offset, existing) in joined.iter_mut().enumerate().skip(1) {
+                existing
+                    .receive(&members[offset + 1], &commit)
+                    .expect("apply commit");
+            }
         }
 
+        let tree = founder.ratchet_tree().expect("tree");
         joined.push(Conversation::join(&members[i], &welcome, &tree).expect("join"));
     }
 
@@ -116,16 +146,23 @@ fn a_membership_change_rekeys_the_call() {
         .media_base_key(&members[0])
         .expect("export");
 
-    // A third person joins.
+    // A third person joins, which takes both of the two already here.
     let carol = Member::new(b"carol").expect("identity");
     let kp = carol.key_package().expect("key package");
-    let (commit, welcome) = conversations[0]
-        .invite(&members[0], kp.key_package())
-        .expect("invite");
-    let tree = conversations[0].ratchet_tree().expect("tree");
-
+    let proposal = conversations[0]
+        .propose_invite(&members[0], kp.key_package())
+        .expect("propose");
     conversations[1]
-        .receive(&members[1], &commit)
+        .receive(&members[1], &proposal)
+        .expect("hear the proposal");
+    let (commit, welcome) = conversations[1]
+        .confirm_additions(&members[1])
+        .expect("confirm");
+    let welcome = welcome.expect("a welcome for carol");
+    let tree = conversations[1].ratchet_tree().expect("tree");
+
+    conversations[0]
+        .receive(&members[0], &commit)
         .expect("apply commit");
     let carols = Conversation::join(&carol, &welcome, &tree).expect("join");
 

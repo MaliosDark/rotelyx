@@ -503,6 +503,25 @@ impl Driver {
                                     .collect(),
                             })
                         }
+                        // A request to admit somebody, which changes nothing
+                        // until another member confirms it. Reported as an
+                        // error rather than silently, because this desktop
+                        // surface has nowhere to confirm one and a person
+                        // waiting for an addition that never happens deserves
+                        // to know why.
+                        Ok(Received::AdditionProposed { by, joining }) => {
+                            let who = by
+                                .map(|p| hex_id(&p.identity))
+                                .unwrap_or_else(|| "somebody outside this group".into());
+                            let joining: Vec<String> =
+                                joining.iter().map(|p| hex_id(&p.identity)).collect();
+                            self.emit(Event::Error {
+                                text: format!(
+                                    "{who} asks to admit {}. Confirm it from a client that can",
+                                    joining.join(", ")
+                                ),
+                            })
+                        }
                         Ok(Received::Nothing) => {}
                         Err(e) => self.emit(Event::Error { text: format!("decrypt failed: {e}") }),
                     }

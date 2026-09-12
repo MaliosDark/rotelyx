@@ -243,6 +243,43 @@ jailbroken/rooted device, malware, forensic extraction of an unlocked device.
   member and add another, leaving the number where it was, so a client reading
   only the count says "2 members" while the person on the other side has been
   replaced. The terminal, desktop and browser clients now name them.
+- **And name who did it.** A change reports the member whose commit made it, not
+  only who arrived. "Somebody joined" is a fact nobody can act on. "She added
+  him" is one the other members can weigh against what they know, and it is what
+  makes an addition answerable to the people it happened to. MLS authenticates
+  the committer, so this is not something the sender asserts about itself.
+- **Defended: one member cannot admit anybody on its own.** Visibility alone
+  leaves the group finding out afterwards. An addition is now two acts by two
+  members: one proposes and a **different** one commits, and every receiver
+  refuses a commit whose Add was proposed by the member that sent it. The epoch
+  does not move, so the member who tried is the one left behind rather than the
+  group.
+
+  The check is on the receiving side on purpose. A sender that has decided to
+  break the rule is not asking permission, so a client that only refused to
+  *build* such a commit would protect nobody: it would be checking the one
+  party that has already chosen. Refusing on receipt means a commit built by
+  hand, by an older client, or by something written specifically to get around
+  this is refused by everybody it is sent to.
+
+  **Two exemptions, and only two.** A group of one admitting its first member
+  is first contact, where the second pair of eyes would have to belong to
+  somebody who has not arrived. And a member adding another leaf for the same
+  person is somebody's own second device, which admits nobody: that person is
+  already in the room. The second is decided against the credential MLS
+  authenticated for the committer, not against what the joining leaf claims,
+  so a leaf cannot be let in alone by asserting that it belongs to whoever is
+  letting it in.
+
+  **This is not a rule about bots, and it cannot be.** "Is a bot" is not a
+  property anything can check: a program joins with the same kind of key
+  package a person does, and one written to evade a rule would not declare
+  itself. So the rule is about additions, and it applies to every addition.
+  What a bot is, and what it can see once it is in, is in `docs/BOTS.md`.
+- **Not defended, and worth saying beside it.** None of this stops a member who
+  belongs there from piping the conversation into a program of their own. A
+  member holds plaintext; that is what being a member means. What this buys is
+  that nobody arrives unnoticed and nobody arrives on one person's say so.
 
 ### ADV-8: Global passive adversary
 *Capability:* observes traffic at many points simultaneously, correlates by

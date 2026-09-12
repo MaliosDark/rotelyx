@@ -3077,12 +3077,51 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .expect("open"),
         );
 
-        let inv = host
-            .invite(knock["keyPackage"].as_str().unwrap())
-            .expect("invite");
+        // Two members now, so the host cannot admit Carol on its own. It asks,
+        // and the guest is the second pair of eyes. The whole exchange is the
+        // reason this test is here: it crosses a real socket, a real server and
+        // two real clients, and none of them is the one enforcing the rule.
+        let proposal = host
+            .propose(knock["keyPackage"].as_str().unwrap())
+            .expect("host proposes carol");
+
+        // The host steps away from the meeting place while this is pending,
+        // and it has to.
+        //
+        // A tag delivers an envelope to exactly one listener and then releases
+        // it, which is what stops two devices racing to collect the same
+        // message. The welcome is now produced by whoever confirms, not by the
+        // host, so a host still sitting on the meeting tag collects the welcome
+        // meant for the person joining and nobody notices: the joiner simply
+        // waits for ever. It already has the key package it asked about, so
+        // there is nothing left for it to hear here until this resolves.
+        client_unsubscribe(&mut host_ws, vec![meeting.clone()]).await;
+        assert_eq!(recv_step(&mut host_ws, "#12b").await["op"], "dropped");
+
+        for envelope in host
+            .seal_commit_for_group(&proposal, slot)
+            .expect("seal proposal")
+        {
+            deposit(&mut host_ws, envelope).await;
+            assert_eq!(recv_step(&mut host_ws, "#13").await["op"], "stored");
+        }
+
+        // The guest hears the request, and is told who asked and for whom.
+        let envelope = recv_step(&mut guest_ws, "#13b").await;
+        assert_eq!(envelope["op"], "envelope");
+        let payload = guest
+            .open_mine(envelope["envelope"].as_str().unwrap(), slot, 2)
+            .expect("addressed to the guest");
+        let heard: serde_json::Value =
+            serde_json::from_str(&guest.receive(&payload).expect("apply")).expect("json");
+        assert_eq!(heard["kind"], "proposed", "the guest was not told: {heard}");
+        assert_eq!(heard["joining"].as_array().expect("array").len(), 1);
+
+        // And turns it into the thing that actually happens.
+        let inv = guest.confirm().expect("guest confirms");
 
         deposit(
-            &mut host_ws,
+            &mut guest_ws,
             seal_under(
                 &meeting,
                 &b64(serde_json::json!({
@@ -3094,17 +3133,17 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .expect("seal"),
         )
         .await;
-        assert_eq!(recv_step(&mut host_ws, "#13").await["op"], "stored");
+        assert_eq!(recv_step(&mut guest_ws, "#14").await["op"], "stored");
 
-        for envelope in host
+        for envelope in guest
             .seal_commit_for_group(&inv.commit, slot)
             .expect("seal commit")
         {
-            deposit(&mut host_ws, envelope).await;
-            assert_eq!(recv_step(&mut host_ws, "#14").await["op"], "stored");
+            deposit(&mut guest_ws, envelope).await;
+            assert_eq!(recv_step(&mut guest_ws, "#14b").await["op"], "stored");
         }
-        subscribe(&mut host_ws, host.my_polling_tags(slot, 2).expect("tags")).await;
-        assert_eq!(recv_step(&mut host_ws, "#15").await["op"], "ready");
+        subscribe(&mut guest_ws, guest.my_polling_tags(slot, 2).expect("tags")).await;
+        assert_eq!(recv_step(&mut guest_ws, "#15").await["op"], "ready");
 
         let welcome = unb64(
             &open_under(
@@ -3124,21 +3163,22 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         subscribe(&mut third_ws, carol.my_polling_tags(slot, 2).expect("tags")).await;
         assert_eq!(recv_step(&mut third_ws, "#17").await["op"], "ready");
 
-        // The guest, still an epoch behind, receives the commit on its own tag.
-        let envelope = recv_step(&mut guest_ws, "#18").await;
+        // The host, which asked but did not commit, is now the one an epoch
+        // behind. It receives the commit on its own tag.
+        let envelope = recv_step(&mut host_ws, "#18").await;
         assert_eq!(envelope["op"], "envelope");
-        let payload = guest
+        let payload = host
             .open_mine(envelope["envelope"].as_str().unwrap(), slot, 2)
-            .expect("addressed to the guest at the epoch it is still on");
-        assert!(!is_message(&guest.receive(&payload).expect("apply")));
+            .expect("addressed to the host at the epoch it is still on");
+        assert!(!is_message(&host.receive(&payload).expect("apply")));
 
         // Applying a commit moves the epoch, and the tags move with it. A
         // client that does not re-subscribe here goes silent: it keeps
         // listening on the previous epoch's tags while everyone addresses it at
         // the new one, and no error is raised anywhere.
-        subscribe(&mut guest_ws, guest.my_polling_tags(slot, 2).expect("tags")).await;
+        subscribe(&mut host_ws, host.my_polling_tags(slot, 2).expect("tags")).await;
         assert_eq!(
-            recv_step(&mut guest_ws, "guest resubscribe").await["op"],
+            recv_step(&mut host_ws, "host resubscribe").await["op"],
             "ready"
         );
 

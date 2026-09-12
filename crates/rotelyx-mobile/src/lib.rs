@@ -381,6 +381,23 @@ fn dispatch(req: &Value) -> Res {
                 "ratchetTree": inv.ratchet_tree,
             })
         }
+        "session.admins" => json!(engine(s.admins())?),
+        "session.setAdmins" => {
+            let labels = str_arg(req, "labels")?;
+            json!({ "commit": engine(s.set_admins(&labels))? })
+        }
+        "session.propose" => {
+            let kp = str_arg(req, "keyPackage")?;
+            json!({ "proposal": engine(s.propose(&kp))? })
+        }
+        "session.confirm" => {
+            let inv = engine(s.confirm())?;
+            json!({
+                "commit": inv.commit,
+                "welcome": inv.welcome,
+                "ratchetTree": inv.ratchet_tree,
+            })
+        }
         "session.join" => {
             let welcome = str_arg(req, "welcome")?;
             let tree = str_arg(req, "ratchetTree")?;

@@ -9,6 +9,7 @@
 //!   terminal 2:  rotelyx connect <address printed by terminal 1>
 //! ```
 
+mod bot;
 mod handshake;
 mod keyfile;
 mod resume;
@@ -17,6 +18,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use bot::{Command as BotCommand, Event, Wire};
 use rotelyx_audio::Call;
 use rotelyx_core::store::{self, Paths, StoredInvitation};
 use rotelyx_core::{
@@ -95,6 +97,14 @@ enum Command {
         /// permits one. So `/call` needs this and says so if it is missing.
         #[arg(long, value_name = "URL")]
         relay: Option<String>,
+
+        /// Speak JSON instead of sentences, for a program rather than a person.
+        ///
+        /// One object per line out, one per line in. The member is the same
+        /// member: it holds keys, it is in the roster, and the people in the
+        /// conversation can see it and remove it. See `bot.rs`.
+        #[arg(long)]
+        bot: bool,
     },
 
     /// Withdraw an invitation, so its holder cannot connect again.
@@ -133,6 +143,14 @@ enum Command {
         /// See `Listen`.
         #[arg(long, value_name = "URL")]
         relay: Option<String>,
+
+        /// Speak JSON instead of sentences, for a program rather than a person.
+        ///
+        /// One object per line out, one per line in. The member is the same
+        /// member: it holds keys, it is in the roster, and the people in the
+        /// conversation can see it and remove it. See `bot.rs`.
+        #[arg(long)]
+        bot: bool,
     },
 
     /// Dial a peer and report whether a direct path is ever established.
@@ -185,6 +203,20 @@ fn short_id(identity: &[u8]) -> String {
         .take(8)
         .map(|b| format!("{b:02x}"))
         .collect::<String>()
+}
+
+/// Something to tell a person, on a stream a program is not parsing.
+///
+/// The one rule of the machine interface is that stdout carries events and
+/// nothing else. Everything a session says before the conversation starts is
+/// for a person: which invitation it is answering, how to hand over a code,
+/// what the digits mean. In machine mode it belongs on stderr, where a bot's
+/// author can still read it in a log.
+macro_rules! aside {
+    ($wire:expr) => { if $wire == Wire::Json { eprintln!() } else { println!() } };
+    ($wire:expr, $($arg:tt)*) => {
+        if $wire == Wire::Json { eprintln!($($arg)*) } else { println!($($arg)*) }
+    };
 }
 
 /// Wall-clock epoch. The library takes time as a parameter so it stays
@@ -264,14 +296,14 @@ fn pick_invitation<'a>(
 /// The identity is inside, where MLS put it, and that is what this compares.
 /// Read after the handshake rather than before it, which is later than a user
 /// might like and is the only point at which the number means anything.
-fn print_safety_number(my_name: RotelyxId, conversation: &Conversation) {
+fn print_safety_number(my_name: RotelyxId, conversation: &Conversation, wire: Wire) {
     let roster: Vec<Vec<u8>> = conversation
         .roster()
         .into_iter()
         .map(|p| p.identity)
         .collect();
 
-    println!();
+    aside!(wire);
     // Both halves must be the names that are actually in the roster.
     //
     // This used to pass the long-lived identity as "me" while reading the peer
@@ -281,28 +313,39 @@ fn print_safety_number(my_name: RotelyxId, conversation: &Conversation) {
     // pair and read out digits that could not match.
     match rotelyx_core::peer_identity(&roster, my_name) {
         Some(peer) => {
-            println!("  peer          {peer}");
-            println!(
+            if wire == Wire::Json {
+                wire.emit(&Event::Safety {
+                    peer: peer.to_string(),
+                    number: rotelyx_core::safety_number(&my_name, &peer).to_string(),
+                });
+            }
+            aside!(wire, "  peer          {peer}");
+            aside!(wire, 
                 "  safety number {}",
                 rotelyx_core::safety_number(&my_name, &peer)
             );
-            println!();
-            println!("  Read those digits to your peer over a channel Rotelyx does not");
-            println!("  control. If they differ, somebody is in the middle.");
-            println!();
-            println!("  This is the name they use in this conversation, and nowhere");
-            println!("  else. It is not the address you called and it is not an");
-            println!("  identity you can look for elsewhere: the same person shows a");
-            println!("  different one to everybody they talk to, so two of their");
-            println!("  contacts cannot compare notes and find each other. What the");
-            println!("  digits verify is this conversation, not a person in general.");
+            aside!(wire);
+            aside!(wire, "  Read those digits to your peer over a channel Rotelyx does not");
+            aside!(wire, "  control. If they differ, somebody is in the middle.");
+            aside!(wire);
+            aside!(wire, "  This is the name they use in this conversation, and nowhere");
+            aside!(wire, "  else. It is not the address you called and it is not an");
+            aside!(wire, "  identity you can look for elsewhere: the same person shows a");
+            aside!(wire, "  different one to everybody they talk to, so two of their");
+            aside!(wire, "  contacts cannot compare notes and find each other. What the");
+            aside!(wire, "  digits verify is this conversation, not a person in general.");
         }
         None => {
-            println!("  no peer identity in the group, which should not happen.");
-            println!("  Do not trust this session.");
+            if wire == Wire::Json {
+                wire.emit(&Event::refused(
+                    "no peer identity in the group. Do not trust this session",
+                ));
+            }
+            aside!(wire, "  no peer identity in the group, which should not happen.");
+            aside!(wire, "  Do not trust this session.");
         }
     }
-    println!();
+    aside!(wire);
 }
 
 /// Read lines from the terminal and send them; print what arrives.
@@ -352,6 +395,7 @@ async fn chat(
     mut conversation: Conversation,
     me: &Member,
     paths: PathPolicy,
+    wire: Wire,
 ) -> Result<Conversation> {
     let (mut send, mut recv, conn) = session.split_for_chat();
 
@@ -368,38 +412,66 @@ async fn chat(
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    println!("connected: type to send, /call to talk, Ctrl-D to quit");
+    wire.emit(&Event::Ready {
+        members: conversation.member_count(),
+        epoch: conversation.epoch(),
+    });
 
     loop {
         tokio::select! {
             line = lines.next_line() => {
-                match line.context("reading stdin")? {
-                    Some(text) if text.trim() == "/call" => {
+                let line = line.context("reading stdin")?;
+
+                // In machine mode a line is an instruction or it is nothing.
+                // It is never text to send: see the rule at the top of bot.rs.
+                let line = match (wire, line) {
+                    (Wire::Json, Some(raw)) => match bot::parse(&raw) {
+                        Ok(BotCommand::Send { text }) => Some(text),
+                        Ok(BotCommand::Members) => {
+                            for who in conversation.roster() {
+                                wire.emit(&Event::Joined {
+                                    who: short_id(&who.identity),
+                                });
+                            }
+                            wire.emit(&Event::Members {
+                                count: conversation.member_count(),
+                            });
+                            continue;
+                        }
+                        Ok(BotCommand::Quit) => None,
+                        Err(problem) => {
+                            wire.emit(&Event::refused(problem));
+                            continue;
+                        }
+                    },
+                    (_, line) => line,
+                };
+
+                match line {
+                    Some(text) if wire == Wire::Human && text.trim() == "/call" => {
                         match call {
-                            Some(_) => println!("[already on a call: /hang to stop]"),
+                            Some(_) => wire.emit(&Event::refused("already on a call: /hang to stop")),
                             None => match start_call(&conversation, me, paths) {
                                 Ok(c) => {
-                                    println!(
-                                        "[call started: {} kbit/s, microphone is {}]",
-                                        c.kbit_per_second(),
-                                        if c.microphone_is_mono() { "mono" } else { "stereo, averaged" }
-                                    );
+                                    wire.emit(&Event::CallStarted {
+                                        kbit_per_second: c.kbit_per_second(),
+                                        mono: c.microphone_is_mono(),
+                                    });
                                     call = Some(c);
                                 }
-                                Err(e) => println!("[cannot call: {e:#}]"),
+                                Err(e) => wire.emit(&Event::refused(format!("cannot call: {e:#}"))),
                             },
                         }
                     }
-                    Some(text) if text.trim() == "/hang" => {
+                    Some(text) if wire == Wire::Human && text.trim() == "/hang" => {
                         match call.take() {
-                            Some(c) => println!(
-                                "[call ended: {} sent, {} received, {} ms queued, {} ms of microphone dropped]",
-                                c.frames_sent(),
-                                c.frames_received(),
-                                c.queued_ms(),
-                                c.dropped_ms()
-                            ),
-                            None => println!("[not on a call]"),
+                            Some(c) => wire.emit(&Event::CallEnded {
+                                frames_sent: c.frames_sent(),
+                                frames_received: c.frames_received(),
+                                queued_ms: c.queued_ms(),
+                                dropped_ms: c.dropped_ms(),
+                            }),
+                            None => wire.emit(&Event::refused("not on a call")),
                         }
                     }
                     Some(text) => {
@@ -422,7 +494,7 @@ async fn chat(
             _ = tick.tick() => {
                 if let Some(c) = call.as_mut() {
                     if let Err(e) = c.send_all_ready(&conn) {
-                        println!("[call ended: {e:#}]");
+                        wire.emit(&Event::Closed { reason: format!("call ended: {e:#}") });
                         call = None;
                     }
                 }
@@ -450,15 +522,18 @@ async fn chat(
                     // The peer hanging up ends a chat; it is not a failure and
                     // should not print a stack trace at somebody.
                     Err(e) => {
-                        println!("[peer disconnected: {e}]");
+                        wire.emit(&Event::Closed { reason: format!("peer disconnected: {e}") });
                         break;
                     }
                 };
                 match frame.kind {
                     FrameKind::Message => {
                         match conversation.receive(me, &frame.payload).context("decrypting")? {
-                            Received::Message { bytes: plaintext, .. } => {
-                                println!("peer: {}", String::from_utf8_lossy(&plaintext));
+                            Received::Message { sender, bytes: plaintext } => {
+                                let from = sender
+                                    .and_then(|at| conversation.participant_at(at))
+                                    .map(|who| short_id(&who.identity));
+                                wire.emit(&Event::message(from, &plaintext));
                             }
                             // Who, not how many. A commit can remove one member
                             // and add another at once, which leaves the count
@@ -469,17 +544,32 @@ async fn chat(
                             // membership changes announced without names.
                             Received::MembershipChanged(change) => {
                                 for who in &change.added {
-                                    println!("[joined: {}]", short_id(&who.identity));
+                                    wire.emit(&Event::Joined { who: short_id(&who.identity) });
                                 }
                                 for who in &change.removed {
-                                    println!("[left: {}]", short_id(&who.identity));
+                                    wire.emit(&Event::Left { who: short_id(&who.identity) });
                                 }
-                                println!("[the group is now {} members]", conversation.member_count());
+                                wire.emit(&Event::Members { count: conversation.member_count() });
+                            }
+                            // Somebody asked for a member to be admitted, and
+                            // nothing has happened yet. This is the half that
+                            // is still a decision, so it is the half worth
+                            // saying out loud.
+                            Received::AdditionProposed { by, joining } => {
+                                let who = by
+                                    .map(|p| short_id(&p.identity))
+                                    .unwrap_or_else(|| "somebody outside this group".into());
+                                for candidate in &joining {
+                                    wire.emit(&Event::refused(format!(
+                                        "{who} asks to admit {}. Confirm it or it does not happen",
+                                        short_id(&candidate.identity)
+                                    )));
+                                }
                             }
                             Received::Nothing => {}
                         }
                     }
-                    other => println!("[ignoring {other:?} frame]"),
+                    other => wire.emit(&Event::refused(format!("ignoring {other:?} frame"))),
                 }
             }
         }
@@ -604,7 +694,8 @@ async fn main() -> Result<()> {
             }
         }
 
-        Command::Listen { open, relay } => {
+        Command::Listen { open, relay, bot } => {
+            let wire = if bot { Wire::Json } else { Wire::Human };
             let epoch = now_epoch()?;
 
             // Loaded before the gate, because they decide two things now: who is
@@ -688,29 +779,29 @@ async fn main() -> Result<()> {
                     codes.sort_by_key(|i| i.expires_at_epoch);
                     let n = codes.len();
                     if n == 1 {
-                        println!("answering one invitation. Hand the holder its code:");
+                        aside!(wire, "answering one invitation. Hand the holder its code:");
                     } else {
-                        println!("answering {n} invitations. Each holder gets its own code:");
+                        aside!(wire, "answering {n} invitations. Each holder gets its own code:");
                     }
-                    println!();
+                    aside!(wire);
                     for inv in codes {
-                        println!("  rotelyx connect {}", inv.code());
+                        aside!(wire, "  rotelyx connect {}", inv.code());
                     }
-                    println!();
-                    println!("A code is the address as well as the permission, and");
-                    println!("the address is not this identity.");
+                    aside!(wire);
+                    aside!(wire, "A code is the address as well as the permission, and");
+                    aside!(wire, "the address is not this identity.");
                     if n > 1 {
-                        println!();
-                        println!("All {n} addresses are answered, and the first caller to");
-                        println!("arrive is the one served: this is one conversation at a");
-                        println!("time, not {n} at once.");
+                        aside!(wire);
+                        aside!(wire, "All {n} addresses are answered, and the first caller to");
+                        aside!(wire, "arrive is the one served: this is one conversation at a");
+                        aside!(wire, "time, not {n} at once.");
                     }
                 }
                 None => {
-                    println!("listening as {}", endpoint.id());
-                    println!();
-                    println!("  rotelyx connect '{}'", encode_addr(&addr, &config)?);
-                    println!();
+                    aside!(wire, "listening as {}", endpoint.id());
+                    aside!(wire);
+                    aside!(wire, "  rotelyx connect '{}'", encode_addr(&addr, &config)?);
+                    aside!(wire);
                 }
             }
 
@@ -758,7 +849,7 @@ async fn main() -> Result<()> {
                     member,
                     conversation,
                 } => {
-                    println!("carried on from where this conversation left off.");
+                    aside!(wire, "carried on from where this conversation left off.");
                     (member, conversation)
                 }
             };
@@ -773,12 +864,13 @@ async fn main() -> Result<()> {
             // moved past.
             resume::save(&paths, &here, &me, &conversation, &passphrase)?;
 
-            print_safety_number(my_name, &conversation);
+            print_safety_number(my_name, &conversation, wire);
             let conversation = chat(
                 session,
                 conversation,
                 &me,
                 net_config(relay.as_deref())?.paths(),
+                wire,
             )
             .await?;
             resume::save(&paths, &here, &me, &conversation, &passphrase)?;
@@ -886,7 +978,9 @@ async fn main() -> Result<()> {
             addr,
             invite,
             relay,
+            bot,
         } => {
+            let wire = if bot { Wire::Json } else { Wire::Human };
             let epoch = now_epoch()?;
 
             // A transport key for this call and nothing else.
@@ -1004,7 +1098,7 @@ async fn main() -> Result<()> {
                     member,
                     conversation,
                 } => {
-                    println!("carried on from where this conversation left off.");
+                    aside!(wire, "carried on from where this conversation left off.");
                     (member, conversation)
                 }
             };
@@ -1019,12 +1113,13 @@ async fn main() -> Result<()> {
             // moved past.
             resume::save(&paths, &dialled_id, &me, &conversation, &passphrase)?;
 
-            print_safety_number(my_name, &conversation);
+            print_safety_number(my_name, &conversation, wire);
             let conversation = chat(
                 session,
                 conversation,
                 &me,
                 net_config(relay.as_deref())?.paths(),
+                wire,
             )
             .await?;
             resume::save(&paths, &dialled_id, &me, &conversation, &passphrase)?;

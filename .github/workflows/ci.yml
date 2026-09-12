@@ -199,6 +199,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: ./scripts/chain-test
 
+  bots:
+    # The machine interface is unit tested, but what a bot author is actually
+    # buying is that two processes, neither of them a person, can hold keys and
+    # exchange a message. That crosses a binary, a relay and a real socket, so
+    # nothing inside one process can cover it.
+    name: two programs are members of a conversation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/bot-test
+
   timing:
     # The codec has to fit in a fraction of one core or a call does not run.
     # That bound cannot be asserted inside `cargo test --workspace`, which runs

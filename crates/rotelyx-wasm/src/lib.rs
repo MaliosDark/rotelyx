@@ -142,6 +142,18 @@ impl From<Error> for JsValue {
     }
 }
 
+/// The label a member is known by in this conversation.
+///
+/// The first eight bytes of the identity, which is what every surface shows
+/// and what a caller naming an admin has to be able to hand back.
+fn short(identity: &[u8]) -> String {
+    identity
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn err(e: impl std::fmt::Display) -> Error {
     Error::new(e.to_string())
 }
@@ -297,10 +309,26 @@ impl Session {
         Ok(())
     }
 
-    /// Add a member from their key package.
+    /// Add a member from their key package, on this member's own authority.
     ///
     /// The commit is applied locally before this returns, so the epoch has
     /// already advanced by the time the caller sees the result.
+    ///
+    /// # When this is allowed
+    ///
+    /// Two cases, and every other member checks both on receipt rather than
+    /// trusting this to have checked them:
+    ///
+    /// - the conversation has one member, which is first contact, and
+    /// - the leaf being added belongs to the same person as this one, which is
+    ///   somebody's own second device.
+    ///
+    /// Anywhere else this produces a commit the group refuses, because
+    /// admitting somebody takes two members. Use [`propose`] and let another
+    /// member [`confirm`] it.
+    ///
+    /// [`propose`]: Session::propose
+    /// [`confirm`]: Session::confirm
     pub fn invite(&mut self, key_package_b64: &str) -> Result<Invitation, Error> {
         if self.member_count() >= MAX_MEMBERS {
             return Err(Error::new(format!(
@@ -320,6 +348,105 @@ impl Session {
             .ok_or_else(|| Error::new("no conversation yet: call found() first"))?;
 
         let (commit, welcome) = group.invite(member, &kp).map_err(err)?;
+        let tree = group.ratchet_tree().map_err(err)?;
+
+        self.sync_tag_keys()?;
+
+        Ok(Invitation {
+            commit: BASE64.encode(&commit),
+            welcome: BASE64.encode(&welcome),
+            ratchet_tree: BASE64.encode(&tree),
+        })
+    }
+
+    /// Who this group allows to turn a request into a member, as a JSON array
+    /// of labels. Empty when it allows everybody.
+    pub fn admins(&self) -> Result<String, Error> {
+        let group = self
+            .conversation
+            .as_ref()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+        let names: Vec<String> = group.admins().iter().map(|who| short(who)).collect();
+        serde_json::to_string(&names).map_err(|e| Error::new(format!("{e}")))
+    }
+
+    /// Name the members allowed to admit people, from their labels as the
+    /// roster reports them. An empty array turns the rule off.
+    ///
+    /// Returns the commit to broadcast. Anybody can send this, and everybody
+    /// sees it arrive, which is the only authority available in a group with
+    /// nobody above its members.
+    #[wasm_bindgen(js_name = setAdmins)]
+    pub fn set_admins(&mut self, labels_json: &str) -> Result<String, Error> {
+        let wanted: Vec<String> =
+            serde_json::from_str(labels_json).map_err(|e| Error::new(format!("{e}")))?;
+
+        let member = &self.member;
+        let group = self
+            .conversation
+            .as_mut()
+            .ok_or_else(|| Error::new("no conversation yet"))?;
+
+        // Resolved against the roster rather than taken on trust. A label that
+        // belongs to nobody would name an admin who can never act, and a group
+        // whose admins are all fictional is a group that has quietly turned the
+        // rule off without saying so.
+        let roster = group.roster();
+        let mut admins: Vec<Vec<u8>> = Vec::with_capacity(wanted.len());
+        for label in &wanted {
+            let found = roster
+                .iter()
+                .find(|p| p.well_formed && &short(&p.identity) == label)
+                .ok_or_else(|| Error::new(format!("no member of this conversation is {label}")))?;
+            if !admins.contains(&found.identity) {
+                admins.push(found.identity.clone());
+            }
+        }
+
+        let commit = group.set_admins(member, &admins).map_err(err)?;
+        self.sync_tag_keys()?;
+        Ok(BASE64.encode(&commit))
+    }
+
+    /// Ask the group to admit somebody. Nothing changes until another member
+    /// confirms it.
+    ///
+    /// Returns the proposal to deliver to every member of the conversation,
+    /// not only to the one expected to confirm it: a commit that refers to a
+    /// proposal cannot be processed by anybody who never saw it.
+    pub fn propose(&mut self, key_package_b64: &str) -> Result<String, Error> {
+        if self.member_count() >= MAX_MEMBERS {
+            return Err(Error::new(format!(
+                "this conversation is full at {MAX_MEMBERS} members"
+            )));
+        }
+        let kp = deserialize_key_package(&decode(key_package_b64)?).map_err(err)?;
+
+        let member = &self.member;
+        let group = self
+            .conversation
+            .as_mut()
+            .ok_or_else(|| Error::new("no conversation yet: call found() first"))?;
+
+        let proposal = group.propose_invite(member, &kp).map_err(err)?;
+        Ok(BASE64.encode(&proposal))
+    }
+
+    /// Turn the additions somebody else proposed into a commit.
+    ///
+    /// Refused by the rest of the group if this member is the one that
+    /// proposed them, which is the whole point: the second pair of eyes has to
+    /// belong to a second person.
+    pub fn confirm(&mut self) -> Result<Invitation, Error> {
+        let member = &self.member;
+        let group = self
+            .conversation
+            .as_mut()
+            .ok_or_else(|| Error::new("no conversation yet: call found() first"))?;
+
+        let (commit, welcome) = group.confirm_additions(member).map_err(err)?;
+        let welcome = welcome
+            .ok_or_else(|| Error::new("those proposals admit nobody, so there is no welcome"))?;
         let tree = group.ratchet_tree().map_err(err)?;
 
         self.sync_tag_keys()?;
@@ -590,14 +717,6 @@ impl Session {
         // A commit moves the epoch, so the tag key must follow it.
         self.sync_tag_keys()?;
 
-        fn short(identity: &[u8]) -> String {
-            identity
-                .iter()
-                .take(8)
-                .map(|b| format!("{b:02x}"))
-                .collect()
-        }
-
         // Built by serde rather than by hand.
         //
         // It was written by hand, on the reasoning that `escape_default` covers
@@ -664,6 +783,19 @@ impl Session {
                     "added": added,
                     "removed": removed,
                     "members": members,
+                    // Who committed it. "Somebody joined" is a fact nobody can
+                    // act on; "she let him in" is one the rest of the group can
+                    // weigh. Absent only when the commit came from outside the
+                    // membership.
+                    "by": change.by.as_ref().map(|p| short(&p.identity)),
+                })
+            }
+            rotelyx_crypto::Received::AdditionProposed { by, joining } => {
+                let joining: Vec<String> = joining.iter().map(|p| short(&p.identity)).collect();
+                serde_json::json!({
+                    "kind": "proposed",
+                    "by": by.as_ref().map(|p| short(&p.identity)),
+                    "joining": joining,
                 })
             }
             rotelyx_crypto::Received::Nothing => serde_json::json!({ "kind": "nothing" }),
@@ -2429,14 +2561,37 @@ mod tests {
 
         for i in 1..n {
             let kp = sessions[i].key_package().expect("kp");
-            let invitation = sessions[0].invite(&kp).expect("invite");
+
+            // The first arrival is first contact, which one member admits
+            // alone because there is nobody else yet. After that it takes two:
+            // the founder asks, everybody hears the request, and the first
+            // joiner turns it into a commit. A commit that admits somebody on
+            // one member's authority is refused by the rest of the group.
+            let invitation = if i == 1 {
+                sessions[0].invite(&kp).expect("invite")
+            } else {
+                let proposal = sessions[0].propose(&kp).expect("propose");
+                for member in sessions.iter_mut().take(i).skip(1) {
+                    member.receive(&proposal).expect("hear the request");
+                }
+                let invitation = sessions[1].confirm().expect("confirm");
+                sessions[0]
+                    .receive(&invitation.commit)
+                    .expect("the proposer applies it");
+                invitation
+            };
 
             sessions[i]
                 .join(&invitation.welcome, &invitation.ratchet_tree)
                 .expect("join");
 
-            // Everyone already in the group applies the commit.
-            for member in sessions.iter_mut().take(i).skip(1) {
+            // Everyone already in the group applies the commit, except
+            // whichever member sent it.
+            let sender = usize::from(i > 1);
+            for (at, member) in sessions.iter_mut().take(i).enumerate().skip(1) {
+                if at == sender {
+                    continue;
+                }
                 assert!(
                     !is_message(&member.receive(&invitation.commit).expect("commit")),
                     "an add commit carries no plaintext"
@@ -2583,27 +2738,32 @@ mod tests {
         let mut carol = Session::new("carol").expect("identity");
         let epoch_before = group[1].epoch();
 
-        let invitation = group[0]
-            .invite(&carol.key_package().expect("kp"))
-            .expect("invite");
+        // Two members, so admitting a third takes both. The first asks and the
+        // second confirms, which makes the second the one whose commit the
+        // first is now waiting for.
+        let proposal = group[0]
+            .propose(&carol.key_package().expect("kp"))
+            .expect("propose");
+        group[1].receive(&proposal).expect("hear the request");
+        let invitation = group[1].confirm().expect("confirm");
 
         carol
             .join(&invitation.welcome, &invitation.ratchet_tree)
             .expect("join");
 
-        // The existing member is still one epoch back and must be reachable.
-        let commits = group[0]
+        // The member that asked is still one epoch back and must be reachable.
+        let commits = group[1]
             .seal_commit_for_group(&invitation.commit, slot)
             .expect("seal commit");
 
         let mine = commits
             .iter()
-            .find(|e| group[1].open_mine(e, slot, 2).is_ok())
+            .find(|e| group[0].open_mine(e, slot, 2).is_ok())
             .expect("the waiting member must be addressable");
 
-        let payload = group[1].open_mine(mine, slot, 2).expect("open");
+        let payload = group[0].open_mine(mine, slot, 2).expect("open");
         assert!(
-            !is_message(&group[1].receive(&payload).expect("apply")),
+            !is_message(&group[0].receive(&payload).expect("apply")),
             "a commit carries no plaintext"
         );
 

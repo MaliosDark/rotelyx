@@ -129,6 +129,13 @@ people, over a channel neither a platform nor a model provider can read.
 anything that needs a name somebody registers. All three reintroduce the
 identifier this project does not have.
 
+**Built.** `--bot` on `listen` and `connect`, one JSON object per line each
+way, with everything meant for a person moved to stderr so the stream stays
+parseable. `docs/BOTS.md` has the interface, `examples/echo-bot.py` is a
+working bot, and `scripts/bot-test` runs two processes through a relay on every
+change. Calls were left out: a bot on a call needs an audio device and a sender
+index, and neither belongs on a line of JSON.
+
 ---
 
 ## 5. Saying what the group layer already does better

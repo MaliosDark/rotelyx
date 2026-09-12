@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# A program is a member of the conversation, end to end.
+#
+# Everything about the machine interface is tested inside the process except
+# the part that matters most to somebody deciding whether to write a bot: that
+# two real binaries, neither of them a person, hold keys and exchange a
+# message. This runs the example bot against a second member and checks that
+# the answer arrives.
+#
+# Loopback and a direct path, so no relay is involved. A bot on a call needs a
+# microphone and is out of scope.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+cargo build -p rotelyx-cli -p rotelyx-relay
+exec python3 scripts/bot-test.py

@@ -677,6 +677,24 @@ impl Engine {
                                     .collect(),
                             })
                         }
+                        // A request to admit somebody, which changes nothing
+                        // until another member confirms it. Said out loud
+                        // rather than swallowed: this is the half of an
+                        // addition that anybody can still do something about.
+                        Ok(Received::AdditionProposed { by, joining }) => {
+                            let who = by
+                                .map(|p| hex_id(&p.identity))
+                                .unwrap_or_else(|| "somebody outside this group".into());
+                            let joining: Vec<String> =
+                                joining.iter().map(|p| hex_id(&p.identity)).collect();
+                            self.emit(Event::Error {
+                                text: format!(
+                                    "{who} asks to admit {}. It does not happen until another \
+                                     member confirms",
+                                    joining.join(", ")
+                                ),
+                            })
+                        }
                         Ok(Received::Nothing) => {}
                         Err(e) => self.emit(Event::Error {
                             text: format!("decrypt failed: {e}"),
