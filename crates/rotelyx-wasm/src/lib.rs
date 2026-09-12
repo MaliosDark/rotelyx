@@ -838,18 +838,29 @@ impl Session {
                 // Absent rather than empty when the sender is unknown or has
                 // since been removed, so a caller can tell "nobody knows" from
                 // "somebody with no name".
-                let from = sender
-                    .and_then(|leaf| {
-                        self.conversation
-                            .as_ref()
-                            .and_then(|group| group.participant_at(leaf))
-                    })
-                    .map(|p| String::from_utf8_lossy(&p.identity).into_owned());
+                let who = sender.and_then(|leaf| {
+                    self.conversation
+                        .as_ref()
+                        .and_then(|group| group.participant_at(leaf))
+                });
 
-                match from {
-                    Some(from) => {
-                        serde_json::json!({ "kind": "message", "text": text, "from": from })
-                    }
+                // The key as well as the label.
+                //
+                // A label is what somebody joined under and two members can
+                // both claim one, so it cannot be what a caller blocks on:
+                // blocking by name would block whoever else chose that name.
+                // The signature key is what a member is, and it is what
+                // `roster_detail` already hands back for removal.
+                //
+                // Added rather than replacing `from`, so a caller that has
+                // never heard of this reads exactly what it read before.
+                match who {
+                    Some(p) => serde_json::json!({
+                        "kind": "message",
+                        "text": text,
+                        "from": String::from_utf8_lossy(&p.identity).into_owned(),
+                        "fromKey": BASE64.encode(&p.signature_key),
+                    }),
                     None => serde_json::json!({ "kind": "message", "text": text }),
                 }
             }
