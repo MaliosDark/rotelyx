@@ -328,6 +328,17 @@ fn dispatch(req: &Value) -> Res {
             return Ok(json!(engine(rotelyx_wasm::receipt_for(&envelope))?));
         }
 
+        // Which conversation an arriving envelope belongs to.
+        //
+        // One socket carries every conversation, and the delivery frame says
+        // only "here is an envelope". The tag is the first thirty two bytes
+        // of it and is not encrypted, so the answer is already in hand; this
+        // is the reading of it. See `rotelyx_wasm::tag_of`.
+        "mailbox.tagOf" => {
+            let envelope = str_arg(req, "envelope")?;
+            return Ok(json!(engine(rotelyx_wasm::tag_of(&envelope))?));
+        }
+
         "rendezvous.tag" => {
             let passphrase = str_arg(req, "passphrase")?;
             return Ok(json!(engine(rotelyx_wasm::rendezvous_tag(&passphrase))?));

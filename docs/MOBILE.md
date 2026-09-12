@@ -205,6 +205,7 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `session.openMine` | `envelope`, `timeBucket`, `lookback` | ciphertext |
 | `session.paddedPayload` | `ciphertext` | padded |
 | `mailbox.receiptFor` | `envelope` | digest, hex. Needs no handle |
+| `mailbox.tagOf` | `envelope` | tag, hex. Needs no handle |
 | `session.myTag` | `timeBucket` | tag, hex |
 | `session.myPollingTags` | `timeBucket`, `lookback` | array of hex |
 | `session.recipientTags` | `timeBucket` | array of hex |
@@ -256,6 +257,14 @@ label would eventually remove the wrong person. Removal returns a commit, and
 the caller delivers it with `session.sealCommitForGroup`, addressed at the epoch
 the others are still on, exactly as an invitation's commit is. A removal nobody
 receives is not a removal.
+
+`mailbox.tagOf` says which tag an envelope was deposited under, which is how a
+client with one socket and several conversations knows where an arriving
+envelope belongs. The delivery frame carries the envelope and nothing else,
+deliberately, because the server has nothing to add: the tag is the first
+thirty two bytes and is not encrypted, since the mailbox files by it and could
+not carry anything otherwise. This reads it, here rather than in each client,
+so the layout is known in one place.
 
 `mailbox.receiptFor` is how an envelope is named when telling the mailbox it
 arrived. Delivery peeks and removal waits for that receipt, so an envelope

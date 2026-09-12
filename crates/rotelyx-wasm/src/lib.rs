@@ -1743,6 +1743,31 @@ pub fn receipt_for(envelope_b64: &str) -> Result<String, Error> {
     Ok(data_encoding::HEXLOWER.encode(&envelope.digest()))
 }
 
+/// Which tag an envelope was deposited under.
+///
+/// # Why a client needs this
+///
+/// One socket can carry every conversation a person has, which is what makes
+/// a message arrive while they are looking at a different one. What it cannot
+/// do on its own is say which conversation an arriving envelope belongs to:
+/// the delivery frame carries the envelope and nothing else, deliberately,
+/// because the server has nothing to add that the client does not already
+/// hold.
+///
+/// It does already hold it. The tag is the first thirty two bytes and it is
+/// not encrypted: the mailbox files by it and could not carry anything
+/// otherwise. So the answer is in the client's hand and this is the reading
+/// of it, here rather than in each client, so that the layout is known in one
+/// place and a change to it breaks a compile rather than a conversation.
+///
+/// Nothing is decrypted and nothing is learned that the operator does not
+/// already know: it holds every tag, which is the whole reason they rotate.
+#[wasm_bindgen(js_name = tagOf)]
+pub fn tag_of(envelope_b64: &str) -> Result<String, Error> {
+    let envelope = Envelope::from_bytes(&decode(envelope_b64)?).map_err(err)?;
+    Ok(data_encoding::HEXLOWER.encode(envelope.tag().as_bytes()))
+}
+
 /// Derive a meeting tag from a phrase both sides already know.
 ///
 /// # This tag is not a secret channel
