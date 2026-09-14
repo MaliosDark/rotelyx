@@ -371,6 +371,15 @@ struct Args {
     #[arg(long, value_name = "IP")]
     exempt_address: Vec<std::net::IpAddr>,
 
+    /// The most connections this server will hold at once.
+    ///
+    /// A connection costs about 16 KB and one file descriptor, so this is the
+    /// machine's real capacity, not a safety guess: a strong host with a raised
+    /// descriptor limit sets it to hundreds of thousands, a small relay host
+    /// sets it low. Defaults to a figure a modest server carries comfortably.
+    #[arg(long, value_name = "N", default_value_t = limits::TOTAL_CONNECTIONS)]
+    max_connections: usize,
+
     /// The key a front seals phone traffic to, generated here on first use.
     ///
     /// A front is a relay between phones and this mailbox that reads neither
@@ -1960,6 +1969,7 @@ fn router_full(
         Waking::default(),
         Vec::new(),
         Vec::new(),
+        limits::TOTAL_CONNECTIONS,
         None,
     )
 }
@@ -2070,6 +2080,7 @@ fn router_stateful(
     waking: Waking,
     trusted_proxies: Vec<std::net::IpAddr>,
     exempt: Vec<std::net::IpAddr>,
+    max_connections: usize,
     front_key: Option<rotelyx_crypto::HybridSecretKey>,
 ) -> (Router, Arc<Server>) {
     let _ = ttl_seconds;
@@ -2095,7 +2106,7 @@ fn router_stateful(
             show: stats,
             ..Default::default()
         },
-        limits: limits::Limits::exempting(exempt),
+        limits: limits::Limits::with_max(exempt, max_connections),
         trusted_proxies,
         front_key,
     });
@@ -2521,6 +2532,7 @@ async fn main() -> Result<()> {
         waking,
         args.trusted_proxy.clone(),
         args.exempt_address.clone(),
+        args.max_connections,
         front_secret,
     );
 
@@ -2656,6 +2668,7 @@ mod tests {
             Waking::default(),
             Vec::new(),
             Vec::new(),
+            limits::TOTAL_CONNECTIONS,
             None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -2706,6 +2719,7 @@ mod tests {
             },
             Vec::new(),
             Vec::new(),
+            limits::TOTAL_CONNECTIONS,
             None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -3192,6 +3206,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             Waking::default(),
             Vec::new(),
             Vec::new(),
+            limits::TOTAL_CONNECTIONS,
             Some(secret),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -4412,6 +4427,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             Waking::default(),
             Vec::new(),
             Vec::new(),
+            limits::TOTAL_CONNECTIONS,
             None,
         );
         tokio::spawn(async move {

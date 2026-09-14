@@ -68,12 +68,20 @@ pub const PER_ADDRESS_PER_MINUTE: f64 = 60.0;
 /// burst, so a limit with no burst allowance punishes the ordinary case.
 pub const PER_ADDRESS_BURST: f64 = 20.0;
 
-/// Concurrent connections this server will hold in total.
+/// Concurrent connections this server will hold in total, by default.
 ///
 /// The number that stops ten thousand addresses doing what one address cannot.
 /// Refusing at a ceiling is the honest failure; running out of descriptors is
 /// the same denial arriving later and taking the accepted connections with it.
-pub const TOTAL_CONNECTIONS: usize = 4096;
+///
+/// This is a default, not a wall. A connection costs about 16 KB of memory and
+/// one file descriptor, measured, so a machine with a few gigabytes and a
+/// raised descriptor limit holds hundreds of thousands. The earlier default of
+/// 4096 was a conservative floor from before that was measured; it capped a
+/// mailbox at a few hundred devices for no reason the hardware required. An
+/// operator sets `--max-connections` to their machine's real capacity, and a
+/// small machine such as a relay host sets it low. See `docs/DEPLOYMENT.md`.
+pub const TOTAL_CONNECTIONS: usize = 131_072;
 
 /// Idle buckets are forgotten after this, so the table cannot grow without
 /// bound from addresses that connected once.
@@ -111,9 +119,13 @@ struct State {
 }
 
 /// Per-address limits, shared across every connection.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Limits {
     state: Arc<Mutex<State>>,
+    /// The total this server will hold, from `--max-connections` or the
+    /// default. Kept here rather than read from the constant so a small
+    /// machine can be told a small number.
+    max_total: usize,
     /// Addresses the per-address limits do not apply to. The total still does.
     ///
     /// For a load test run from one machine, which is one address opening
@@ -147,14 +159,16 @@ impl Drop for Slot {
 impl Limits {
     #[cfg(test)]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_max(Vec::new(), TOTAL_CONNECTIONS)
     }
 
-    /// The limits, with these addresses excused from the per-address ones.
-    pub fn exempting(addresses: Vec<IpAddr>) -> Self {
+    /// The limits, with these addresses excused from the per-address ones and
+    /// the total this server will hold named explicitly.
+    pub fn with_max(addresses: Vec<IpAddr>, max_total: usize) -> Self {
         Self {
             state: Arc::default(),
             exempt: Arc::new(addresses),
+            max_total: max_total.max(1),
         }
     }
 
@@ -174,7 +188,7 @@ impl Limits {
         let now = Instant::now();
         let mut state = self.lock();
 
-        if state.total_open >= TOTAL_CONNECTIONS {
+        if state.total_open >= self.max_total {
             state.refused_total += 1;
             return Err(Refusal::Total);
         }
@@ -303,7 +317,7 @@ mod tests {
     #[test]
     fn an_exempt_address_is_held_to_the_total_and_nothing_else() {
         let tester: IpAddr = "10.0.0.9".parse().unwrap();
-        let limits = Limits::exempting(vec![tester]);
+        let limits = Limits::with_max(vec![tester], TOTAL_CONNECTIONS);
         let mut held = Vec::new();
         // Well past both per-address limits, in one burst.
         for _ in 0..(PER_ADDRESS_CONNECTIONS * 4) {

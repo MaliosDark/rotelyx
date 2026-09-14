@@ -247,11 +247,41 @@ rotelyx-mailbox-server --bind 0.0.0.0:3341
 | Route | Purpose |
 |---|---|
 | `/mailbox` | WebSocket. Deposit and subscribe |
+| `/front` | WebSocket. A front's multiplexed sessions, when `--front-key` is set |
+| `/front-key` | The public front key, when `--front-key` is set |
 | `/ping` | Health probe. 200 |
 | `/` | Landing page, self contained |
 
 **Port 3341, TCP only.** Chosen to sit next to the relay's 3340 without
 colliding. Nothing else is opened.
+
+### How many connections it holds
+
+A connection costs about 16 KB of memory and one file descriptor, measured, so
+the ceiling is the machine, not a guess. `--max-connections N` names it, and a
+few numbers are worth having in mind:
+
+| Devices | Connections (9 sockets each, no front) | Memory | Descriptors |
+|---:|---:|---:|---:|
+| 10,000 | 90,000 | ~1.4 GB | 90,000 |
+| 100,000 | 900,000 | ~14 GB | 900,000 |
+
+Two things follow. First, raise the process descriptor limit to match, or the
+machine's own default of 1024 caps it long before memory does:
+`LimitNOFILE=1048576` in the systemd unit. Second, a **front** removes the per
+device socket cost entirely: with one behind the mailbox each device is a
+single sealed session, which is a task and a few tags rather than a connection,
+so the same machine holds an order of magnitude more. See `docs/FRONT.md`.
+
+Set `--max-connections` to the machine. A strong host serving many devices sets
+it to hundreds of thousands with the descriptor limit raised; a small relay
+host that also runs a mailbox sets it low. The default is a figure a modest
+server carries comfortably, not a hardware wall.
+
+```sh
+rotelyx-mailbox-server --bind 0.0.0.0:3341 --max-connections 500000 \
+  --front-key /var/lib/rotelyx/front.key
+```
 
 ### nginx
 
