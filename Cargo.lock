@@ -5461,8 +5461,10 @@ dependencies = [
  "rotelyx-core",
  "rotelyx-crypto",
  "rotelyx-mailbox",
+ "rotelyx-meeting",
  "rotelyx-net",
  "rotelyx-relay-proto",
+ "rotelyx-wasm",
  "rpassword",
  "rustls",
  "serde",
@@ -5545,6 +5547,7 @@ dependencies = [
  "rotelyx-crypto",
  "rotelyx-mailbox",
  "rotelyx-mailbox-client",
+ "rotelyx-meeting",
  "rotelyx-net",
  "rotelyx-wasm",
  "rpassword",
@@ -5645,6 +5648,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tracing",
@@ -5700,6 +5704,27 @@ dependencies = [
  "sha2 0.11.0",
  "subtle",
  "thiserror 2.0.20",
+ "zeroize",
+]
+
+[[package]]
+name = "rotelyx-meeting"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "data-encoding",
+ "getrandom 0.4.3",
+ "rotelyx-audio",
+ "rotelyx-core",
+ "rotelyx-mailbox",
+ "rotelyx-mailbox-client",
+ "rotelyx-net",
+ "rotelyx-wasm",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "zeroize",
 ]
 
@@ -5966,6 +5991,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha1 0.11.0",
+ "sha2 0.11.0",
  "simdutf8",
  "strum",
  "time",

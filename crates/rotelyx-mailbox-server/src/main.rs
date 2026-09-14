@@ -36,6 +36,7 @@ mod vault;
 mod wake;
 
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -97,6 +98,81 @@ const MAX_TAGS_PER_SUBSCRIPTION: usize = 64;
 /// which is past what a client with a few conversations across a few epochs
 /// needs, and it is a number rather than an absence.
 const MAX_TAGS_PER_CONNECTION: usize = 256;
+
+/// What one connection is listening on, oldest first.
+///
+/// # Why this is not a `HashSet` any more
+///
+/// It was, and the cap above was enforced by refusing: a subscribe that would
+/// take a connection past 256 tags was answered "unsubscribe from some first".
+/// That reads as a client tidying up after itself, and one that does not is a
+/// client that deserves the refusal.
+///
+/// It is not what happens. A tag is derived from where a member stands in the
+/// key schedule, so every commit gives a device a whole fresh set of them, and
+/// a lively group commits all day. A phone that had been in five groups for an
+/// afternoon reached the cap honestly, and from that moment every subscribe it
+/// made was refused: it stopped receiving, it could not send, and closing and
+/// reopening the application fixed it because that is a new connection. Both
+/// of those were reported as separate faults and this was the cause of them.
+///
+/// So the cap is kept, because it is what bounds this map's memory, and what
+/// happens at the cap changes: the oldest tags this connection asked for are
+/// dropped to make room for the newest. Dropping the oldest is right rather
+/// than merely kinder. The newest tags are where the next message will be
+/// deposited; the oldest are the ones whose epoch has passed. And anything
+/// still waiting under a dropped tag is not lost: the mailbox holds envelopes
+/// for a week, and the client is handed them the moment it subscribes again.
+#[derive(Default)]
+struct Listening {
+    set: HashSet<Tag>,
+    order: VecDeque<Tag>,
+}
+
+impl Listening {
+    fn contains(&self, tag: &Tag) -> bool {
+        self.set.contains(tag)
+    }
+
+    fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    fn tags(&self) -> Vec<Tag> {
+        self.order.iter().copied().collect()
+    }
+
+    fn add(&mut self, tag: Tag) {
+        if self.set.insert(tag) {
+            self.order.push_back(tag);
+        }
+    }
+
+    fn remove(&mut self, tag: &Tag) {
+        if self.set.remove(tag) {
+            self.order.retain(|held| held != tag);
+        }
+    }
+
+    /// Drop the oldest until there is room for `wanted` more.
+    ///
+    /// Returns how many were dropped, so the connection can be told rather
+    /// than quietly trimmed: a client that is losing tags is a client whose
+    /// author would want to know.
+    fn make_room_for(&mut self, wanted: usize, cap: usize) -> usize {
+        let mut dropped = 0;
+        while self.set.len() + wanted > cap {
+            match self.order.pop_front() {
+                Some(oldest) => {
+                    self.set.remove(&oldest);
+                    dropped += 1;
+                }
+                None => break,
+            }
+        }
+        dropped
+    }
+}
 
 /// The longest string that could be a wake ticket, base64.
 ///
@@ -283,6 +359,15 @@ struct Args {
     /// Run directly with no proxy and this is not needed at all.
     #[arg(long, value_name = "IP")]
     trusted_proxy: Vec<std::net::IpAddr>,
+
+    /// An address the per-address limits do not apply to.
+    ///
+    /// For a load test run from one machine, which opens hundreds of sockets
+    /// from one address on purpose. The total connection cap still applies.
+    /// This is a hole in the admission control by design, so it is given per
+    /// address, on the command line, and taken away when the test is over.
+    #[arg(long, value_name = "IP")]
+    exempt_address: Vec<std::net::IpAddr>,
 }
 
 #[derive(clap::Subcommand)]
@@ -347,6 +432,12 @@ struct Counters {
 
 struct Server {
     mailbox: Mutex<Mailbox>,
+
+    /// How long a deposit takes to store, in microseconds, as a running
+    /// average with a short memory. The one measurement of load that is
+    /// about the service rather than about its users, which is why it can
+    /// feed the status page's colour and the counters above cannot.
+    deposit_micros: AtomicU64,
 
     /// Sealed wake tickets, by tag. See `tickets`.
     tickets: Mutex<tickets::Tickets>,
@@ -758,7 +849,7 @@ fn parse_tag(hex: &str) -> Option<Tag> {
 async fn handle_socket(mut socket: WebSocket, server: Arc<Server>) {
     let keepalive_every = server.keepalive;
     let mut wake = server.wake.subscribe();
-    let mut subscribed: HashSet<Tag> = HashSet::new();
+    let mut subscribed = Listening::default();
     let me = server.next_connection.fetch_add(1, Ordering::Relaxed);
     server
         .counters
@@ -853,7 +944,7 @@ async fn handle_socket(mut socket: WebSocket, server: Arc<Server>) {
 async fn handle_request(
     request: Request,
     server: &Arc<Server>,
-    subscribed: &mut HashSet<Tag>,
+    subscribed: &mut Listening,
     socket: &mut WebSocket,
     connection: u64,
     cap: &mut Capability,
@@ -985,16 +1076,22 @@ async fn handle_request(
                 }
             }
 
-            if subscribed.len() + parsed.len() > MAX_TAGS_PER_CONNECTION {
-                return Some(Reply::Error {
-                    message: format!(
-                        "at most {MAX_TAGS_PER_CONNECTION} tags per connection; \
-                         unsubscribe from some first"
-                    ),
-                });
+            // Past the cap, the oldest go rather than the newest being
+            // refused. See `Listening`: refusing cut off honest long-lived
+            // clients, which is how a phone lost a whole afternoon's traffic.
+            let evicted = subscribed.make_room_for(parsed.len(), MAX_TAGS_PER_CONNECTION);
+            if evicted > 0 {
+                debug!(
+                    connection,
+                    evicted,
+                    holding = subscribed.len(),
+                    "connection at the tag cap: oldest dropped"
+                );
             }
 
-            subscribed.extend(parsed.iter().copied());
+            for tag in &parsed {
+                subscribed.add(*tag);
+            }
 
             // Deliver the backlog before reporting ready, so a client that
             // starts sending immediately cannot interleave with it.
@@ -1035,7 +1132,7 @@ async fn handle_request(
             // not a capability: without this a caller could name any digest and
             // remove it, which is the same power delivery-on-collect handed out
             // and the reason this exists.
-            let listening: Vec<_> = subscribed.iter().copied().collect();
+            let listening: Vec<_> = subscribed.tags();
             let now = now_seconds();
 
             let mut removed = 0usize;
@@ -1181,6 +1278,7 @@ async fn handle_request(
 
             let tag = envelope.tag();
 
+            let began = std::time::Instant::now();
             if let Err(e) = server.mailbox.lock().await.deposit_with(
                 envelope,
                 now_seconds(),
@@ -1191,6 +1289,13 @@ async fn handle_request(
                     message: format!("{e}"),
                 });
             }
+            // One part new, seven parts old: a single slow deposit does not
+            // turn the page amber, a slow minute does.
+            let took = began.elapsed().as_micros().min(u128::from(u32::MAX)) as u64;
+            let was = server.deposit_micros.load(Ordering::Relaxed);
+            server
+                .deposit_micros
+                .store((was * 7 + took) / 8, Ordering::Relaxed);
 
             // A send error means nobody is subscribed, which is the normal case
             // for a recipient who is offline. The envelope is already stored
@@ -1358,6 +1463,70 @@ async fn ping() -> impl IntoResponse {
 /// subtly different things are worse than one.
 static STATUS: rotelyx_status::Status = rotelyx_status::Status::new();
 
+/// The word this mailbox says about itself, from what it can measure about
+/// itself and nothing anybody outside could not have felt.
+///
+/// Busy when it is doing real work: half the connections it will hold are
+/// held, or deposits are arriving faster than a few a second, or a deposit is
+/// taking noticeably long to store. Under strain when somebody has actually
+/// been refused in the last minute, or it is nearly full, or a deposit is
+/// taking so long that a phone would notice. The thresholds are what an
+/// operator would want to be told at, not what a person would notice, which
+/// is the point of the middle word.
+fn judge(server: &Server, deposits_last_minute: u64, refused_last_minute: u64) -> rotelyx_status::Level {
+    use rotelyx_status::Level;
+    let open = server.counters.connections_open.load(Ordering::Relaxed) as usize;
+    let fullness = open as f64 / limits::TOTAL_CONNECTIONS as f64;
+    let deposit_micros = server.deposit_micros.load(Ordering::Relaxed);
+    if refused_last_minute > 0 || fullness > 0.9 || deposit_micros > 150_000 {
+        Level::Strained
+    } else if fullness > 0.5 || deposits_last_minute > 300 || deposit_micros > 30_000 {
+        Level::Busy
+    } else {
+        Level::Operational
+    }
+}
+
+/// The page's content policy, with the hash of its own script in it.
+///
+/// # Why a hash rather than `'unsafe-inline'`
+///
+/// The landing page draws something behind its panel, and drawing needs a
+/// script. The relay's page says why a status widget is not worth loosening a
+/// policy for, and it is right: `'unsafe-inline'` permits *any* inline script,
+/// including one that arrives through a future bug in something that renders
+/// into this page. A hash permits these bytes and no others.
+///
+/// It is computed from the file rather than written down, so editing the
+/// script cannot leave a stale hash behind and a page whose own drawing is
+/// blocked. Computed once: the file does not change while the process runs.
+///
+/// The script itself reaches nothing. It draws on a canvas, reads the pointer,
+/// and has no network access of any kind under `default-src 'none'`.
+fn landing_policy() -> &'static String {
+    static POLICY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    POLICY.get_or_init(|| {
+        use sha2::{Digest, Sha256};
+
+        let page = include_str!("landing.html");
+        let hash = page
+            .split_once("<script>")
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .map(|(script, _)| {
+                let mut digest = Sha256::new();
+                digest.update(script.as_bytes());
+                format!(" 'sha256-{}'", BASE64.encode(&digest.finalize()))
+            })
+            .unwrap_or_default();
+
+        format!(
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:; \
+             script-src{hash}; frame-ancestors 'none'; form-action 'none'; \
+             base-uri 'self'"
+        )
+    })
+}
+
 async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
     let recorded = STATUS.recorded_count();
     let history = if recorded > 0 {
@@ -1370,11 +1539,9 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
     };
 
     let block = format!(
-        "<div class=\"status\"><span class=\"dot\"></span><b>Operational</b>\
-         <span>up {}</span></div>{}\
-         <div class=\"scale\"><span>48h</span><span>now</span></div>{}\
+        "{}{}<div class=\"scale\"><span>48h</span><span>now</span></div>{}\
          <p class=\"note\">{}.</p>",
-        STATUS.uptime_text(),
+        STATUS.headline(),
         STATUS.strip(),
         rotelyx_status::LEGEND,
         history,
@@ -1425,6 +1592,7 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
 
     let page = include_str!("landing.html")
         .replace("/*STATUS-STYLE*/", rotelyx_status::STYLE)
+        .replace("<!--STATUS-REFRESH-->", rotelyx_status::REFRESH)
         .replace("<!--STATUS-->", &block);
 
     (
@@ -1437,8 +1605,14 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
                 // response, which is where the mark and the favicon live.
                 // Nothing may be fetched from anywhere, which is the property
                 // that matters for a server that must not phone out.
-                "default-src 'none'; style-src 'unsafe-inline'; img-src data:; \
-                 frame-ancestors 'none'; form-action 'none'; base-uri 'self'",
+                //
+                // `script-src` names one hash and nothing else. See
+                // `landing_script_hash`: the page carries one inline script for
+                // the drawing behind the panel, and the policy permits exactly
+                // those bytes. `'unsafe-inline'` would have been one word
+                // shorter and would have permitted any script that ever got
+                // injected into this page.
+                landing_policy().as_str(),
             ),
             (header::REFERRER_POLICY, "no-referrer"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
@@ -1484,6 +1658,7 @@ fn router_full(
         // test never accidentally asserts on a page that production hides.
         false,
         Waking::default(),
+        Vec::new(),
         Vec::new(),
     )
 }
@@ -1540,11 +1715,13 @@ fn router_stateful(
     stats: bool,
     waking: Waking,
     trusted_proxies: Vec<std::net::IpAddr>,
+    exempt: Vec<std::net::IpAddr>,
 ) -> (Router, Arc<Server>) {
     let _ = ttl_seconds;
     let (wake, _) = broadcast::channel(1024);
     let server = Arc::new(Server {
         mailbox: Mutex::new(mailbox),
+        deposit_micros: AtomicU64::new(0),
         tickets: Mutex::new(tickets::Tickets::default()),
         notifier: waking.notifier,
         wake,
@@ -1563,7 +1740,7 @@ fn router_stateful(
             show: stats,
             ..Default::default()
         },
-        limits: limits::Limits::new(),
+        limits: limits::Limits::exempting(exempt),
         trusted_proxies,
     });
 
@@ -1975,7 +2152,33 @@ async fn main() -> Result<()> {
         args.stats,
         waking,
         args.trusted_proxy.clone(),
+        args.exempt_address.clone(),
     );
+
+    // The word the page shows, judged every fifteen seconds from what this
+    // process measures about itself. The heartbeat above writes the worst
+    // word of each half hour down.
+    {
+        let judged = server.clone();
+        tokio::spawn(async move {
+            let (mut deposits, mut refused) = (0u64, 0u64);
+            let mut refusals = judged.limits.refusals();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                let now_deposits = judged.counters.deposits.load(Ordering::Relaxed);
+                let now_refusals = judged.limits.refusals();
+                let refused_now = judged.counters.refused.load(Ordering::Relaxed);
+                let deposits_per_minute = now_deposits.saturating_sub(deposits) * 4;
+                let refused_lately = (now_refusals.0 + now_refusals.1 + now_refusals.2)
+                    .saturating_sub(refusals.0 + refusals.1 + refusals.2)
+                    + refused_now.saturating_sub(refused);
+                deposits = now_deposits;
+                refusals = now_refusals;
+                refused = refused_now;
+                STATUS.report(judge(&judged, deposits_per_minute, refused_lately));
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
@@ -2083,6 +2286,7 @@ mod tests {
             true,
             Waking::default(),
             Vec::new(),
+            Vec::new(),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2130,6 +2334,7 @@ mod tests {
                 notifier: None,
                 state: None,
             },
+            Vec::new(),
             Vec::new(),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -3604,6 +3809,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             false,
             Waking::default(),
             Vec::new(),
+            Vec::new(),
         );
         tokio::spawn(async move {
             let _ = axum::serve(
@@ -4079,6 +4285,78 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .expect("send");
 
         assert!(recv(&mut client).await.contains("at most"));
+    }
+
+    /// A connection that subscribes all day keeps receiving.
+    ///
+    /// This is the fault he reported twice: a phone in five lively groups
+    /// stopped receiving after an afternoon and could not send, and closing and
+    /// reopening the application fixed it. Every commit in a group gives a
+    /// device a new set of tags, so it reached 256 honestly, and from then on
+    /// every subscribe was answered "unsubscribe from some first" and it was
+    /// listening to nothing new.
+    ///
+    /// So: subscribe well past the cap, in subscriptions of a legal size, and
+    /// the newest tag must be the one it is listening on afterwards.
+    #[tokio::test]
+    async fn a_connection_that_keeps_subscribing_keeps_receiving() {
+        let url = spawn_server().await;
+        let mut client = connect(&url).await;
+
+        // Eight times the cap, in legal batches, as a phone would arrive at it:
+        // a fresh set per commit, hour after hour.
+        let batches = (MAX_TAGS_PER_CONNECTION * 8) / MAX_TAGS_PER_SUBSCRIPTION;
+        let mut last = String::new();
+        for batch in 0..batches {
+            let tags: Vec<String> = (0..MAX_TAGS_PER_SUBSCRIPTION)
+                .map(|i| format!("{:064x}", batch * MAX_TAGS_PER_SUBSCRIPTION + i))
+                .collect();
+            last = tags[tags.len() - 1].clone();
+            subscribe(&mut client, tags).await;
+            let reply = recv_json(&mut client).await;
+            assert_eq!(
+                reply["op"], "ready",
+                "subscription {batch} was refused: {reply}"
+            );
+        }
+
+        // And the newest tag is live: something deposited under it arrives.
+        let tag = parse_tag(&last).expect("a tag");
+        let envelope = Envelope::seal(tag, b"after the cap").expect("seal");
+        let mut sender = connect(&url).await;
+        deposit(&mut sender, BASE64.encode(&envelope.to_bytes())).await;
+        assert_eq!(recv_json(&mut sender).await["op"], "stored");
+
+        let arrived = recv_json(&mut client).await;
+        assert_eq!(
+            arrived["op"], "envelope",
+            "a connection past the cap stopped being handed its newest tags"
+        );
+    }
+
+    #[test]
+    fn the_oldest_tags_go_first_at_the_cap() {
+        let mut listening = Listening::default();
+        for i in 0..MAX_TAGS_PER_CONNECTION as u64 {
+            listening.add(tag_numbered(i));
+        }
+        assert_eq!(listening.len(), MAX_TAGS_PER_CONNECTION);
+
+        // One more. The oldest goes, not the newcomer.
+        let dropped = listening.make_room_for(1, MAX_TAGS_PER_CONNECTION);
+        listening.add(tag_numbered(1_000));
+        assert_eq!(dropped, 1);
+        assert_eq!(listening.len(), MAX_TAGS_PER_CONNECTION);
+        assert!(!listening.contains(&tag_numbered(0)), "the oldest was kept");
+        assert!(listening.contains(&tag_numbered(1_000)), "the newest was dropped");
+        assert!(
+            listening.contains(&tag_numbered(MAX_TAGS_PER_CONNECTION as u64 - 1)),
+            "the tag before the newest was dropped"
+        );
+    }
+
+    fn tag_numbered(n: u64) -> Tag {
+        parse_tag(&format!("{n:064x}")).expect("a tag")
     }
 
     #[test]

@@ -21,6 +21,7 @@ members = [
     "crates/rotelyx-relay",
     "crates/rotelyx-web",
     "crates/rotelyx-desktop",
+    "crates/rotelyx-meeting",
     "crates/rotelyx-wasm",
     "crates/rotelyx-mobile",
     "crates/rotelyx-status",

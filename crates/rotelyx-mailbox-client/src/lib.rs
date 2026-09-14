@@ -180,6 +180,19 @@ enum Deposited {
 }
 
 /// One connection to a mailbox.
+/// The socket to the mailbox is gone: closed by the far end, or a write or
+/// read on it failed. Carried in the error chain of every operation that hit
+/// it, so a caller can tell this apart from the mailbox refusing something,
+/// and answer it by connecting again rather than by giving up.
+#[derive(Debug, thiserror::Error)]
+#[error("the mailbox connection is gone")]
+pub struct Gone;
+
+/// Whether an error from this client means the socket is gone.
+pub fn is_gone(error: &anyhow::Error) -> bool {
+    error.chain().any(|e| e.downcast_ref::<Gone>().is_some())
+}
+
 pub struct Mailbox {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     /// Envelopes that arrived while this side was waiting for an answer to
@@ -519,21 +532,25 @@ impl Mailbox {
         self.socket
             .send(Message::Text(text.into()))
             .await
-            .context("sending to the mailbox")
+            .map_err(|e| anyhow::Error::new(Gone).context(format!("sending to the mailbox: {e}")))
     }
 
     async fn next_reply(&mut self) -> Result<Reply> {
         loop {
             let Some(message) = self.socket.next().await else {
-                bail!("the mailbox closed the connection");
+                return Err(anyhow::Error::new(Gone).context("the mailbox closed the connection"));
             };
-            match message.context("reading from the mailbox")? {
+            let message = message
+                .map_err(|e| anyhow::Error::new(Gone).context(format!("reading from the mailbox: {e}")))?;
+            match message {
                 Message::Text(text) => {
                     return serde_json::from_str(&text)
                         .with_context(|| format!("mailbox said something unexpected: {text}"))
                 }
                 // Pings are answered by the library; anything else is not ours.
-                Message::Close(_) => bail!("the mailbox closed the connection"),
+                Message::Close(_) => {
+                    return Err(anyhow::Error::new(Gone).context("the mailbox closed the connection"))
+                }
                 _ => continue,
             }
         }

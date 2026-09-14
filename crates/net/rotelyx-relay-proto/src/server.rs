@@ -28,6 +28,7 @@ use std::{
     },
 };
 
+use data_encoding::BASE64;
 use derive_more::Debug;
 use http::{
     HeaderMap, HeaderValue, Method, Request, Response, StatusCode,
@@ -102,65 +103,14 @@ const ROBOTS_TXT: &[u8] = b"User-agent: *\nDisallow: /\n";
 /// than a guess at where the mark is in the markup.
 const DEFAULT_LOGO: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=";
 
-const INDEX: &[u8] = br#"<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-<title>Rotelyx Relay</title>
-<link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=">
-<style>
-:root{--bg:#14120f;--panel:#1c1a16;--ink:#e9e4da;--dim:#9c958a;--rule:#363129;
-      --accent:#6a31ee}
-*{box-sizing:border-box}
-body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);
-     font:15px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-     display:flex;align-items:center;justify-content:center;padding:32px}
-main{max-width:560px;width:100%}
-.mark{width:60px;height:60px;margin-bottom:26px;
-      background:url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=") center/contain no-repeat;
-      filter:drop-shadow(0 0 22px rgba(106,49,238,.4))}
-h1{margin:0 0 6px;font-size:1.45rem;font-weight:650;letter-spacing:-.01em}
-.tag{margin:0 0 28px;font:600 .66rem ui-monospace,SFMono-Regular,Menlo,monospace;
-     letter-spacing:.18em;text-transform:uppercase;color:var(--accent)}
-p{margin:0 0 16px;color:var(--dim);max-width:60ch}
-p strong{color:var(--ink);font-weight:600}
-.card{background:var(--panel);border:1px solid var(--rule);
-      border-radius:5px;padding:16px 18px;margin:26px 0}
-.card p{margin:0;font-size:.92rem}
-.status{display:flex;align-items:center;gap:10px;margin:30px 0 14px}
-.dot{width:9px;height:9px;border-radius:50%;background:#2ea043;
-     box-shadow:0 0 0 4px rgba(46,160,67,.16)}
-.status b{font-size:.95rem;font-weight:650}
-.status span{margin-left:auto;font:600 .64rem ui-monospace,SFMono-Regular,Menlo,monospace;
-             letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-.bars{display:flex;gap:2px;height:34px;align-items:flex-end;margin:0 0 8px}
-.bars i{flex:1;border-radius:1px;min-width:2px}
-.up{background:#2ea043;height:100%}
-.part{background:#d29922;height:78%}
-.down{background:#cf3b3b;height:88%}
-.unknown{background:#2a2721;height:60%}
-.legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 24px;
-        font-size:.78rem;color:var(--dim)}
-.legend span{display:flex;align-items:center;gap:6px}
-.legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
-.scale{display:flex;justify-content:space-between;
-       font:600 .6rem ui-monospace,SFMono-Regular,Menlo,monospace;
-       letter-spacing:.1em;text-transform:uppercase;color:#6b6459;margin-bottom:26px}
-.note{font-size:.8rem;color:#6b6459;margin:0}
-footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--rule);
-       font:600 .64rem ui-monospace,SFMono-Regular,Menlo,monospace;
-       letter-spacing:.14em;text-transform:uppercase;color:#6b6459}
-</style></head><body><main>
-<div class="mark"></div>
-<p class="tag">Relay</p>
-<h1>Rotelyx Relay</h1>
-<p>
-  This host forwards encrypted traffic between peers that cannot reach each
-  other directly. It <strong>holds no keys</strong> and cannot read what passes
-  through it.
-</p>
-"#;
+/// The page, as one file.
+///
+/// It was two byte strings in this module with the status block built between
+/// them, which meant the markup could not be opened in a browser and the
+/// stylesheet could not be edited without counting Rust escapes. It is now a
+/// file with three places for the server to fill in, the same shape the
+/// mailbox's page has, so the two cannot drift apart by accident.
+const INDEX: &str = include_str!("landing.html");
 
 /// Enough escaping for a name that goes into one text node.
 ///
@@ -173,33 +123,53 @@ fn escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// The rest of the page, after the status block is inserted.
-const INDEX_TAIL: &[u8] = br#"
-<footer>Rotelyx &middot; pre-release &middot; internally audited</footer>
-</main></body></html>
-"#;
-const TLS_HEADERS: [(&str, &str); 2] = [
-    (
-        "Strict-Transport-Security",
-        "max-age=63072000; includeSubDomains",
-    ),
-    (
-        // `default-src 'none'` blocks everything, which was correct when the
-        // landing page was bare markup and is not now: it also blocked the
-        // page's own inline stylesheet and its data URI mark, which is why the
-        // page rendered with no styling and no logo.
-        //
-        // The two additions are the minimum to let the page render, and both
-        // are still closed to the network: `'unsafe-inline'` permits only the
-        // stylesheet we ship in the same response, and `data:` permits only
-        // bytes already inside it. Nothing may be fetched from anywhere, which
-        // is the property that matters for a relay.
-        "Content-Security-Policy",
-        "default-src 'none'; style-src 'unsafe-inline'; img-src data:; \
-         frame-ancestors 'none'; form-action 'none'; base-uri 'self'; \
-         block-all-mixed-content",
-    ),
-];
+/// What the browser is allowed to do with the page, computed once.
+///
+/// `default-src 'none'` blocks everything, which was correct when the page was
+/// bare markup and is not now: it also blocked the page's own stylesheet, its
+/// data URI mark and the script that draws the backdrop.
+///
+/// Each exception is the narrowest one that lets the page render, and none of
+/// them opens the network. `'unsafe-inline'` permits only the stylesheet
+/// shipped in this same response; `data:` permits only bytes already inside
+/// it; and the script is named by the SHA-256 of its own text, so the browser
+/// runs the script this binary was built with and nothing else -- an injected
+/// `<script>`, however it got there, hashes differently and does not run.
+/// There is still no `connect-src`, so the page can reach nowhere at all.
+fn landing_policy() -> &'static str {
+    static POLICY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    POLICY.get_or_init(|| {
+        use sha2::{Digest, Sha256};
+
+        let hash = INDEX
+            .split_once("<script>")
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .map(|(script, _)| {
+                let mut digest = Sha256::new();
+                digest.update(script.as_bytes());
+                format!(" 'sha256-{}'", BASE64.encode(&digest.finalize()))
+            })
+            .unwrap_or_default();
+
+        format!(
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:; \
+             script-src{hash}; frame-ancestors 'none'; form-action 'none'; \
+             base-uri 'self'; block-all-mixed-content"
+        )
+    })
+    .as_str()
+}
+
+/// The headers every response carries.
+fn tls_headers() -> [(&'static str, &'static str); 2] {
+    [
+        (
+            "Strict-Transport-Security",
+            "max-age=63072000; includeSubDomains",
+        ),
+        ("Content-Security-Policy", landing_policy()),
+    ]
+}
 
 /// Creates a new [`BytesBody`] with no content.
 fn body_empty() -> BytesBody {
@@ -853,7 +823,7 @@ impl Server {
             Some(relay_config) => {
                 debug!("Starting Relay server");
                 let mut headers = HeaderMap::new();
-                for (name, value) in TLS_HEADERS.iter() {
+                for (name, value) in tls_headers().iter() {
                     headers.insert(
                         *name,
                         value
@@ -1183,6 +1153,16 @@ async fn relay_supervisor(
 /// different things are worse than one. See `rotelyx-status`.
 static STATUS: rotelyx_status::Status = rotelyx_status::Status::new();
 
+/// How the relay is doing, in the words the page shows. Re-exported so the
+/// binary can name the level without depending on the status crate directly.
+pub use rotelyx_status::Level as StatusLevel;
+
+/// The word the relay binary says about itself, for the page. The binary
+/// holds the limiter and the rooms; this crate holds the page.
+pub fn report_status(level: StatusLevel) {
+    STATUS.report(level);
+}
+
 /// Record availability to `path`. Called by the binary before serving.
 pub fn record_status_at(path: std::path::PathBuf) {
     STATUS.record_at(path);
@@ -1277,28 +1257,30 @@ fn root_handler(
     };
 
     let status = format!(
-        "<div class=\"status\"><span class=\"dot\"></span><b>Operational</b>\
-         <span>up {}</span></div>{}\
-         <div class=\"scale\"><span>48h</span><span>now</span></div>{}\
+        "{}{}<div class=\"scale\"><span>48h</span><span>now</span></div>{}\
          <p class=\"note\">{}.</p>",
-        STATUS.uptime_text(),
+        STATUS.headline(),
         STATUS.strip(),
         rotelyx_status::LEGEND,
         history,
     );
 
+    let page = INDEX
+        .replace("/*STATUS-STYLE*/", rotelyx_status::STYLE)
+        .replace("<!--STATUS-REFRESH-->", rotelyx_status::REFRESH)
+        .replace("<!--STATUS-->", &status);
+
     // The operator's mark, when there is one. Substituted rather than appended
     // because the page carries a default mark and two would be worse than
     // either.
-    let head = match BRAND.get() {
-        None => String::from_utf8_lossy(INDEX).into_owned(),
+    let page = match BRAND.get() {
+        None => page,
         Some(brand) => {
-            let page = String::from_utf8_lossy(INDEX);
             // An operator who gave a name and no mark keeps the default one.
             // Substituting an empty string would leave the page with a hole
             // where a mark goes, which is worse than either mark.
             let page = match brand.logo.is_empty() {
-                true => page.into_owned(),
+                true => page,
                 false => page.replace(DEFAULT_LOGO, &brand.logo),
             };
             page.replace(
@@ -1308,12 +1290,7 @@ fn root_handler(
         }
     };
 
-    let mut page = Vec::with_capacity(head.len() + status.len() + INDEX_TAIL.len());
-    page.extend_from_slice(head.as_bytes());
-    page.extend_from_slice(status.as_bytes());
-    page.extend_from_slice(INDEX_TAIL);
-
-    let body: BytesBody = Box::new(Full::from(page));
+    let body: BytesBody = Box::new(Full::from(page.into_bytes()));
     response
         .status(StatusCode::OK)
         .header("Content-Type", "text/html; charset=utf-8")
@@ -1543,7 +1520,7 @@ mod tests {
     use url::Url;
 
     use super::{
-        Access, AccessControl, ClientRequest, DEFAULT_LOGO, INDEX,
+        Access, AccessControl, BASE64, ClientRequest, DEFAULT_LOGO, INDEX, landing_policy,
         NO_CONTENT_CHALLENGE_HEADER, NO_CONTENT_RESPONSE_HEADER, RelayConfig, Server,
         ServerConfig, SpawnError, escape,
     };
@@ -2064,7 +2041,7 @@ mod tests {
     /// would be silent: both are `data:` URIs and neither would error.
     #[test]
     fn a_brand_replaces_the_default_mark() {
-        let page = String::from_utf8_lossy(INDEX);
+        let page = INDEX;
         assert_eq!(
             page.matches(DEFAULT_LOGO).count(),
             2,
@@ -2084,7 +2061,7 @@ mod tests {
     /// "Relay" with no sign that a name was given.
     #[test]
     fn the_operators_name_has_somewhere_to_go() {
-        let page = String::from_utf8_lossy(INDEX);
+        let page = INDEX;
         assert_eq!(
             page.matches("<p class=\"tag\">Relay</p>").count(),
             1,
@@ -2092,10 +2069,58 @@ mod tests {
         );
     }
 
+    /// The three places the server fills in are in the page.
+    ///
+    /// A renamed placeholder is a silent failure: the page would still render,
+    /// with no status block, no refresh and an unstyled strip.
+    #[test]
+    fn the_page_has_somewhere_to_put_the_status() {
+        for placeholder in ["<!--STATUS-->", "<!--STATUS-REFRESH-->", "/*STATUS-STYLE*/"] {
+            assert_eq!(
+                INDEX.matches(placeholder).count(),
+                1,
+                "{placeholder} is missing from the page, or is in it twice"
+            );
+        }
+    }
+
+    /// The policy names the script the page actually carries.
+    ///
+    /// The hash is computed from the file, so a change to the animation that
+    /// did not reach the policy would leave a page whose own script the
+    /// browser refuses to run -- a backdrop that silently stays black.
+    #[test]
+    fn the_policy_names_this_pages_script() {
+        use sha2::{Digest, Sha256};
+
+        let script = INDEX
+            .split_once("<script>")
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .expect("the page carries a script")
+            .0;
+        let mut digest = Sha256::new();
+        digest.update(script.as_bytes());
+        let hash = BASE64.encode(&digest.finalize());
+
+        let policy = landing_policy();
+        assert!(
+            policy.contains(&format!("'sha256-{hash}'")),
+            "the policy does not name the script in the page: {policy}"
+        );
+        assert!(
+            !policy.contains("connect-src"),
+            "the page may reach nowhere, so nothing should open that"
+        );
+        assert!(
+            policy.contains("script-src 'sha256-"),
+            "an unpinned script-src would run anything the page ended up carrying"
+        );
+    }
+
     /// Whoever runs it, the page still says what it is.
     #[test]
     fn a_branded_page_still_says_it_holds_no_keys() {
-        let branded = String::from_utf8_lossy(INDEX)
+        let branded = INDEX
             .replace(DEFAULT_LOGO, "data:image/png;base64,AAAA")
             .replace("<p class=\"tag\">Relay</p>", "<p class=\"tag\">Somebody</p>");
         assert!(branded.contains("holds no keys"), "the page stopped saying what it is");

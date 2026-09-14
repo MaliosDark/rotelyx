@@ -412,6 +412,39 @@ async fn main() -> Result<()> {
         });
     }
 
+    // The word the status page shows, judged every fifteen seconds from what
+    // the relay measures about itself and nothing an outsider could not have
+    // felt: how full it is, and whether it has had to refuse anybody. The
+    // number of open connections stays out of the page; the *word* derived
+    // from it is what the page shows. Busy past half full, under strain past
+    // ninety per cent or on any refusal in the last quarter minute.
+    if let Some(counters) = counters.clone() {
+        tokio::spawn(async move {
+            use rotelyx_relay_proto::server::StatusLevel as Level;
+            let mut refused = {
+                let r = counters.refusals();
+                r.0 + r.1 + r.2
+            };
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                let r = counters.refusals();
+                let now = r.0 + r.1 + r.2;
+                let refused_lately = now.saturating_sub(refused);
+                refused = now;
+                let fullness =
+                    counters.open() as f64 / limits::TOTAL_CONNECTIONS as f64;
+                let level = if refused_lately > 0 || fullness > 0.9 {
+                    Level::Strained
+                } else if fullness > 0.5 {
+                    Level::Busy
+                } else {
+                    Level::Operational
+                };
+                rotelyx_relay_proto::server::report_status(level);
+            }
+        });
+    }
+
     tokio::signal::ctrl_c()
         .await
         .context("waiting for ctrl-c")?;

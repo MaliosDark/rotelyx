@@ -114,6 +114,14 @@ struct State {
 #[derive(Clone, Default)]
 pub struct Limits {
     state: Arc<Mutex<State>>,
+    /// Addresses the per-address limits do not apply to. The total still does.
+    ///
+    /// For a load test run from one machine, which is one address opening
+    /// hundreds of sockets on purpose, and for nothing else: an exemption is
+    /// exactly the hole this file exists to close, so it is named on the
+    /// command line by the operator, per address, and it is expected to be
+    /// taken away again. Nothing here makes it permanent or discoverable.
+    exempt: Arc<Vec<IpAddr>>,
 }
 
 /// A slot held for as long as a connection is open.
@@ -137,8 +145,17 @@ impl Drop for Slot {
 }
 
 impl Limits {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The limits, with these addresses excused from the per-address ones.
+    pub fn exempting(addresses: Vec<IpAddr>) -> Self {
+        Self {
+            state: Arc::default(),
+            exempt: Arc::new(addresses),
+        }
     }
 
     /// A poisoned lock means a previous call panicked while holding it.
@@ -160,6 +177,15 @@ impl Limits {
         if state.total_open >= TOTAL_CONNECTIONS {
             state.refused_total += 1;
             return Err(Refusal::Total);
+        }
+        // Excused from the per-address limits, and counted against the total
+        // like everybody, because the total is what protects the server.
+        if self.exempt.contains(&address) {
+            state.total_open += 1;
+            return Ok(Slot {
+                limits: self.clone(),
+                address,
+            });
         }
 
         // Swept here rather than on a timer: the table only grows when somebody
@@ -274,6 +300,27 @@ mod tests {
 
     /// The property the whole file exists for, and the one a per-socket key
     /// would silently fail: one address must not spend everybody's budget.
+    #[test]
+    fn an_exempt_address_is_held_to_the_total_and_nothing_else() {
+        let tester: IpAddr = "10.0.0.9".parse().unwrap();
+        let limits = Limits::exempting(vec![tester]);
+        let mut held = Vec::new();
+        // Well past both per-address limits, in one burst.
+        for _ in 0..(PER_ADDRESS_CONNECTIONS * 4) {
+            held.push(limits.admit(tester).expect("exempt, so admitted"));
+        }
+        // And somebody else is still limited exactly as before.
+        let other: IpAddr = "10.0.0.10".parse().unwrap();
+        let mut theirs = Vec::new();
+        for _ in 0..PER_ADDRESS_CONNECTIONS {
+            theirs.push(limits.admit(other).expect("within the limit"));
+        }
+        assert!(matches!(limits.admit(other), Err(Refusal::Concurrent)));
+        // Letting go counts down for the exempt address too.
+        drop(held);
+        assert_eq!(limits.lock().total_open, PER_ADDRESS_CONNECTIONS);
+    }
+
     #[test]
     fn one_address_running_out_does_not_refuse_another() {
         let limits = Limits::new();

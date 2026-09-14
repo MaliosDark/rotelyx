@@ -83,6 +83,7 @@ server = [
     "dep:tokio-websockets",
     "dep:simdutf8",
     "dep:sha1",
+    "dep:sha2",
     "dep:toml",
     "dep:serde_json",
     "dep:tracing-subscriber",
@@ -287,6 +288,12 @@ version = "1"
 optional = true
 
 [dependencies.sha1]
+version = "0.11.0"
+optional = true
+
+[dependencies.sha2]
+# The landing page's script is named in the policy by the hash of its own
+# text, which is computed when the first page is served.
 version = "0.11.0"
 optional = true
 

@@ -4,20 +4,22 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <!--STATUS-REFRESH-->
-<title>Rotelyx Mailbox</title>
+<title>Rotelyx Relay</title>
 <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAEo0lEQVR42u1aS2sUQRDefyCIJ5XoQUER3clGBPHkxYtHDyIexJP7CCLqD/CoIohnoyiIV6OCESOIqAfxLyhexcwmZjf7mq7esmt6urd7ZhPXfSQzpBeK6el57NTX9fiqZnK7du7IbWfJOQAcAA4AB4ADwAHgAHAAOAAcAA4AB4ADYEAJOgEyxjAI5BYY6DEDkNugN6Zj8jjoORBboPNoHETXqH0w9o1xqiyAlFZK8NgWDEXCOVNYbI6u41wLgHGduoc6xiQYzWYTU+EC8kHlKqkH1UAYCoKx6nQOA6bnFVjhPM2FIPSuV/e0QZFgpCIGmEpztZpqZVmkoGEJpmUoxaWydA8eChiWBJGLmWBK4WNxi7GYkfXQJgCG/4L2cegptJ5LmABo8KL/4GABSv+95QBM7d2da7Va2Gg0etJsIM21221sNVuojqsx+TFtW2LbbAlpyPO1NKNzhFguYbiGsp5RLCFTKYsptzLjAR/NCjKXtxkLdMDkRrYZNjNkkrzEXSKMNQHbPgCooGqmzGHjwMQe8sf3n2EwIwa4traGtVoN2yKw1VZXsV6vhyZbr9Vx9c8fXFlZwbt3bg+sAN3XJEkKhNRZQOinYBIbk9Ao6c0Nel/KLJIz2NwilS6QoLwRICYRCplktJKDAQuSTwBoFpo6F0hSZm6RH4vqaiUGM2VNm2N1RqqDoE17wQhg3K4AYePKjypRVRSZ9Ljd6aQ/C2gGBz3+H48DCohOH4Xm51/YBRawkVZ/ogDMziz3fahXL17jo7k5fCzk+fNn+PbNG/z44QO+X3yHC2L8dmEBv3z+hK9ezuPRI4f1PYhGM5FRAOwiiY9YFE0MgPKMj7OF/iBg9FMr3uVd7HalqJ/dSLFL6rj/p7IlVpr2sTS9jMXCL1w/MCaV4RHFVfGC66rSCJhGRkltT7CY/y0AqGIxX8Wbp5IP+uD+A6sTxOMrzGJNlDGa/eYA4P3GoudjWYBQ9qp4aO9J7Etp4y0zSAbFXvdoPGa/SS5QxZIAoCiUL4pxRbhEf1fgutkRB0StOsWBzpBpbusAIMXzS6ELlEjEfnlDECDRCyTOn9n3ArTypHg5vyxcwI8AEKB4S7hRW41HJEk1PG5cv4aZBKAkVp+UDi2BXCHv6/3K8eo6ICTpcTCh9wGb4gLl0AqWZSwQABQpNXpS6Fiyt7gnZ1Fl1qsdMgdAOVJSrXxoBdNV7QoVwRGunkgSpS7niZcpqvWerRhAikcKSwCkVAQ7LAvlZwsrmN9/dl2SpIolPoaKb4tcILIAWvljMh5UaOVFjUCr702dw3+2vYxUqNyBUmI2XCCkwn6UAfzI7KVM7zuPA/f+Yu8DSJ4+fZIBIpSXSktL8LHiyeLoxL4rOFRHyXj1lg0mSIoXRMArkL/LwHf6wC0cqa0WS5PZcIEZafZnDt4b+oEfP5xLttAYpOflaF8ACksi4vuhXDi2iONoqQHES+fRq8LJAiAs4OIYlLfb7JD4hoDa5OmLAQKAS97XsedtHmuijvqKfGIAXPa+TYy+Wt8QGA2TbfWVWP+Pqv4/M7jP5BwADgAHgAPAAeAAcAA4ABwADoDtKX8BSFEHyVkjgQcAAAAASUVORK5CYII=">
 <style>
 /* The page a person opens to ask one question: is it up.
-   Everything past that belongs in the operator's log and not on a URL anybody
-   can poll. An earlier version carried a table of what the operator can
-   observe and a row of counters; the table published our own analysis of our
-   own weaknesses, and the counters were one poll a minute away from being a
-   feed of when a community is awake and roughly how large it is.
 
-   The animation behind the panel is decorative and says nothing: the strands
-   and the envelopes crossing them are random and have no connection to any
-   traffic this host is carrying. That is deliberate. A "live" visualisation of
-   real deposits would be exactly the feed the counters were removed for. */
+   It is the mailbox's page with one motif changed, and deliberately so: an
+   operator running both should see two rooms of one building rather than two
+   products. The stylesheet is the same file's, kept in step by hand; if this
+   ever grows a third page it belongs in `rotelyx-status` beside the strip.
+
+   What differs is what the animation says. The mailbox draws strands ending in
+   a core, because a mailbox holds things. A relay holds nothing: here the
+   strands cross and leave by the other side, and there is no core to hold
+   anything in. Both are decoration and neither is measured -- an animation of
+   real traffic would be a live feed of when a community is awake, which is the
+   reason this page carries no counters either. */
 :root{
   --bg:#08070c;
   --panel:rgba(20,17,28,.70);
@@ -118,15 +120,16 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
   <div class="topline">
     <div class="mark" aria-hidden="true"></div>
     <div class="titlewrap">
-      <p class="tag">Blind mailbox</p>
-      <h1>Rotelyx Mailbox</h1>
+      <p class="tag">Relay</p>
+      <h1>Rotelyx Relay</h1>
     </div>
   </div>
 
   <div class="copy">
     <p>
-      This host holds sealed envelopes until somebody asks for them. It
-      <strong>holds no keys</strong> and cannot read a byte of what it stores.
+      This host forwards encrypted traffic between peers that cannot reach each
+      other directly. It <strong>holds no keys</strong> and cannot read what
+      passes through it.
     </p>
   </div>
 
@@ -146,7 +149,6 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
   const COLORS=['#8b5cf6','#42e8ff','#ff4fd8','#ffba52','#7c6cff','#49ffc7'];
   const strands=[];
   const packets=[];
-  const rings=[];
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const lerp=(a,b,t)=>a+(b-a)*t;
   const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
@@ -156,13 +158,10 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
   }
 
   // Everything that glows is drawn once into a small canvas and then stamped.
-  //
-  // The first version asked the canvas for `shadowBlur` on every strand, every
-  // ring and every envelope: about seventy blurred draws a frame, which a
-  // browser does on the CPU. Measured headless it ran at 15.8 frames a second
-  // and he could see it stutter. A blurred dot is the same blurred dot every
-  // time, so it is painted once and copied, which is a memory read instead of
-  // a convolution. Same picture, no blur in the loop.
+  // Asking the canvas for `shadowBlur` per stroke means a blur of a full-screen
+  // layer per stroke, which a browser without a GPU does on the processor and
+  // which cost this picture most of its frame. A blurred dot is the same
+  // blurred dot every time, so it is painted once and copied.
   const glows = new Map();
   function glowSprite(color){
     let s = glows.get(color);
@@ -181,12 +180,8 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
     return s;
   }
 
-  // The dust and the light in the middle, painted once at window size.
-  //
-  // Both are still pictures: the dust never moves except with the pointer, and
-  // the glow in the middle never changes at all. Drawing them each frame meant
-  // a hundred arcs and a full-screen gradient fill sixty times a second, which
-  // in a browser without a GPU is most of the frame. Now it is one copy.
+  // The dust and the light in the middle: two still pictures, painted once at
+  // window size and copied rather than redrawn.
   let dust = null;
   function makeDust(){
     dust = document.createElement('canvas');
@@ -194,10 +189,10 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
     dust.height = Math.max(1, Math.round(H));
     const g = dust.getContext('2d');
 
-    const glow = g.createRadialGradient(cx,cy,0,cx,cy,Math.min(W,H)*.34);
-    glow.addColorStop(0,'rgba(126,73,255,.23)');
-    glow.addColorStop(.16,'rgba(65,229,255,.085)');
-    glow.addColorStop(.4,'rgba(255,79,216,.055)');
+    const glow = g.createRadialGradient(cx,cy,0,cx,cy,Math.min(W,H)*.36);
+    glow.addColorStop(0,'rgba(126,73,255,.20)');
+    glow.addColorStop(.18,'rgba(65,229,255,.075)');
+    glow.addColorStop(.44,'rgba(255,79,216,.05)');
     glow.addColorStop(1,'rgba(0,0,0,0)');
     g.fillStyle = glow;
     g.fillRect(0,0,W,H);
@@ -222,42 +217,45 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
     init();
   }
   function init(){
-    strands.length=0; packets.length=0; rings.length=0;
+    strands.length=0; packets.length=0;
     makeDust();
-    const count=W<700?7:10;
+    const count=W<700?8:12;
     for(let i=0;i<count;i++){
       const side=i%2===0?-1:1;
       strands.push({
         side,
         color:COLORS[i%COLORS.length],
-        lane:(i-count/2)*18 + (Math.random()-.5)*70,
-        amp:36+Math.random()*76,
-        speed:.35+Math.random()*.8,
+        lane:(i-count/2)*20 + (Math.random()-.5)*74,
+        amp:34+Math.random()*74,
+        speed:.22+Math.random()*.5,
         phase:Math.random()*Math.PI*2,
-        width:.8+Math.random()*1.45,
+        width:.8+Math.random()*1.4,
         z:.4+Math.random()*.85
       });
     }
-    const pcount=W<700?16:26;
+    const pcount=W<700?14:24;
     for(let i=0;i<pcount;i++) packets.push(makePacket(i));
-    for(let i=0;i<5;i++) rings.push({r:68+i*23,phase:i*.9,color:COLORS[(i+1)%COLORS.length]});
   }
   function makePacket(i){
+    // In on one link and out on another: that is the whole of what a relay
+    // does, and it is the only thing this picture says.
     const inbound=Math.floor(Math.random()*strands.length);
     let outbound=Math.floor(Math.random()*strands.length);
-    if(outbound===inbound) outbound=(outbound+1)%strands.length;
+    if(strands[outbound].side===strands[inbound].side){
+      outbound=(outbound+1)%strands.length;
+    }
     return {
       inbound,outbound,
       t:Math.random(),
-      speed:.000055+Math.random()*.000095,
+      speed:.00004+Math.random()*.00006,
       color:COLORS[(i+Math.floor(Math.random()*COLORS.length))%COLORS.length],
-      size:2.5+Math.random()*3.4,
+      size:2.4+Math.random()*3.2,
       trail:6+Math.floor(Math.random()*5)
     };
   }
   function strandPoint(s,u,time){
-    // This is the single source of truth for BOTH the visible route and packets.
-    // u=0 is the outer edge, u=1 is the mailbox core.
+    // One source of truth for the visible line and for what travels on it.
+    // u=0 is the outer edge this strand comes in from, u=1 is the crossing.
     const start=s.side<0?-80:W+80;
     const q=ease(u);
     let x=lerp(start,cx,q);
@@ -265,28 +263,22 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
     const wave=Math.sin(u*12+s.phase+time*.001*s.speed)*s.amp*(1-u*.72);
     let y=lerp(base,cy,q)+wave;
 
-    // Tighten the last section into the core while retaining the strand's twist.
-    const pull=Math.pow(clamp((u-.60)/.40,0,1),1.45);
-    const ang=s.phase+time*.0014*s.speed+u*10*s.side;
-    const orbit=(1-pull)*34;
-    x += Math.cos(ang)*orbit*pull*.55;
-    y += Math.sin(ang)*orbit*pull*.42;
+    // The strands narrow towards the crossing without closing on a point: a
+    // relay is a place traffic passes, not a place it collects, so they meet
+    // in a seam rather than in a core.
+    const pull=Math.pow(clamp((u-.55)/.45,0,1),1.3);
+    const ang=s.phase+time*.0009*s.speed+u*8*s.side;
+    x += Math.cos(ang)*30*(1-pull)*pull*.6;
+    y += Math.sin(ang)*30*(1-pull)*pull*.45;
 
-    // Guarantee every rendered line and every packet meet at exactly the same point.
-    const lock=Math.pow(clamp((u-.88)/.12,0,1),2);
+    const lock=Math.pow(clamp((u-.86)/.14,0,1),2);
     x=lerp(x,cx,lock);
-    y=lerp(y,cy,lock);
+    y=lerp(y,cy+s.lane*.08,lock);
     return {x,y};
   }
   function packetPoint(p,t,time){
-    // First half: edge -> mailbox on the inbound strand.
-    // Second half: mailbox -> edge on the outbound strand.
-    if(t<=.5){
-      const u=t*2;
-      return strandPoint(strands[p.inbound],u,time);
-    }
-    const u=(1-t)*2;
-    return strandPoint(strands[p.outbound],u,time);
+    if(t<=.5) return strandPoint(strands[p.inbound],t*2,time);
+    return strandPoint(strands[p.outbound],(1-t)*2,time);
   }
   function drawBackdrop(t){
     ctx.clearRect(0,0,W,H);
@@ -301,12 +293,8 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
     ctx.save();ctx.globalCompositeOperation='lighter';
     for(const s of strands){
       const steps=Math.max(34,Math.floor(W/28));
-      // Three passes, wide and faint to narrow and bright. That is the glow:
-      // no blur is asked for, and at these alphas the eye cannot tell.
-      // Two passes rather than three. The widest one covered the screen in a
-      // twelve pixel band at four per cent opacity, which is a great many
-      // pixels for something nobody can point to; what reads as glow is the
-      // middle pass under the bright line.
+      // Two passes, wide and faint under narrow and bright. That is the glow:
+      // no blur is asked for and at these alphas the eye cannot tell.
       const path=new Path2D();
       for(let i=0;i<=steps;i++){
         const pt=strandPoint(s,i/steps,time);
@@ -321,25 +309,24 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
     }
     ctx.restore();
   }
-  function drawCore(time){
+  function drawSeam(time){
+    // Where the strands cross. The mailbox has a lit core here because it
+    // holds what arrives; this is a seam with nothing inside it.
     ctx.save();ctx.translate(cx,cy);ctx.globalCompositeOperation='lighter';
-    rings.forEach((r,i)=>{
-      const pulse=1+Math.sin(time*.0013+r.phase)*.04;
-      ctx.save();ctx.rotate(time*.00016*(i%2?1:-1)+r.phase);
-      ctx.scale(1,.42+Math.sin(r.phase+time*.0004)*.07);
-      ctx.beginPath();ctx.arc(0,0,r.r*pulse,0,6.283);
-      ctx.strokeStyle=hexAlpha(r.color,.11+i*.02);ctx.lineWidth=1.2;ctx.stroke();ctx.restore();
-    });
-    // The shell, stamped from the sprite instead of five gradients a frame.
-    const shell=glowSprite('#8b5cf6');
-    const size=110+Math.sin(time*.0017)*8;
-    ctx.globalAlpha=.55;
-    ctx.drawImage(shell,-size/2,-size/2,size,size);
-    ctx.globalAlpha=1;
-    for(let i=0;i<12;i++){
-      const a=i/12*6.283+time*.001*(i%2?1:-1);const rr=26+(i%6)*7;
-      ctx.fillStyle=hexAlpha(COLORS[i%COLORS.length],.45);
-      ctx.beginPath();ctx.arc(Math.cos(a)*rr,Math.sin(a)*rr*.7,1+(i%3)*.45,0,6.283);ctx.fill();
+    const h=Math.min(H*.36,300)+Math.sin(time*.0009)*10;
+    const seam=ctx.createLinearGradient(0,-h,0,h);
+    seam.addColorStop(0,'rgba(139,92,246,0)');
+    seam.addColorStop(.5,'rgba(190,160,255,.30)');
+    seam.addColorStop(1,'rgba(66,232,255,0)');
+    ctx.fillStyle=seam;
+    ctx.fillRect(-1.1,-h,2.2,h*2);
+    for(let i=0;i<3;i++){
+      const w=(46+i*40)*(1+.05*Math.sin(time*.0012+i));
+      ctx.strokeStyle=hexAlpha(COLORS[(i+1)%COLORS.length],.10-i*.02);
+      ctx.lineWidth=1.1;
+      ctx.beginPath();
+      ctx.ellipse(0,0,w*.34,h*(.5+i*.12),0,0,6.283);
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -349,7 +336,7 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
       p.t += p.speed*dt;
       if(p.t>1){Object.assign(p,makePacket(Math.floor(Math.random()*999)));p.t=0;}
 
-      // Trail samples the SAME route as the packet. No free-floating particles.
+      // The trail samples the same route as the packet: nothing floats free.
       for(let k=p.trail;k>=1;k--){
         const tt=p.t-k*.0075;
         if(tt<=0)continue;
@@ -363,23 +350,21 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
       const ahead=packetPoint(p,clamp(p.t+.003,0,1),time);
       const angle=Math.atan2(ahead.y-pt.y,ahead.x-pt.x);
 
-      // The halo: one stamp of the sprite, where the blur used to be.
+      // Brightest as it crosses, and gone out the other side.
+      const cross=1+Math.exp(-Math.pow((p.t-.5)/.055,2))*1.4;
       const halo=glowSprite(p.color);
-      const hs=p.size*7;
+      const hs=p.size*7*cross;
       ctx.drawImage(halo,pt.x-hs/2,pt.y-hs/2,hs,hs);
 
       ctx.save();ctx.translate(pt.x,pt.y);ctx.rotate(angle);
-      const pulse=.92+Math.sin(p.t*Math.PI)*.18;
-      const w=p.size*2.25*pulse,h=p.size*1.45*pulse;
+      const w=p.size*2.2,h=p.size*1.4;
       ctx.fillStyle=hexAlpha(p.color,.98);
       ctx.beginPath();
       // `roundRect` is recent enough that a browser without it should still
-      // get the page rather than a dead canvas and a console error.
+      // get the page rather than a dead canvas and an error in the console.
       if(ctx.roundRect) ctx.roundRect(-w/2,-h/2,w,h,Math.max(1,p.size*.35));
       else ctx.rect(-w/2,-h/2,w,h);
       ctx.fill();
-      ctx.strokeStyle='rgba(255,255,255,.82)';ctx.lineWidth=.55;
-      ctx.beginPath();ctx.moveTo(-w*.38,-h*.18);ctx.lineTo(0,h*.16);ctx.lineTo(w*.38,-h*.18);ctx.stroke();
       ctx.restore();
     }
     ctx.restore();
@@ -388,14 +373,14 @@ footer{margin-top:29px;padding-top:18px;border-top:1px solid var(--rule);font:65
   function frame(now){
     const dt=Math.min(40,now-last);last=now;
     mouseX=lerp(mouseX,targetMX,.04);mouseY=lerp(mouseY,targetMY,.04);
-    drawBackdrop(now);drawStrands(now);drawCore(now);drawPackets(now,dt);
+    drawBackdrop(now);drawStrands(now);drawSeam(now);drawPackets(now,dt);
     requestAnimationFrame(frame);
   }
   function still(){
     // Reduced motion is a setting somebody turned on for a reason, and a
     // full-screen animation is the first thing they turned it on for. One
     // frame, drawn once: the page keeps its picture and nothing moves.
-    drawBackdrop(0);drawStrands(0);drawCore(0);drawPackets(0,0);
+    drawBackdrop(0);drawStrands(0);drawSeam(0);drawPackets(0,0);
   }
   addEventListener('pointermove',e=>{targetMX=(e.clientX/W-.5)*2;targetMY=(e.clientY/H-.5)*2},{passive:true});
   addEventListener('resize',()=>{resize();if(reduced)still();},{passive:true});

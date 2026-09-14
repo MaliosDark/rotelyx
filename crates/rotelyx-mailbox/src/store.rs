@@ -113,7 +113,38 @@ impl Mailbox {
             .count();
 
         if live >= ceiling {
-            return Err(StoreError::TagFull);
+            // Full. The oldest goes and the newest is taken, rather than the
+            // newest being refused.
+            //
+            // # Why this way round
+            //
+            // A tag fills when nobody collects it: a member whose device is
+            // off, or a process that died, and the group goes on depositing
+            // for them. Refusing the deposit does not help that member -- they
+            // are not there -- and it punishes everybody else: the refusal
+            // reaches the *sender*, and a bot that treats a refused deposit as
+            // fatal simply stops, which is what happened to a bot in one of
+            // his rooms after three hours.
+            //
+            // What a returning device wants is the last two hundred and
+            // fifty six messages, not the first. And nothing is lost that was
+            // not already lost: an envelope at the front of a full tag is the
+            // oldest undelivered copy for somebody who has not been listening
+            // for a week.
+            //
+            // The ceiling is still a ceiling. This bounds the store exactly as
+            // before; only which envelope is dropped changes.
+            let expired_first = slot
+                .iter()
+                .position(|s| Self::expired(s, now, s.ttl_seconds));
+            match expired_first {
+                Some(dead) => {
+                    slot.remove(dead);
+                }
+                None => {
+                    slot.remove(0);
+                }
+            }
         }
 
         slot.push(Stored {
@@ -422,18 +453,39 @@ mod tests {
         assert_eq!(mb.sweep(10), 2, "at the TTL it is gone");
     }
 
+    /// A tag is bounded, and what falls off it is the oldest.
+    ///
+    /// A tag fills when nobody is collecting it, which is a device that is off
+    /// or a process that died. Refusing the deposit told the *sender* about
+    /// somebody else's problem, and a bot that treats a refusal as fatal stops
+    /// running: that is how one of his bots died after three hours in a room.
+    /// What a device that comes back wants is the newest messages anyway.
     #[test]
-    fn a_tag_cannot_be_filled_without_limit() {
+    fn a_tag_is_bounded_and_keeps_the_newest() {
         let mut mb = Mailbox::with_default_ttl();
         let t = tag(1);
 
-        for _ in 0..MAX_PER_TAG {
-            mb.deposit(env(t, b"x"), 0).expect("deposit");
+        for i in 0..MAX_PER_TAG {
+            mb.deposit(env(t, format!("old {i}").as_bytes()), 0)
+                .expect("deposit");
         }
-        assert!(matches!(
-            mb.deposit(env(t, b"x"), 0),
-            Err(StoreError::TagFull)
-        ));
+        assert_eq!(mb.pending(t, 0), MAX_PER_TAG);
+
+        // One more is taken, not refused.
+        mb.deposit(env(t, b"the newest"), 0)
+            .expect("a full tag takes the newest");
+        assert_eq!(mb.pending(t, 0), MAX_PER_TAG, "and it is still bounded");
+
+        // The payload is padded to a fixed size, so what is compared is the
+        // opening of each one.
+        let held = mb.collect_many(&[t], 1);
+        let opens = |want: &str| {
+            held.iter()
+                .any(|e| e.payload().starts_with(want.as_bytes()))
+        };
+        assert!(opens("the newest"), "the newest is there");
+        assert!(!opens("old 0"), "and the oldest is what went");
+        assert!(opens("old 1"), "but only the oldest");
     }
 
     #[test]
