@@ -519,3 +519,55 @@ ready instead.
 A call refuses to start on a session that permits a direct path. That is
 enforced in `rotelyx-media`, not in the caller, because a direct path is your
 address handed to whoever is on the other end.
+
+## Material to judge it by
+
+Every call the load test holds can be written down, and the numbers below come
+from that rather than from anybody's ear.
+
+`bot-examples/town/town.py --calls --record` puts the simulated people in a
+group call through the relay's room, with no sound card anywhere: each member's
+microphone is a file (`ROTELYX_CALL_FEED`, see `rotelyx-audio`) that the town
+writes speech into, and what a member would have played is written to a file
+instead (`ROTELYX_CALL_DUMP`). With a speech service (`ROTELYX_TTS_URL`,
+`ROTELYX_VOICE_KEY`) the people say their lines; without one they say a
+speech-shaped probe -- harmonics with breath between them -- which is enough
+for the codec and the network to be measured, and not enough to be listened to.
+
+A run leaves, per member, exactly what was handed to the encoder
+(`said-0001.wav` and the text beside it), one decoded track per group
+(`heard.f32`, the whole call), and what every call reported when it ended
+(`calls.jsonl`: frames sent, received, concealed, dropped). Everybody keeps
+what they said; one member per group keeps what it heard, because a decoded
+track is 690 MB an hour and one listener hears every word said in the room.
+
+`bot-examples/town/measure_calls.py <run>` lines each utterance up inside the
+listener's track and reports three things per utterance, and a CSV:
+
+| | meaning | right |
+|---|---|---:|
+| level | how loud what arrived is against what was sent | 0 dB |
+| spectral | RMS log-spectral distance over 24 log-spaced bands, speaking frames only | under 3 dB |
+| gaps | share of speaking frames whose copy has almost no energy | 0 % |
+
+Bands rather than bins, and speaking frames rather than all of them, because
+the first version reported forty six dB for a call that was plainly working:
+silence compared against silence, and empty bins compared against a noise
+floor forty dB down. The measure is only meaningful where there is something
+to measure, and the document strings in the script say exactly where that is.
+
+First run, two members through `amber.telyx.me`, the probe rather than speech,
+nothing lost on the network:
+
+| | |
+|---:|---|
+| level | −3.2 dB |
+| spectral | 5.9 to 10.3 dB |
+| gaps | 1 to 5 % |
+
+Two things fell out of building it before any codec work started. The call
+was discarding a third of every utterance as "late audio" -- correct for a
+microphone that has fallen behind, wrong for a file that is early -- which is
+now the one thing a file-fed capture does differently. And the codec loses
+about three dB of level end to end, which is the first number on this table
+worth moving.

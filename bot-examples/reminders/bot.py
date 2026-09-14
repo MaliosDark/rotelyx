@@ -47,7 +47,12 @@ def main():
         with lock:
             due = [r for r in pending if r["at"] <= now]
             for r in due:
-                bot.say(f"Reminder for {r['for']}: {r['what']}")
+                bot.send_card(
+                    f"Reminder for {r['for']}",
+                    r["what"],
+                    [("In ten minutes again", f"/remind in 10m {r['what']}"),
+                     ("What else is pending", "/reminders")],
+                )
                 pending.remove(r)
             if due:
                 save_state(NAME, pending)
@@ -56,9 +61,12 @@ def main():
     tick()
 
     for event in bot.events():
-        if event.kind != "message" or not bot.addressed(event):
+        if event.kind == "tap":
+            text = event.tapped or ""
+        elif event.kind == "message" and bot.addressed(event):
+            text = bot.strip(event)
+        else:
             continue
-        text = bot.strip(event)
         who = event.sender or "somebody"
 
         if text.startswith("/reminders"):
@@ -78,7 +86,11 @@ def main():
             with lock:
                 pending.append({"at": when.timestamp(), "what": what, "for": who})
                 save_state(NAME, pending)
-            bot.say(f"Noted. {when.strftime('%a %H:%M')}: {what}")
+            bot.send_card(
+                f"Noted for {when.strftime('%a %H:%M')}",
+                what,
+                [("What is pending", "/reminders")],
+            )
 
 
 if __name__ == "__main__":

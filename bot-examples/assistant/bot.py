@@ -31,7 +31,6 @@ KEEP = 12
 
 def main():
     ap = Bot.parser(__doc__)
-    ap.add_argument("--name", default="the assistant", help="how it introduces itself")
     ap.add_argument("--persona", default="", help="extra instructions for the model")
     args = ap.parse_args()
     bot = Bot.from_args(args)
@@ -44,7 +43,7 @@ def main():
 
     for event in bot.events():
         if event.kind == "ready":
-            bot.say(f"{args.name} is here. Mention @{bot.me} to ask something.")
+            bot.say(f"{args.name or bot.me} is here. Mention @{bot.me} to ask something.")
             continue
         if event.kind != "message" or not bot.addressed(event):
             continue

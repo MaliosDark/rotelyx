@@ -33,11 +33,12 @@ KEEP = 20
 
 def main():
     ap = Bot.parser(__doc__)
-    ap.add_argument("--name", required=True)
     ap.add_argument("--goal", required=True, help="what this agent is trying to do")
     ap.add_argument("--opens", help="what it says first, if it speaks first")
     ap.add_argument("--turns", type=int, default=6, help="how many replies before it stops")
     args = ap.parse_args()
+    if not args.name:
+        ap.error("--name: an agent has to be somebody")
     bot = Bot.from_args(args)
 
     system = (

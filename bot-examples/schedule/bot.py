@@ -36,9 +36,12 @@ def main():
     free = {k: set(v) for k, v in load_state(NAME, {}).items()}
 
     for event in bot.events():
-        if event.kind != "message" or not bot.addressed(event):
+        if event.kind == "tap":
+            text = event.tapped or ""
+        elif event.kind == "message" and bot.addressed(event):
+            text = bot.strip(event)
+        else:
             continue
-        text = bot.strip(event)
         who = event.sender or "?"
 
         if text.startswith("/free"):
@@ -48,7 +51,11 @@ def main():
                 continue
             free[who] = slots
             save_state(NAME, {k: sorted(v) for k, v in free.items()})
-            bot.say(f"Got {who}: {len(slots)} hours. {len(free)} of you have answered.")
+            bot.send_card(
+                f"Got {who}",
+                f"{len(slots)} hours. {len(free)} of you have answered.",
+                [("When can we all meet", "/when")],
+            )
         elif text.startswith("/when"):
             if not free:
                 bot.say("Nobody has said when they are free. /free mon 10-12")
@@ -58,7 +65,11 @@ def main():
                 bot.say(f"No hour suits all {len(free)}. Try wider.")
                 continue
             ordered = sorted(common, key=lambda s: (DAYS.index(s[:3]), s[4:]))
-            bot.say("Everybody can make: " + ", ".join(f"{s}:00" for s in ordered[:8]))
+            bot.send_card(
+                "Everybody can make",
+                ", ".join(f"{s}:00" for s in ordered[:8]),
+                [("Start again", "/reset")],
+            )
         elif text.startswith("/reset"):
             free = {}
             save_state(NAME, {})

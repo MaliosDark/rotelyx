@@ -39,9 +39,12 @@ def main():
     for event in bot.events():
         if event.kind == "message" and event.sender:
             people.add(event.sender)
-        if event.kind != "message" or not bot.addressed(event):
+        if event.kind == "tap":
+            text = event.tapped or ""
+        elif event.kind == "message" and bot.addressed(event):
+            text = bot.strip(event)
+        else:
             continue
-        text = bot.strip(event)
         who = event.sender or "?"
 
         m = re.match(r"/paid\s+([\d.]+)\s*(.*)", text)
@@ -57,7 +60,11 @@ def main():
                 among = sorted(people | {who})
             entries.append({"by": who, "amount": amount, "what": rest or "?", "among": among})
             save_state(NAME, entries)
-            bot.say(f"{who} paid {amount:.2f} for {rest or 'something'}, split among {', '.join(among)}.")
+            bot.send_card(
+                f"{who} paid {amount:.2f}",
+                f"For {rest or 'something'}, split among {', '.join(among)}.",
+                [("The balance", "/owes"), ("Settle up", "/settle")],
+            )
         elif text.startswith("/owes"):
             net = balances(entries)
             if not net:
@@ -68,7 +75,8 @@ def main():
                 if abs(v) < 0.005:
                     continue
                 lines.append(f"{p} {'is owed' if v > 0 else 'owes'} {abs(v):.2f}")
-            bot.say("\n".join(lines) or "All square.")
+            bot.send_card("Who owes whom", "\n".join(lines) or "All square.",
+                          [("Settle up", "/settle")])
         elif text.startswith("/settle"):
             entries = []
             save_state(NAME, entries)

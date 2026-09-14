@@ -42,6 +42,21 @@ def main():
             bot.say(f"{who}: {why}. Strike {n} of {LIMIT}.")
 
     for event in bot.events():
+        # A button on one of this bot's own cards.
+        if event.kind == "tap" and event.sender:
+            cmd = (event.tapped or "").split()
+            who = event.sender
+            if cmd and cmd[0] == "/strikes":
+                lines = [f"{m}: {n}" for m, n in state["strikes"].items()]
+                bot.send_card("Strikes", "\n".join(lines) or "Nobody has a strike.",
+                              [("The word list", "/badwords")])
+            elif cmd and cmd[0] == "/badwords":
+                bot.send_card(
+                    f"{len(state['badwords'])} words on the list",
+                    ", ".join(state["badwords"]) or "Nothing. Every message passes.",
+                    [("Who has strikes", "/strikes")])
+            continue
+
         if event.kind != "message" or not event.sender:
             continue
         text = event.text or ""
@@ -65,14 +80,26 @@ def main():
             bot.say(f"{who} removes {cmd[1]}.")
             bot.remove(cmd[1])
         elif cmd[0] == "/strikes":
-            if not state["strikes"]:
-                bot.say("Nobody has a strike.")
-            for member, n in state["strikes"].items():
-                bot.say(f"{member}: {n}")
+            lines = [f"{member}: {n}" for member, n in state["strikes"].items()]
+            bot.send_card(
+                "Strikes",
+                "\n".join(lines) or "Nobody has a strike.",
+                [("The word list", "/badwords")],
+            )
         elif cmd[0] == "/badwords":
-            state["badwords"] = [w.strip().lower() for w in " ".join(cmd[1:]).split(",") if w.strip()]
-            save_state(NAME, state)
-            bot.say(f"{len(state['badwords'])} words on the list.")
+            if len(cmd) > 1:
+                state["badwords"] = [
+                    w.strip().lower() for w in " ".join(cmd[1:]).split(",") if w.strip()
+                ]
+                save_state(NAME, state)
+            # What is on the list is said out loud, because a moderator that
+            # watches every message should be answerable for what it watches
+            # for.
+            bot.send_card(
+                f"{len(state['badwords'])} words on the list",
+                ", ".join(state["badwords"]) or "Nothing. Every message passes.",
+                [("Who has strikes", "/strikes")],
+            )
 
 
 if __name__ == "__main__":

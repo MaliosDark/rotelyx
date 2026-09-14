@@ -142,6 +142,19 @@ working bot, and `scripts/bot-test` runs two processes through a relay on every
 change. Calls were left out: a bot on a call needs an audio device and a sender
 index, and neither belongs on a line of JSON.
 
+**And then, on 13 September 2026, reached from a phone.** Everything above ran
+on the direct transport, which no phone dials, so ten bots existed that nobody
+with the app could add. `rotelyx meet` puts the same interface on the mailbox
+transport: a bot shows a link, a phone opens it, and the bot is on the phone's
+list with a picture of its own. The loop it runs is the desktop's, moved into
+`rotelyx-meeting` so there is one. Three things had to be fixed on the way,
+each found by watching a real phone: a proposal to admit somebody froze the
+whole group (`Conversation::send` now sets Add proposals aside for one
+message), a proposal was addressed one epoch back and failed for a member who
+had only ever seen one, and every event named a member as hex while the
+roster named them in words, so the admins list never matched the roster. The
+pictures on rotelyx.com/bots are the phone.
+
 ---
 
 ## 5. Saying what the group layer already does better

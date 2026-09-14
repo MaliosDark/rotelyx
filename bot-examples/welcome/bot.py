@@ -24,17 +24,34 @@ def main():
 
     for event in bot.events():
         if event.kind == "joined" and event.who:
-            bot.say(f"Welcome, {event.who}. The rules here: {rules}")
+            # A card, so the two things a newcomer wants next are a tap away
+            # rather than a command they have to be told about.
+            bot.send_card(
+                f"Welcome, {event.who}",
+                rules,
+                [("The rules again", "/rules"), ("Who is here", "/who")],
+            )
             continue
-        if event.kind != "message" or not bot.addressed(event):
+
+        if event.kind == "tap":
+            text = event.tapped or ""
+        elif event.kind == "message" and bot.addressed(event):
+            text = bot.strip(event)
+        else:
             continue
-        text = bot.strip(event)
+
         if text.startswith("/setrules "):
             rules = text[10:].strip()
             save_state(NAME, rules)
-            bot.say("Rules updated: " + rules)
+            bot.send_card("Rules updated", rules, [("Show them", "/rules")])
         elif text.startswith("/rules"):
-            bot.say(rules)
+            bot.send_card("The rules here", rules,
+                          [("Who is here", "/who")])
+        elif text.startswith("/who"):
+            # What this bot actually knows: how many members the conversation
+            # has. Names belong to the people who chose them, and a bot
+            # listing them is a bot making a directory.
+            bot.say(f"{bot.members} in this conversation, this bot included.")
 
 
 if __name__ == "__main__":

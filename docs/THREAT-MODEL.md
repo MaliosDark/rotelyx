@@ -308,6 +308,30 @@ jailbroken/rooted device, malware, forensic extraction of an unlocked device.
   package a person does, and one written to evade a rule would not declare
   itself. So the rule is about additions, and it applies to every addition.
   What a bot is, and what it can see once it is in, is in `docs/BOTS.md`.
+
+  **A member's bot is that member's second hand.** A bot is a member and is
+  asked like one. The bots shipped in `bot-examples/` agree to an addition
+  proposed by the person who brought them in and to nobody else's, which
+  means a person who runs a bot can let people in alone: their proposal and
+  their bot's confirmation are the two acts. This is stated rather than
+  hidden. The rule's purpose is that nobody arrives unnoticed and nobody
+  arrives on one person's *unseen* say so, and both still hold: the bot is
+  on the roster, every arrival names who confirmed it, and the bot can be
+  removed by anybody. A group that wants two *people* names its admins,
+  which a bot cannot be unless the group makes it one.
+
+  **The group keeps talking while it decides.** The MLS library refuses to
+  encrypt an application message while any proposal is pending, at the
+  proposer and at every member who has heard it. Left alone that froze the
+  conversation from the moment somebody asked until somebody agreed, and
+  the note that says who is waiting and where never went out, so nobody
+  could agree. `Conversation::send` sets pending Add proposals aside for the
+  length of one message and puts them back, unchanged and still referenced
+  by the commit that will act on them. Only Adds: an Add admits nobody until
+  it is committed, so a message sent beside it reaches exactly the members
+  it would have reached the moment before. A pending Remove is the case the
+  refusal exists for, and this group never holds one, because a removal is
+  committed on the spot.
 - **Not defended, and worth saying beside it.** None of this stops a member who
   belongs there from piping the conversation into a program of their own. A
   member holds plaintext; that is what being a member means. What this buys is

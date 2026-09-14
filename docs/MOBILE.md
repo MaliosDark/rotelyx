@@ -198,6 +198,7 @@ name says hex. Times are hour buckets, the same ones the browser uses.
 | `session.send` | `text` | sealed message |
 | `session.receive` | `message` | text, or null for a commit |
 | `session.rekeyAfterRestore` | | commit, to be delivered |
+| `session.needsRekeyAfterRestore` | | whether that commit is still owed, after collecting what was waiting |
 | `session.trustRestoredState` | | `true` |
 | `session.seal` | `ciphertext`, `timeBucket` | envelope |
 | `session.open` | `envelope`, `timeBucket`, `lookback` | ciphertext |
@@ -306,12 +307,41 @@ that answers a commit with a commit is building the collision described above.
 | `session.roster` | | array of labels |
 | `session.rosterDetail` | | JSON `[{"label":…,"key":…,"device":…}]` |
 | `session.removeMember` | `signatureKey` | commit, to be delivered |
+| `session.groupId` | | hex |
 | `session.epoch` | | integer |
 | `session.memberCount` | | integer |
 | `session.safetyNumber` | | digits |
 | `session.sealSession` | `key` | sealed blob |
 
 `lookback` defaults to 0 when omitted.
+
+### Rejoining a group without losing it
+
+`session.groupId` is what names a conversation for as long as it exists. It is
+fixed when the group is founded: it does not move when the epoch moves, when
+somebody joins, or when somebody is removed, and every device in the group
+answers with the same value. It is not a secret and not a fingerprint -- it
+says *which* conversation and nothing about who is in it.
+
+It exists because of the one failure a device cannot recover from on its own.
+MLS applies commits in order, each envelope is sealed for one member, and a
+commit that was missed cannot be resent by anybody: a device that falls far
+enough behind sits at its epoch reading noise while the group talks on. The way
+back is to be welcomed again, and a welcome builds a live session with the same
+group id.
+
+An application that does not compare it makes a second row instead -- the
+history, the name, the picture and the mute setting stay in the first one, and
+the conversation appears twice with everything in the wrong half. So the rule
+is: when a welcome lands, ask the session which group this is, look for a
+conversation already carrying that id, and adopt it if there is one. The
+Flutter application does this in `RotelyxStore.idForGroup` and
+`lib/ui/screens/pair.dart`; a row that predates the field is filled in the next
+time it is opened (`RotelyxStore.rememberGroup`).
+
+What it must never do is overwrite a group id that is already written down.
+That would make one row answer for two conversations, and the next rejoin would
+pour one group's messages into the other's history.
 
 ## Building
 

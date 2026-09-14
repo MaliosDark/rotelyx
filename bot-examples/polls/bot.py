@@ -6,6 +6,10 @@
     /results
     /close
 
+The poll goes out as a card with one button per option, so voting is a tap
+rather than a command typed correctly. The commands still work, and are what an
+application too old to draw buttons shows.
+
 One poll open at a time, which is how groups actually use them. A vote is one
 per member and can be changed. The bot sees who voted what, which every poll
 bot everywhere does; here it is said out loud.
@@ -19,15 +23,25 @@ from rotelyx_bot import Bot, load_state, save_state  # noqa: E402
 NAME = "polls"
 
 
-def show(bot, poll):
+def show(bot, poll, *, ask=False):
+    """The poll as it stands. With `ask`, the options are buttons."""
     counts = {}
     for choice in poll["votes"].values():
         counts[choice] = counts.get(choice, 0) + 1
-    lines = [poll["question"]]
+
+    lines = []
     for i, option in enumerate(poll["options"], 1):
         n = counts.get(i, 0)
-        lines.append(f"  {i}. {option}  {'#' * n} {n}")
-    bot.say("\n".join(lines))
+        lines.append(f"{i}. {option}  {'#' * n} {n}")
+
+    if ask:
+        bot.send_card(
+            poll["question"],
+            "\n".join(lines),
+            [(option, f"/vote {i}") for i, option in enumerate(poll["options"], 1)],
+        )
+    else:
+        bot.say(poll["question"] + "\n" + "\n".join(f"  {line}" for line in lines))
 
 
 def main():
@@ -35,10 +49,16 @@ def main():
     poll = load_state(NAME, None)
 
     for event in bot.events():
-        if event.kind != "message" or not bot.addressed(event):
-            continue
-        text = bot.strip(event)
+        text = bot.strip(event) if event.kind == "message" else ""
         who = event.sender or "?"
+
+        if event.kind == "tap":
+            # A button on the card. The same words the typed command uses, so
+            # there is one path through this bot and not two.
+            text = event.tapped or ""
+            who = event.sender or "?"
+        elif event.kind != "message" or not bot.addressed(event):
+            continue
 
         if text.startswith("/poll "):
             parts = [p.strip() for p in text[6:].split("|")]
@@ -47,8 +67,7 @@ def main():
                 continue
             poll = {"question": parts[0], "options": parts[1:], "votes": {}}
             save_state(NAME, poll)
-            show(bot, poll)
-            bot.say("Vote with /vote <number>.")
+            show(bot, poll, ask=True)
         elif text.startswith("/vote"):
             if not poll:
                 bot.say("No poll is open. Start one with /poll.")
@@ -61,7 +80,9 @@ def main():
                 continue
             poll["votes"][who] = choice
             save_state(NAME, poll)
-            bot.say(f"{who} voted.")
+            # The card again, with the counts as they now are: a vote that
+            # changes nothing on the screen is a vote somebody sends twice.
+            show(bot, poll, ask=True)
         elif text.startswith("/results"):
             if poll:
                 show(bot, poll)

@@ -47,6 +47,7 @@ crates/
   rotelyx-cli              two terminal chat, for running the protocol
   rotelyx-relay            the relay server binary
   rotelyx-mailbox-server   the blind mailbox as a WebSocket service
+  rotelyx-meeting          meeting a phone at a mailbox: the loop the desktop and the bots share
   rotelyx-desktop          native desktop window, Tauri v2, no Node
   rotelyx-web              local browser harness
   net/                     the vendored transport stack, 124,632 lines
@@ -127,7 +128,7 @@ section from the ledger breaks the build, which is checked by deleting one.
 cargo test --workspace
 ```
 
-**741 tests** in the workspace and 544 more under `crates/net/`, 1,285 in all, plus 11 in the issuer crate that is not published here. The
+**746 tests** in the workspace and 544 more under `crates/net/`, 1,290 in all, plus 11 in the issuer crate that is not published here. The
 distribution matters more than the count:
 
 | Suite | Tests | What it proves |
@@ -136,14 +137,15 @@ distribution matters more than the count:
 | `rotelyx-core` | 74 + 16 | Identity, sealed storage, framing, admission control **over real sockets** |
 | `rotelyx-mailbox-server` | 58 | Deposits, acknowledged collection, tiers, quota, the vault, waking a phone |
 | `rotelyx-media` | 51 + 9 | Per sender keys, the jitter buffer, layers crossing a real wire |
-| `rotelyx-crypto` | 37 + 17 | MLS conversations, X-Wing, the PQ secret reaching the key schedule |
-| `rotelyx-wasm` | 40 | The message layer as the browser and the phone both see it |
+| `rotelyx-crypto` | 66 + 35 | MLS conversations, X-Wing, the PQ secret reaching the key schedule |
+| `rotelyx-wasm` | 55 | The message layer as the browser and the phone both see it |
 | `rotelyx-mailbox` | 29 + 7 | Envelopes, buckets, tag rotation, TTL expiry |
 | `rotelyx-capability` | 25 | Token format and verification, against tokens frozen from the real issuer |
 | `rotelyx-net` | 15 + 10 | Path policy, the zero foreign infrastructure guard, **live QUIC connections** |
 | `rotelyx-audio` | 20 | The echo canceller, the noise suppressor and the dereverberator, against recorded speech |
-| `rotelyx-desktop` | 19 | The window's handshake and key file, and **two clients meeting through a code** at a real mailbox |
-| `rotelyx-cli` | 10 + 6 | Key file sealing and migration, plus a message surviving the whole offline path |
+| `rotelyx-meeting` | 8 | **Two clients meeting through a code** at a real mailbox, a third let in by two of them, and a conversation surviving being closed |
+| `rotelyx-desktop` | 13 | The window's handshake and key file |
+| `rotelyx-cli` | 18 + 6 | Key file sealing and migration, plus a message surviving the whole offline path |
 | `rotelyx-relay` | 12 + 3 | Admission limits, the allowlist refusing to fall open, the status page |
 | `rotelyx-mobile` | 9 | The C ABI boundary, and audio across it |
 | `rotelyx-mailbox-client` | 3 + 3 | The queue that used to discard what it read past, against the real server |
