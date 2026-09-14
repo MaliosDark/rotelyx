@@ -35,6 +35,7 @@ mod tickets;
 mod vault;
 mod wake;
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -61,7 +62,7 @@ use clap::Parser;
 use data_encoding::BASE64;
 use futures_lite::StreamExt as _;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{debug, info, warn};
 
 use rotelyx_mailbox::{Envelope, Mailbox, Tag, DEFAULT_TTL_SECONDS};
@@ -368,6 +369,17 @@ struct Args {
     /// address, on the command line, and taken away when the test is over.
     #[arg(long, value_name = "IP")]
     exempt_address: Vec<std::net::IpAddr>,
+
+    /// The key a front seals phone traffic to, generated here on first use.
+    ///
+    /// A front is a relay between phones and this mailbox that reads neither
+    /// side's secret: a phone opens one connection to the front and runs its
+    /// conversations sealed to this key inside it, so this mailbox sees
+    /// sessions from the front with no address and no way to tell which
+    /// belong to one phone. Without this the `/front` endpoint is closed and
+    /// phones connect straight to `/mailbox` as before. See `docs/FRONT.md`.
+    #[arg(long, value_name = "PATH")]
+    front_key: Option<PathBuf>,
 }
 
 #[derive(clap::Subcommand)]
@@ -461,6 +473,11 @@ struct Server {
     /// acknowledge it out from under the real recipient. Both sides of a
     /// conversation share one tag, so this is the normal case, not an edge one.
     wake: broadcast::Sender<Wake>,
+
+    /// The key a front's sessions seal to, when this mailbox accepts one. See
+    /// `docs/FRONT.md` and the `--front-key` flag. Absent means `/front` is
+    /// closed and phones connect straight to `/mailbox`.
+    front_key: Option<rotelyx_crypto::HybridSecretKey>,
 
     /// Hands out connection ids. Never leaves the process and identifies a
     /// socket, not a person.
@@ -818,6 +835,86 @@ impl Reply {
     }
 }
 
+impl Reply {
+    /// The reply as the text a front carries. Same bytes `into_message` wraps,
+    /// without the websocket frame, because a front session is not on a
+    /// websocket of its own: it is one sealed session inside the front's.
+    fn into_text(self) -> String {
+        serde_json::to_string(&self).unwrap_or_default()
+    }
+}
+
+/// What a text frame arriving from the other end is.
+enum Incoming {
+    Text(String),
+    Gone,
+}
+
+/// The transport a mailbox session runs over.
+///
+/// # Why this exists
+///
+/// A session used to be a websocket and only a websocket, and the handler
+/// spoke to `socket` directly. A front session is the same conversation --
+/// subscribe, deposit, collect -- reached a different way: it is one sealed
+/// session multiplexed inside the front's connection, so its frames arrive on
+/// a channel from the demultiplexer and its replies go back on one to be
+/// sealed. Rather than a second handler that could drift from the first, the
+/// handler runs over this, and the two ways in differ only in how a frame
+/// gets here.
+enum Wire {
+    /// A phone connected straight to the mailbox, the original path.
+    Ws(WebSocket),
+    /// A session inside a front's connection. `incoming` carries the frames
+    /// the front has unsealed; `outgoing` takes the replies for it to seal.
+    Front {
+        incoming: mpsc::Receiver<String>,
+        outgoing: mpsc::Sender<String>,
+    },
+}
+
+impl Wire {
+    /// The next frame, skipping anything that is not a text frame or a close.
+    /// A front never delivers anything but text, so its ping and pong handling
+    /// is the websocket's alone.
+    async fn next(&mut self) -> Incoming {
+        match self {
+            Wire::Ws(socket) => loop {
+                match socket.next().await {
+                    Some(Ok(Message::Text(t))) => return Incoming::Text(t.to_string()),
+                    Some(Ok(Message::Close(_))) | None => return Incoming::Gone,
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => return Incoming::Gone,
+                }
+            },
+            Wire::Front { incoming, .. } => match incoming.recv().await {
+                Some(text) => Incoming::Text(text),
+                None => Incoming::Gone,
+            },
+        }
+    }
+
+    /// Keep an idle connection alive. A front session does nothing here: the
+    /// front's own connection to the phone is what a proxy would drop, and it
+    /// keeps that alive itself.
+    async fn keepalive(&mut self) -> Result<(), ()> {
+        match self {
+            Wire::Ws(socket) => socket
+                .send(Message::Ping(Vec::new().into()))
+                .await
+                .map_err(|_| ()),
+            Wire::Front { .. } => Ok(()),
+        }
+    }
+
+    async fn send(&mut self, reply: Reply) -> Result<(), ()> {
+        match self {
+            Wire::Ws(socket) => socket.send(reply.into_message()).await.map_err(|_| ()),
+            Wire::Front { outgoing, .. } => outgoing.send(reply.into_text()).await.map_err(|_| ()),
+        }
+    }
+}
+
 /// A receipt naming one envelope, as hexadecimal. Same shape as a tag and a
 /// different thing, so it gets its own parser rather than borrowing one.
 fn parse_digest(hex: &str) -> Option<[u8; 32]> {
@@ -846,7 +943,12 @@ fn parse_tag(hex: &str) -> Option<Tag> {
 // Connection handling
 // ---------------------------------------------------------------------------
 
-async fn handle_socket(mut socket: WebSocket, server: Arc<Server>) {
+async fn handle_socket(socket: WebSocket, server: Arc<Server>) {
+    run_session(Wire::Ws(socket), server).await
+}
+
+/// One mailbox session, over whichever transport reached it. See [`Wire`].
+async fn run_session(mut socket: Wire, server: Arc<Server>) {
     let keepalive_every = server.keepalive;
     let mut wake = server.wake.subscribe();
     let mut subscribed = Listening::default();
@@ -874,7 +976,7 @@ async fn handle_socket(mut socket: WebSocket, server: Arc<Server>) {
             // The browser answers a ping itself, so this costs the client
             // nothing and never reaches the page.
             _ = keepalive.tick() => {
-                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                if socket.keepalive().await.is_err() {
                     return;
                 }
             }
@@ -895,27 +997,22 @@ async fn handle_socket(mut socket: WebSocket, server: Arc<Server>) {
                     let reply = Reply::Envelope {
                         envelope: BASE64.encode(&envelope.to_bytes()),
                     };
-                    if socket.send(reply.into_message()).await.is_err() {
+                    if socket.send(reply).await.is_err() {
                         return;
                     }
                 }
             }
 
             incoming = socket.next() => {
-                let Some(Ok(message)) = incoming else { return };
-
-                let text = match message {
-                    Message::Text(t) => t,
-                    Message::Close(_) => return,
-                    // Ping and Pong are handled by axum. Binary frames are not
-                    // part of this protocol.
-                    _ => continue,
+                let text = match incoming {
+                    Incoming::Text(t) => t,
+                    Incoming::Gone => return,
                 };
 
                 if text.len() > MAX_FRAME_BYTES {
                     let _ = socket.send(Reply::Error {
                         message: "frame too large".into(),
-                    }.into_message()).await;
+                    }).await;
                     continue;
                 }
 
@@ -930,7 +1027,7 @@ async fn handle_socket(mut socket: WebSocket, server: Arc<Server>) {
                 };
 
                 if let Some(reply) = reply {
-                    if socket.send(reply.into_message()).await.is_err() {
+                    if socket.send(reply).await.is_err() {
                         return;
                     }
                 }
@@ -945,7 +1042,7 @@ async fn handle_request(
     request: Request,
     server: &Arc<Server>,
     subscribed: &mut Listening,
-    socket: &mut WebSocket,
+    socket: &mut Wire,
     connection: u64,
     cap: &mut Capability,
 ) -> Option<Reply> {
@@ -1113,7 +1210,7 @@ async fn handle_request(
                 let reply = Reply::Envelope {
                     envelope: BASE64.encode(&envelope.to_bytes()),
                 };
-                if socket.send(reply.into_message()).await.is_err() {
+                if socket.send(reply).await.is_err() {
                     return None;
                 }
             }
@@ -1408,6 +1505,196 @@ async fn notify(server: &Arc<Server>, tag: Tag) {
 // limit most deployments do not have, so it moved into the only place that is
 // always running.
 
+/// The public half of the front key, base64, for a phone that knows only the
+/// front. The front proxies this so the phone never has to reach the mailbox
+/// to learn it. Nothing secret: it is a key traffic is sealed *to*.
+async fn front_key_handler(State(server): State<Arc<Server>>) -> Response {
+    match server.front_key.as_ref() {
+        None => (StatusCode::NOT_FOUND, "this mailbox accepts no front\n").into_response(),
+        Some(secret) => {
+            let public = BASE64.encode(secret.public().to_bytes().as_slice());
+            (
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                public,
+            )
+                .into_response()
+        }
+    }
+}
+
+/// A front's multiplexed connection.
+///
+/// One websocket carries many phones' sessions. Each frame names a session by
+/// the id the phone chose; the front has already unsealed the phone's bytes to
+/// the mailbox and reseals the mailbox's replies to the phone, so this handler
+/// sees plaintext requests and hands back plaintext replies, exactly as a
+/// direct connection would. What it adds is the demultiplexer: a session id
+/// maps to a running [`run_session`], its incoming channel fed here and its
+/// replies pulled back and tagged with the id.
+///
+/// The mailbox never learns which sessions belong to one phone, because the
+/// front does not tell it: every session looks like a connection of its own.
+async fn front_handler(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    State(server): State<Arc<Server>>,
+) -> Response {
+    if server.front_key.is_none() {
+        return (StatusCode::NOT_FOUND, "this mailbox accepts no front\n").into_response();
+    }
+    // A front is one address holding many phones, so it is admitted like any
+    // connection but against the front's own generous allowance, set by
+    // exempting its address the way the load test's loopback is.
+    let address = limits::client_address(
+        peer.ip(),
+        &server.trusted_proxies,
+        headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()),
+    );
+    let slot = match server.limits.admit(address) {
+        Ok(slot) => slot,
+        Err(_) => {
+            server.counters.refused.fetch_add(1, Ordering::Relaxed);
+            return (StatusCode::SERVICE_UNAVAILABLE, "front refused\n").into_response();
+        }
+    };
+    ws.max_message_size(MAX_FRAME_BYTES)
+        .on_upgrade(move |socket| async move {
+            let _slot = slot;
+            run_front(socket, server).await
+        })
+}
+
+/// One front connection, from its first session to its last.
+///
+/// All the crypto lives on this one task: incoming frames are opened here and
+/// replies are sealed here, so a [`rotelyx_crypto::FrontSession`] and its two
+/// counters are never shared across threads. Each session's [`run_session`]
+/// runs on its own task and speaks plaintext to this one over channels.
+async fn run_front(mut socket: WebSocket, server: Arc<Server>) {
+    /// A session id, as its bytes and as the base64 the wire uses.
+    type Id = [u8; rotelyx_crypto::SESSION_ID_LEN];
+
+    struct FrontStream {
+        session: rotelyx_crypto::FrontSession,
+        to_session: mpsc::Sender<String>,
+        label: String,
+    }
+
+    let mut streams: HashMap<Id, FrontStream> = HashMap::new();
+    // Plaintext replies from every session, tagged with which one. Sealed and
+    // framed on this task before they reach the wire.
+    let (reply_tx, mut reply_rx) = mpsc::channel::<(Id, String)>(256);
+    // A ceiling on sessions inside one connection, so one phone cannot hold a
+    // thousand behind a single admitted slot.
+    const MAX_SESSIONS: usize = 256;
+
+    loop {
+        tokio::select! {
+            reply = reply_rx.recv() => {
+                let Some((id, plaintext)) = reply else { continue };
+                let Some(stream) = streams.get_mut(&id) else { continue };
+                let Ok(sealed) = stream.session.seal(plaintext.as_bytes()) else {
+                    streams.remove(&id);
+                    continue;
+                };
+                let frame = serde_json::json!({
+                    "s": stream.label,
+                    "b": BASE64.encode(&sealed),
+                }).to_string();
+                if socket.send(Message::Text(frame.into())).await.is_err() {
+                    return;
+                }
+            }
+            incoming = socket.next() => {
+                let text = match incoming {
+                    Some(Ok(Message::Text(t))) => t,
+                    Some(Ok(Message::Close(_))) | None => return,
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => return,
+                };
+                let Ok(frame) = serde_json::from_str::<FrontFrame>(&text) else { continue };
+                let Ok(id_bytes) = BASE64.decode(frame.s.as_bytes()) else { continue };
+                let Ok(id): Result<Id, _> = id_bytes.as_slice().try_into() else { continue };
+
+                if frame.close {
+                    // Dropping the sender ends the session's `run_session`,
+                    // which releases its tags.
+                    streams.remove(&id);
+                    continue;
+                }
+
+                if let Some(hello_b64) = frame.hello {
+                    if streams.contains_key(&id) || streams.len() >= MAX_SESSIONS {
+                        continue;
+                    }
+                    let Ok(hello_bytes) = BASE64.decode(hello_b64.as_bytes()) else { continue };
+                    let Ok(hello) = rotelyx_crypto::Hello::from_bytes(&hello_bytes) else { continue };
+                    let secret = server.front_key.as_ref().expect("front key present");
+                    let Ok(session) = rotelyx_crypto::FrontSession::accept(secret, &hello) else {
+                        continue;
+                    };
+
+                    let (to_session, from_front) = mpsc::channel::<String>(64);
+                    let (from_session, mut session_out) = mpsc::channel::<String>(64);
+                    let wire = Wire::Front { incoming: from_front, outgoing: from_session };
+                    let session_server = Arc::clone(&server);
+                    tokio::spawn(async move { run_session(wire, session_server).await });
+
+                    // The session's plaintext replies, forwarded to this task
+                    // tagged with the id, where they are sealed.
+                    let reply_tx = reply_tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(text) = session_out.recv().await {
+                            if reply_tx.send((id, text)).await.is_err() {
+                                return;
+                            }
+                        }
+                    });
+
+                    streams.insert(id, FrontStream {
+                        session,
+                        to_session,
+                        label: frame.s.clone(),
+                    });
+                    continue;
+                }
+
+                let Some(body_b64) = frame.b else { continue };
+                let Ok(sealed) = BASE64.decode(body_b64.as_bytes()) else { continue };
+                let Some(stream) = streams.get_mut(&id) else { continue };
+                let plaintext = match stream.session.open(&sealed) {
+                    Ok(bytes) => bytes,
+                    // A frame that will not open is tampering or a bug: the
+                    // session ends rather than skipping it, the same rule the
+                    // session type documents.
+                    Err(_) => { streams.remove(&id); continue; }
+                };
+                let Ok(text) = String::from_utf8(plaintext) else {
+                    streams.remove(&id);
+                    continue;
+                };
+                if stream.to_session.send(text).await.is_err() {
+                    streams.remove(&id);
+                }
+            }
+        }
+    }
+}
+
+/// A frame on the front's multiplexed connection: which session, and one of a
+/// hello, a sealed body, or a close.
+#[derive(serde::Deserialize)]
+struct FrontFrame {
+    s: String,
+    #[serde(default)]
+    hello: Option<String>,
+    #[serde(default)]
+    b: Option<String>,
+    #[serde(default)]
+    close: bool,
+}
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -1660,6 +1947,7 @@ fn router_full(
         Waking::default(),
         Vec::new(),
         Vec::new(),
+        None,
     )
 }
 
@@ -1703,6 +1991,35 @@ impl Default for Waking {
 /// clippy went on reporting this function while the annotation looked like it
 /// had been dealt with.
 #[allow(clippy::too_many_arguments)]
+/// The front key, from a file, made on first use.
+///
+/// A front seals phone sessions to this key, so it has to be the same across a
+/// restart or every phone's live session breaks at once. Thirty two bytes, the
+/// hybrid secret's seed, written with owner-only permissions the way every
+/// other key this server holds is.
+fn load_or_make_front_key(path: &Path) -> Result<rotelyx_crypto::HybridSecretKey> {
+    use rotelyx_crypto::hybrid::SECRET_KEY_LEN;
+    if path.exists() {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("reading the front key at {}", path.display()))?;
+        let seed: [u8; SECRET_KEY_LEN] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("the front key at {} is not {SECRET_KEY_LEN} bytes", path.display()))?;
+        return Ok(rotelyx_crypto::HybridSecretKey::from_storage_bytes(seed));
+    }
+    let (secret, _public) = rotelyx_crypto::HybridKem::generate();
+    let seed = secret.to_storage_bytes();
+    std::fs::write(path, &seed[..])
+        .with_context(|| format!("writing the front key to {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(secret)
+}
+
 fn router_stateful(
     ttl_seconds: u64,
     keepalive: Duration,
@@ -1716,6 +2033,7 @@ fn router_stateful(
     waking: Waking,
     trusted_proxies: Vec<std::net::IpAddr>,
     exempt: Vec<std::net::IpAddr>,
+    front_key: Option<rotelyx_crypto::HybridSecretKey>,
 ) -> (Router, Arc<Server>) {
     let _ = ttl_seconds;
     let (wake, _) = broadcast::channel(1024);
@@ -1742,6 +2060,7 @@ fn router_stateful(
         },
         limits: limits::Limits::exempting(exempt),
         trusted_proxies,
+        front_key,
     });
 
     // Reclaim memory from envelopes nobody collected.
@@ -1832,6 +2151,8 @@ fn router_stateful(
         .route("/", get(landing))
         .route("/ping", get(ping))
         .route("/mailbox", get(ws_handler))
+        .route("/front", get(front_handler))
+        .route("/front-key", get(front_key_handler))
         .with_state(Arc::clone(&server));
 
     (router, server)
@@ -2140,6 +2461,15 @@ async fn main() -> Result<()> {
         notifier,
     };
 
+    // The front key, loaded or made. A file so it survives a restart: a phone
+    // that sealed a session to one key cannot open replies from another, so a
+    // key that changed on every start would drop every front session on every
+    // restart. Generated on first use, written 0600.
+    let front_secret = match args.front_key.as_ref() {
+        None => None,
+        Some(path) => Some(load_or_make_front_key(path)?),
+    };
+
     let (app, server) = router_stateful(
         args.ttl,
         KEEPALIVE,
@@ -2153,6 +2483,7 @@ async fn main() -> Result<()> {
         waking,
         args.trusted_proxy.clone(),
         args.exempt_address.clone(),
+        front_secret,
     );
 
     // The word the page shows, judged every fifteen seconds from what this
@@ -2287,6 +2618,7 @@ mod tests {
             Waking::default(),
             Vec::new(),
             Vec::new(),
+            None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2336,6 +2668,7 @@ mod tests {
             },
             Vec::new(),
             Vec::new(),
+            None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2803,6 +3136,124 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .await
             .expect("websocket connect");
         socket
+    }
+
+    /// A server that accepts a front, and the mailbox's front key.
+    async fn spawn_front_server() -> (String, rotelyx_crypto::HybridPublicKey, Arc<Server>) {
+        let (secret, public) = rotelyx_crypto::HybridKem::generate();
+        let (app, server) = router_stateful(
+            DEFAULT_TTL_SECONDS,
+            KEEPALIVE,
+            None,
+            Meter::default(),
+            None,
+            Mailbox::new(DEFAULT_TTL_SECONDS),
+            None,
+            rotelyx_capability::blind::BlindVerifier::new(),
+            false,
+            Waking::default(),
+            Vec::new(),
+            Vec::new(),
+            Some(secret),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve");
+        });
+        (format!("ws://{addr}"), public, server)
+    }
+
+    /// A phone reaches the mailbox through a front, sealed the whole way, and
+    /// what it deposited comes back to it and to nobody who can read it.
+    #[tokio::test]
+    async fn a_front_carries_a_session_end_to_end() {
+        let (base, public, _server) = spawn_front_server().await;
+
+        // The mailbox publishes its front key, and it is the one the phone
+        // seals to.
+        let served = reqwest::get(format!("{}/front-key", base.replace("ws://", "http://")))
+            .await
+            .expect("front-key")
+            .text()
+            .await
+            .expect("body");
+        let served_key = rotelyx_crypto::HybridPublicKey::from_bytes(
+            &BASE64.decode(served.trim().as_bytes()).expect("base64"),
+        )
+        .expect("key");
+        assert_eq!(served_key.to_bytes(), public.to_bytes());
+
+        // The phone opens one connection to the front and one session inside it.
+        let mut front = connect(&format!("{base}/front")).await;
+        let session_id = [7u8; rotelyx_crypto::SESSION_ID_LEN];
+        let (mut session, hello) =
+            rotelyx_crypto::FrontSession::open_to(&public, session_id).expect("open");
+        let s_b64 = BASE64.encode(session_id.as_slice());
+
+        front
+            .send(WsMessage::Text(
+                serde_json::json!({"s": s_b64, "hello": BASE64.encode(hello.to_bytes().as_slice())})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("hello");
+
+        // A sealed subscribe.
+        let tag = Tag::from_bytes(&[0x44; 32]).expect("tag");
+        let subscribe = serde_json::json!({"op": "subscribe", "tags": [tag_hex(&tag)]}).to_string();
+        let sealed = session.seal(subscribe.as_bytes()).expect("seal");
+        front
+            .send(WsMessage::Text(
+                serde_json::json!({"s": s_b64, "b": BASE64.encode(&sealed)})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("subscribe");
+
+        // The Ready reply comes back sealed for this session and nobody else.
+        let reply = recv_front(&mut front, &mut session).await;
+        assert_eq!(reply["op"], "ready", "the subscribe was accepted: {reply}");
+
+        // Somebody deposits under that tag on a plain connection.
+        let mut depositor = connect(&format!("{base}/mailbox")).await;
+        let envelope = Envelope::seal(tag, b"through the front").expect("seal");
+        depositor
+            .send(WsMessage::Text(
+                serde_json::json!({"op": "deposit", "envelope": BASE64.encode(&envelope.to_bytes())})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("deposit");
+        recv_json(&mut depositor).await;
+
+        // And the phone is handed it, sealed the whole way.
+        let envelope = recv_front(&mut front, &mut session).await;
+        assert_eq!(envelope["op"], "envelope", "the deposit reached the front: {envelope}");
+    }
+
+    /// Read one framed reply from the front and open it for this session.
+    async fn recv_front(
+        client: &mut Client,
+        session: &mut rotelyx_crypto::FrontSession,
+    ) -> serde_json::Value {
+        loop {
+            let text = recv_step(client, "front reply").await;
+            let frame: serde_json::Value = text;
+            let sealed = BASE64
+                .decode(frame["b"].as_str().expect("a body").as_bytes())
+                .expect("base64");
+            let plaintext = session.open(&sealed).expect("opens for this session");
+            return serde_json::from_slice(&plaintext).expect("json");
+        }
     }
 
     fn tag_hex(tag: &Tag) -> String {
@@ -3810,6 +4261,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             Waking::default(),
             Vec::new(),
             Vec::new(),
+            None,
         );
         tokio::spawn(async move {
             let _ = axum::serve(
