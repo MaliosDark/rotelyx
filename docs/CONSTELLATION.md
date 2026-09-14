@@ -61,23 +61,34 @@ built on the tag and adds nothing a mailbox can read.
 
 ### The directory
 
-A **directory** is a signed list of the mailboxes in a constellation: for each,
-its address and its public front key, and a version and an expiry. It is signed
-by a directory key whose public half is shipped in the client, exactly as the
-notifier key and the relay's room are shipped today, so a client verifies the
-directory the way it verifies everything else and a forged one does not load.
+A **directory** is the list of the mailboxes in a constellation: for each, a stable
+id and its address, plus a version and the replica count. What makes an entry
+trustworthy is not a signature but the domain. Every Rotelyx mailbox is a
+subdomain of one domain the operator owns, TLS proves a server is really under
+that domain, and the client already refuses to speak to any host that is not
+(the `no_foreign_infrastructure` guard, a build-time allowlist). So the client
+pins the **domain**, not the exact hostnames: it accepts any subdomain of the
+operator's domain and rejects everything else. A forged entry fails because it
+is either not under the domain, which the allowlist rejects, or cannot present
+the domain's certificate, which TLS rejects.
 
-The directory is small, changes rarely, and is fetched from any mailbox in it
-(each serves the current directory at a fixed path, and they all serve the same
-signed bytes, so which one answers does not matter). A mailbox that leaves is
-dropped in the next signed version; one that joins is added. This is the one
-authoritative document, and it is deliberately the only one: everything else is
-computed.
+Pinning the domain rather than the exact hostnames is deliberate, and it is the
+lock that survives change: mailboxes can be added, removed, or moved to new
+subdomains freely, and an installed client accepts them because they are still
+under the pinned domain, with no app update. The one thing that must stay
+stable is the domain itself, which an operator owns for years.
 
-Who holds the directory key is a deployment decision, not a protocol one. For a
-single operator it is one key they hold. For a constellation of independent
-operators it becomes a small set that co-sign, the way Tor's authorities do, and
-that is a later step the format leaves room for rather than requires.
+The directory is small, changes rarely, and is fetched over HTTPS from any
+mailbox in it, all of which serve the same bytes, so which one answers does not
+matter. A mailbox that leaves is dropped in the next version; one that joins is
+added.
+
+A signature earns its place only in one case this design does not need yet: a
+constellation that spans domains a single operator does not own, or a change of the
+domain itself. Then a directory key held by the operator, trusted by its public
+half in the client, would let a directory be trusted without depending on any
+one domain. The format leaves room for it; the single-operator, single-domain
+case does not use it, because the domain is already the anchor.
 
 ### Placement by rendezvous hashing
 
@@ -244,19 +255,30 @@ The pieces, in the order they can be built and tested, each inert until the one
 before it is in place, so nothing changes for a single-mailbox deployment until
 the whole path is ready and turned on.
 
-1. `rotelyx-directory`: the signed directory format, its signing and
-   verification, and the rendezvous placement function, with vectors. No
-   network. This is the reviewable core, the way the front's sealed session was.
-2. `rotelyx-mailbox-server`: serve the current directory at a fixed path, and
-   accept `--directory` and `--directory-key` so a mailbox knows the constellation
-   it is part of.
-3. The client's mailbox layer: given a tag, compute the `K` placement from the
-   directory, deposit to all `K`, subscribe to all `K`, and deduplicate by digest,
-   which the client already does. One mailbox is the `K = 1` case of the same
-   code, so a constellation of one behaves exactly as today.
-4. The directory refresh: fetch and verify a newer signed directory, and re-place
-   live conversations when the set changes, which rendezvous hashing keeps to the
-   fraction of conversations that actually moved.
+1. **Done.** `rotelyx-directory`: the directory format and the rendezvous
+   placement function, with a frozen score vector and tests for both ends
+   agreeing, even load, minimal churn when a mailbox is added, a url change
+   moving no tag, and an unknown field being ignored rather than refused. No
+   network, no signing. The reviewable core, the way the front's sealed session
+   was.
+2. `rotelyx-mailbox-server`: serve the current directory over HTTPS at a fixed
+   path, and accept `--directory` so a mailbox knows the constellation it is part
+   of. Inert without it: a mailbox with no directory is a constellation of one.
+3. The client's mailbox layer: pin the operator's domain rather than the exact
+   hostnames, fetch the directory, and given a tag compute the placement, deposit
+   to all replicas, subscribe to all replicas, and deduplicate by digest, which
+   the client already does. One mailbox is the one-replica case of the same code,
+   so a constellation of one behaves exactly as today.
+4. The directory refresh: fetch a newer directory and re-place live conversations
+   when the set changes, which rendezvous hashing keeps to the fraction that
+   actually moved.
+
+Not built, and deliberately deferred: constant-rate cover traffic (decoy tags),
+which was considered and set aside because the front, the constellation, and the
+rotating tag already place this ahead of what other systems ship; and per-shard
+private information retrieval, the research-grade layer that would blind even the
+mailbox holding a tag to which envelope was fetched. Both are additive and can
+come later without a break.
 
 Steps 1 and 2 deploy without touching a client. A client that does not know
 about a directory keeps using its one configured mailbox, which is the `K = 1`
