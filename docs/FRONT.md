@@ -95,20 +95,30 @@ one phone cannot hold a thousand.
 
 ## What changes where
 
-1. `rotelyx-crypto::front`: the session (hello, keys, seal, open), with tests
-   and vectors. No network.
-2. `rotelyx-mailbox-server`: the connection handler runs over a transport
-   trait instead of a websocket, so a front session is the same code over a
-   channel; `/front` accepts a front's multiplexed connection and `/front-key`
-   publishes the key. Every existing test passes unchanged.
-3. `rotelyx-relay`: `--front-for <mailbox url>` serves `/mailbox` to phones
-   and `/front-key`, and keeps a small pool upstream.
-4. `rotelyx-wasm` and `rotelyx-mobile`: `front.open`, `front.seal`,
+1. **Done.** `rotelyx-crypto::front`: the session (hello, keys, seal, open in
+   order), with nine tests. No network.
+2. **Done.** `rotelyx-mailbox-server`: the connection handler runs over a
+   `Wire` transport rather than a websocket, so a front session is the same
+   code over a channel; `/front` accepts a front's multiplexed connection,
+   `/front-key` publishes the key, `--front-key <path>` turns it on. Every
+   existing test passes unchanged, and a phone reaching the mailbox through a
+   front, sealed the whole way, is tested end to end. Deploys on its own and
+   changes nothing for a phone that does not use it.
+3. **Next.** The front itself: a small websocket multiplexer that serves the
+   `{s, hello|b|close}` framing to phones and forwards it onto a few upstream
+   `/front` connections, remapping session ids so two phones never collide at
+   the mailbox. This is where the socket saving at the mailbox comes from --
+   many phones over few upstream connections -- and it is the one piece whose
+   bug would be a privacy bug (two phones' sessions crossing), so it is built
+   and tested with somebody watching rather than overnight.
+4. **Next.** `rotelyx-wasm` and `rotelyx-mobile`: `front.open`, `front.seal`,
    `front.unseal`, so the phone seals with the same engine it does everything
    else with.
-5. The application's `MailboxClient` gains one mode: when the mailbox URL
-   answers `/front-key`, it seals every frame and runs its sessions inside
-   one connection. `RotelyxService` then holds one socket. No screen changes.
+5. **Next.** The application's `MailboxClient` gains one mode: when the mailbox
+   URL answers `/front-key`, it seals every frame and runs its sessions inside
+   one connection. `RotelyxService` then holds one socket. No screen changes,
+   and verified on the phone before it ships, because the send path is exactly
+   what broke this week.
 
 Steps 1 to 3 deploy on their own and change nothing for a phone that does not
 know about them: the mailbox's `/mailbox` keeps working as it does today.
