@@ -117,17 +117,16 @@ one phone cannot hold a thousand.
    engine. A test seals through the mobile ABI what a mailbox holding the
    matching key opens, and opens what it seals. (The web build throws until a
    wasm front session is exposed; it connects directly for now.)
-5. **Next, on the phone.** A `FrontConnection` in the app that owns one
-   websocket to a front and hands each conversation a virtual client backed by
-   a `FrontSession`; `RotelyxService` opens one of these instead of N
-   `MailboxClient`s when the mailbox URL answers `/front-key`. It is inert
-   until then, so it ships without changing anything for m1 (which serves no
-   front key today). It is the last piece and the one that touches the send
-   and receive path directly, so it is built and accepted with the phone
-   pointed at a real front and `adb logcat -s Rotelyx` open -- the way every
-   fault this week was actually found -- rather than blind. Its client-side
-   equivalent of the front's no-crossing test (a reply never reaching the
-   wrong conversation) is written against a fake socket first.
+5. **Done.** A `FrontConnection` in the app owns one websocket to the front
+   and carries every conversation as a sealed session on it, routing each
+   reply by session id to the one conversation that can open it; `MailboxClient`
+   in front mode seals through a channel instead of its own socket, and
+   `RotelyxService` passes the config's `frontUrl`/`frontKey` to every client.
+   Both null is one socket per conversation straight to the mailbox, so it is
+   inert until a mailbox serves a front key. Verified on the phone: pointed at
+   a mailbox with a front and a `front` process in front of it, the device held
+   **one** connection carrying all its sessions and joined a live group through
+   it. The full suite passes.
 
 Everything above steps 1-4 is on the server and the engine, is fully tested,
 and deploys without touching any phone: a mailbox with `--front-key`, a
