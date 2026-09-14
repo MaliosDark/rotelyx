@@ -112,9 +112,11 @@ one phone cannot hold a thousand.
    chose means nothing past its own connection is held by a test: two phones
    choosing the same session id on one shared upstream connection, and one's
    envelope never reaching the other while each still gets its own.
-4. **Next.** `rotelyx-wasm` and `rotelyx-mobile`: `front.open`, `front.seal`,
-   `front.unseal`, so the phone seals with the same engine it does everything
-   else with.
+4. **Done.** `rotelyx-mobile`: `front.open`, `front.seal`, `front.unseal`,
+   `front.free` on the JSON ABI, and `RotelyxEngine.openFront` in the Dart
+   engine. A test seals through the mobile ABI what a mailbox holding the
+   matching key opens, and opens what it seals. (The web build throws until a
+   wasm front session is exposed; it connects directly for now.)
 5. **Next.** The application's `MailboxClient` gains one mode: when the mailbox
    URL answers `/front-key`, it seals every frame and runs its sessions inside
    one connection. `RotelyxService` then holds one socket. No screen changes,

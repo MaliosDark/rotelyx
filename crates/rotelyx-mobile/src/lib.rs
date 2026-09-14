@@ -83,6 +83,10 @@ const ABI_VERSION: &str = "1";
 struct Registry {
     sessions: HashMap<u64, Session>,
     keys: HashMap<u64, SessionKey>,
+    /// Front sessions, one per conversation a phone runs through a front.
+    /// Stateful, because sealing advances a counter, so they live on a handle
+    /// like a session does. See `docs/FRONT.md`.
+    fronts: HashMap<u64, rotelyx_crypto::FrontSession>,
 }
 
 fn registry() -> &'static Mutex<Registry> {
@@ -91,6 +95,7 @@ fn registry() -> &'static Mutex<Registry> {
         Mutex::new(Registry {
             sessions: HashMap::new(),
             keys: HashMap::new(),
+            fronts: HashMap::new(),
         })
     })
 }
@@ -352,6 +357,60 @@ fn dispatch(req: &Value) -> Res {
             let envelope = str_arg(req, "envelope")?;
             let tag = str_arg(req, "tag")?;
             return Ok(json!(engine(rotelyx_wasm::open_under(&envelope, &tag))?));
+        }
+
+        // A front session, for a phone reaching the mailbox through a front.
+        // Sealing advances a counter, so the session is kept on a handle. See
+        // `docs/FRONT.md`.
+        "front.open" => {
+            use data_encoding::BASE64;
+            let key = BASE64
+                .decode(str_arg(req, "key")?.as_bytes())
+                .map_err(|_| "the front key is not base64".to_string())?;
+            let public = rotelyx_crypto::HybridPublicKey::from_bytes(&key)
+                .map_err(|_| "the front key is not a key".to_string())?;
+            let id_bytes = BASE64
+                .decode(str_arg(req, "id")?.as_bytes())
+                .map_err(|_| "the session id is not base64".to_string())?;
+            let id: [u8; rotelyx_crypto::SESSION_ID_LEN] = id_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "the session id is the wrong length".to_string())?;
+            let (session, hello) = rotelyx_crypto::FrontSession::open_to(&public, id)
+                .map_err(|_| "the front session could not be opened".to_string())?;
+            let handle = next_handle();
+            lock().fronts.insert(handle, session);
+            return Ok(json!({ "handle": handle, "hello": BASE64.encode(hello.to_bytes().as_slice()) }));
+        }
+        "front.seal" => {
+            use data_encoding::BASE64;
+            let handle = u64_arg(req, "handle")?;
+            let payload = BASE64
+                .decode(str_arg(req, "payload")?.as_bytes())
+                .map_err(|_| "the payload is not base64".to_string())?;
+            let mut reg = lock();
+            let session = reg.fronts.get_mut(&handle).ok_or("no such front handle")?;
+            let sealed = session
+                .seal(&payload)
+                .map_err(|_| "the front session could not seal".to_string())?;
+            return Ok(json!(BASE64.encode(&sealed)));
+        }
+        "front.unseal" => {
+            use data_encoding::BASE64;
+            let handle = u64_arg(req, "handle")?;
+            let envelope = BASE64
+                .decode(str_arg(req, "envelope")?.as_bytes())
+                .map_err(|_| "the envelope is not base64".to_string())?;
+            let mut reg = lock();
+            let session = reg.fronts.get_mut(&handle).ok_or("no such front handle")?;
+            let plaintext = session
+                .open(&envelope)
+                .map_err(|_| "the front session could not open this frame".to_string())?;
+            return Ok(json!(BASE64.encode(&plaintext)));
+        }
+        "front.free" => {
+            let handle = u64_arg(req, "handle")?;
+            return Ok(json!(lock().fronts.remove(&handle).is_some()));
         }
         _ => {}
     }
@@ -1133,5 +1192,58 @@ pub extern "C" fn rotelyx_call_close(call: i64) -> i32 {
         0
     } else {
         -1
+    }
+}
+
+#[cfg(test)]
+mod front_tests {
+    use super::*;
+    use data_encoding::BASE64;
+
+    /// The front ops on the mobile ABI open, seal and free a session, and what
+    /// the phone seals opens at a mailbox holding the matching key. This is the
+    /// Dart engine's path exercised through the same JSON the phone sends.
+    #[test]
+    fn the_front_ops_seal_what_a_mailbox_can_open() {
+        // A mailbox key, as /front-key would serve it.
+        let (secret, public) = rotelyx_crypto::HybridKem::generate();
+        let key_b64 = BASE64.encode(public.to_bytes().as_slice());
+        let id_b64 = BASE64.encode(&[3u8; rotelyx_crypto::SESSION_ID_LEN]);
+
+        // The phone opens a session.
+        let opened = dispatch(&json!({"op": "front.open", "key": key_b64, "id": id_b64}))
+            .expect("open");
+        let handle = opened["handle"].as_u64().expect("handle");
+        let hello = BASE64
+            .decode(opened["hello"].as_str().expect("hello").as_bytes())
+            .expect("base64");
+
+        // The mailbox accepts the hello and derives the matching keys.
+        let hello = rotelyx_crypto::Hello::from_bytes(&hello).expect("hello");
+        let mut mailbox = rotelyx_crypto::FrontSession::accept(&secret, &hello).expect("accept");
+
+        // The phone seals a request; the mailbox opens it.
+        let payload = BASE64.encode(b"{\"op\":\"subscribe\"}");
+        let sealed = dispatch(&json!({"op": "front.seal", "handle": handle, "payload": payload}))
+            .expect("seal");
+        let sealed = BASE64
+            .decode(sealed.as_str().expect("sealed").as_bytes())
+            .expect("base64");
+        assert_eq!(mailbox.open(&sealed).expect("open"), b"{\"op\":\"subscribe\"}");
+
+        // The mailbox seals a reply; the phone opens it.
+        let reply = mailbox.seal(b"{\"op\":\"ready\"}").expect("seal");
+        let unsealed = dispatch(&json!({
+            "op": "front.unseal", "handle": handle, "envelope": BASE64.encode(&reply),
+        }))
+        .expect("unseal");
+        let plain = BASE64
+            .decode(unsealed.as_str().expect("plain").as_bytes())
+            .expect("base64");
+        assert_eq!(plain, b"{\"op\":\"ready\"}");
+
+        // Freed, and gone.
+        assert_eq!(dispatch(&json!({"op": "front.free", "handle": handle})).unwrap(), json!(true));
+        assert!(dispatch(&json!({"op": "front.seal", "handle": handle, "payload": payload})).is_err());
     }
 }
