@@ -368,6 +368,7 @@ straight to `/mailbox` and none of this is used.
 | Op | Args | Returns |
 |---|---|---|
 | `directory.placement` | `directory` (the JSON a mailbox serves at `/directory`), `tag` (hex) | array of `{id, url}`, most preferred first |
+| `directory.placementDelta` | `current` (the directory held), `next` (a fetched directory), `tag` (hex) | `{newer, added, removed, kept}` |
 
 `directory.placement` is pure computation and needs no handle. Given the
 constellation directory and the tag a message is about to be deposited or collected
@@ -377,6 +378,16 @@ where a collector reads without either being told where the other looked. A
 client that never fetches a directory never calls this and keeps its one
 configured mailbox, which is the one-replica case of the same placement. See
 `docs/CONSTELLATION.md`.
+
+`directory.placementDelta` is what a client calls when it fetches a newer
+directory. For one tag it returns whether `next` is newer than `current` (by
+version), and the difference to apply: `added` are mailboxes now holding the tag
+to subscribe to, `removed` are ones to stop subscribing to, `kept` are ones in
+both carrying their current address, so a mailbox that only moved appears in
+`kept` with its new url and the client reconnects there. When a set change did
+not touch this tag, `added` and `removed` are empty and the client does nothing,
+which is the common case because rendezvous placement moves a tag only when the
+change reordered its top set.
 
 ## Building
 

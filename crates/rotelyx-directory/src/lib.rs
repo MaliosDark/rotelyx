@@ -123,6 +123,86 @@ impl Directory {
     }
 }
 
+/// How a tag's placement changes when the directory does.
+///
+/// A client holding live conversations needs three lists when a new directory
+/// arrives, not just the new placement: the mailboxes now holding the tag that
+/// were not before (`added`, to subscribe to and begin depositing to), the ones
+/// that held it and no longer do (`removed`, to stop subscribing to), and the
+/// ones in both (`kept`, already connected, left alone). Applying only the
+/// difference is what keeps a set change cheap: rendezvous hashing moves a tag
+/// off a mailbox only when the change actually reordered its top set, so for
+/// most tags `added` and `removed` are empty and the client does nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlacementDelta {
+    /// Mailboxes in the new placement that were not in the old one.
+    pub added: Vec<Mailbox>,
+    /// Mailboxes in the old placement that are not in the new one.
+    pub removed: Vec<Mailbox>,
+    /// Mailboxes in both, by id. Their address is taken from the new directory,
+    /// so a mailbox that only changed its url appears here with the new url and
+    /// the client reconnects to it rather than treating it as unchanged.
+    pub kept: Vec<Mailbox>,
+}
+
+impl PlacementDelta {
+    /// Whether nothing about where this tag lives changed. The common case, and
+    /// the one a client can skip all work for.
+    pub fn is_unchanged(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
+impl Directory {
+    /// Whether this directory should replace `current` for a client that holds
+    /// both. Newer by version wins; an equal or older version is ignored, so a
+    /// stale copy arriving late never rolls a client back. Version is the only
+    /// thing compared: two directories with the same version are treated as the
+    /// same even if their contents differ, because the operator bumps the
+    /// version whenever the set changes, and trusting content order instead
+    /// would let a replayed old copy with a coincidental field difference win.
+    pub fn supersedes(&self, current: &Directory) -> bool {
+        self.version > current.version
+    }
+
+    /// What changes for one tag when moving from this directory to `next`.
+    ///
+    /// Called on the directory a client currently holds, with the newer one it
+    /// just fetched. The result is the difference to apply for that tag: what to
+    /// subscribe to, what to drop, what to leave. See [`PlacementDelta`]. A
+    /// mailbox that kept the tag but changed its url is reported in `kept` with
+    /// its new url, because the client must reconnect there.
+    pub fn placement_delta(&self, next: &Directory, tag: &[u8; 32]) -> PlacementDelta {
+        let before = self.placement(tag);
+        let after = next.placement(tag);
+
+        let before_ids: std::collections::HashSet<&str> =
+            before.iter().map(|m| m.id.as_str()).collect();
+        let after_ids: std::collections::HashSet<&str> =
+            after.iter().map(|m| m.id.as_str()).collect();
+
+        let added = after
+            .iter()
+            .filter(|m| !before_ids.contains(m.id.as_str()))
+            .cloned()
+            .collect();
+        let removed = before
+            .iter()
+            .filter(|m| !after_ids.contains(m.id.as_str()))
+            .cloned()
+            .collect();
+        // Kept mailboxes carry the new directory's address, so a url change is
+        // seen and reconnected to rather than silently kept on the stale one.
+        let kept = after
+            .iter()
+            .filter(|m| before_ids.contains(m.id.as_str()))
+            .cloned()
+            .collect();
+
+        PlacementDelta { added, removed, kept }
+    }
+}
+
 /// The rendezvous score of one mailbox for one tag.
 ///
 /// `blake3(id || tag)`, read as a big-endian u64. The id and the tag are length
@@ -287,6 +367,103 @@ mod tests {
         let dir = Directory::from_json(json).expect("an unknown field must not refuse the parse");
         assert_eq!(dir.version, 3);
         assert_eq!(dir.mailboxes[0].id, "a");
+    }
+
+    #[test]
+    fn a_newer_version_supersedes_an_older_one() {
+        let old = directory(&["a", "b", "c"], 2);
+        let mut new = directory(&["a", "b", "c", "d"], 2);
+        new.version = old.version + 1;
+        assert!(new.supersedes(&old), "a higher version must win");
+        assert!(!old.supersedes(&new), "a lower version must not");
+        assert!(!new.supersedes(&new), "the same version is not newer than itself");
+    }
+
+    #[test]
+    fn an_unchanged_directory_moves_no_tag() {
+        // Refreshing to an identical set is a no-op for every tag: nothing is
+        // added or removed, so the client does no work.
+        let dir = directory(&["a", "b", "c", "d", "e"], 2);
+        let same = dir.clone();
+        for seed in 0..64u8 {
+            let delta = dir.placement_delta(&same, &tag(seed));
+            assert!(delta.is_unchanged(), "an identical refresh changed tag {seed}");
+        }
+    }
+
+    #[test]
+    fn a_url_change_is_reported_as_kept_with_the_new_address() {
+        // A mailbox that only moved keeps every tag it held, but the client must
+        // reconnect to the new address, so it appears in `kept` with the new url
+        // and never in added or removed.
+        let dir = directory(&["a", "b", "c"], 2);
+        let mut moved = dir.clone();
+        moved.version += 1;
+        moved.mailboxes[0].url = "wss://a-moved.telyx.me/mailbox".into();
+        let mut saw_new_url = false;
+        for seed in 0..64u8 {
+            let t = tag(seed);
+            let delta = dir.placement_delta(&moved, &t);
+            assert!(delta.is_unchanged(), "a url change must not add or remove for tag {seed}");
+            if let Some(m) = delta.kept.iter().find(|m| m.id == "a") {
+                assert_eq!(m.url, "wss://a-moved.telyx.me/mailbox", "kept must carry the new url");
+                saw_new_url = true;
+            }
+        }
+        assert!(saw_new_url, "mailbox a should have held some tag to check");
+    }
+
+    #[test]
+    fn adding_a_mailbox_moves_only_a_small_share_of_tags() {
+        // The delta view of the churn property: growing the constellation adds or
+        // removes a replica for well under half of tags, and for the rest the
+        // delta is empty. This is the same guarantee as the placement level
+        // test, seen the way a client applies it.
+        let before = directory(&["a", "b", "c", "d", "e"], 2);
+        let mut after = directory(&["a", "b", "c", "d", "e", "f"], 2);
+        after.version += 1;
+        let mut changed = 0;
+        let trials = 3000u32;
+        for i in 0..trials {
+            let mut t = [0u8; 32];
+            t[..4].copy_from_slice(&i.to_be_bytes());
+            let delta = before.placement_delta(&after, &t);
+            if !delta.is_unchanged() {
+                changed += 1;
+                // Whatever changed, the new placement still has `replicas`.
+                assert_eq!(after.placement(&t).len(), 2);
+            }
+        }
+        assert!(
+            changed < trials / 2,
+            "adding one mailbox changed {changed} of {trials} tags, too many"
+        );
+        assert!(changed > 0, "adding a mailbox should change at least some tags");
+    }
+
+    #[test]
+    fn a_removed_mailbox_is_reported_for_the_tags_it_held() {
+        // When a mailbox leaves, every tag it held reports it in `removed` and
+        // names a replacement in `added`, so the client knows to resubscribe
+        // elsewhere. The placement stays full at `replicas`.
+        let before = directory(&["a", "b", "c", "d", "e"], 2);
+        let mut after = directory(&["a", "b", "c", "d"], 2); // e is gone
+        after.version += 1;
+        let mut e_removed_somewhere = false;
+        for i in 0..500u32 {
+            let mut t = [0u8; 32];
+            t[..4].copy_from_slice(&i.to_be_bytes());
+            let delta = before.placement_delta(&after, &t);
+            if delta.removed.iter().any(|m| m.id == "e") {
+                e_removed_somewhere = true;
+                // Losing a replica is made up by a new one, so the count holds.
+                assert_eq!(delta.added.len(), delta.removed.len());
+                assert_eq!(after.placement(&t).len(), 2);
+            }
+            assert!(!delta.kept.iter().chain(&delta.added).any(|m| m.id == "e"),
+                "a gone mailbox must not appear as kept or added");
+        }
+        assert!(e_removed_somewhere, "e held some tags before it left");
     }
 
     #[test]

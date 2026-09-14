@@ -273,9 +273,16 @@ the whole path is ready and turned on.
    to all replicas, subscribe to all replicas, and deduplicate by digest, which
    the client already does. One mailbox is the one-replica case of the same code,
    so a constellation of one behaves exactly as today.
-4. The directory refresh: fetch a newer directory and re-place live conversations
-   when the set changes, which rendezvous hashing keeps to the fraction that
-   actually moved.
+4. **Done** in the client core. The directory refresh: `Directory::supersedes`
+   adopts a fetched directory only when its version is newer, so a stale copy
+   arriving late never rolls a client back, and `Directory::placement_delta`
+   returns, for one tag, what a refresh changed: the mailboxes now holding it to
+   subscribe to, the ones to drop, and the ones kept (carrying their new address,
+   so a move is reconnected to). A set change that did not reorder a tag's top
+   set is a no-op for that tag. Both are on the mobile ABI as
+   `directory.placementDelta`. What remains is the application wiring: the phone
+   fetching a directory on a schedule and applying the delta to its live
+   subscriptions.
 
 Not built, and deliberately deferred: constant-rate cover traffic (decoy tags),
 which was considered and set aside because the front, the constellation, and the

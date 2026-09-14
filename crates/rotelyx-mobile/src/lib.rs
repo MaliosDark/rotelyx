@@ -445,6 +445,31 @@ fn dispatch(req: &Value) -> Res {
                 .collect();
             return Ok(json!(placed));
         }
+
+        // Constellation refresh: given the directory the client holds and a newer
+        // one it fetched, and a tag, what changed for that tag. Returns the
+        // mailboxes to subscribe to, to drop, and to keep, and whether the new
+        // directory is newer at all. A client applies only the difference, so a
+        // set change that did not touch this tag is a no-op. See
+        // `docs/CONSTELLATION.md` and `directory.placement`.
+        "directory.placementDelta" => {
+            let current = str_arg(req, "current")?;
+            let current = rotelyx_directory::Directory::from_json(current.as_bytes())
+                .map_err(|_| "the current directory is not valid".to_string())?;
+            let next = str_arg(req, "next")?;
+            let next = rotelyx_directory::Directory::from_json(next.as_bytes())
+                .map_err(|_| "the next directory is not valid".to_string())?;
+            let tag_hex = str_arg(req, "tag")?;
+            let tag = tag_from_hex(&tag_hex)?;
+            let mb = |m: rotelyx_directory::Mailbox| json!({ "id": m.id, "url": m.url });
+            let delta = current.placement_delta(&next, &tag);
+            return Ok(json!({
+                "newer": next.supersedes(&current),
+                "added": delta.added.into_iter().map(mb).collect::<Vec<_>>(),
+                "removed": delta.removed.into_iter().map(mb).collect::<Vec<_>>(),
+                "kept": delta.kept.into_iter().map(mb).collect::<Vec<_>>(),
+            }));
+        }
         _ => {}
     }
 
@@ -1314,5 +1339,43 @@ mod front_tests {
         let placed = dispatch(&json!({"op": "directory.placement", "directory": one, "tag": tag}))
             .expect("placement");
         assert_eq!(placed.as_array().expect("a list").len(), 1);
+    }
+
+    /// The delta op tells the client what a directory refresh changes for a tag:
+    /// what to subscribe to, what to drop, and whether the new directory is
+    /// newer at all. This is the Dart engine's refresh path.
+    #[test]
+    fn the_delta_op_says_what_a_refresh_changes_for_a_tag() {
+        let current = r#"{"version":1,"replicas":2,"mailboxes":[
+            {"id":"m1","url":"wss://m1.telyx.me/mailbox"},
+            {"id":"m2","url":"wss://m2.telyx.me/mailbox"},
+            {"id":"m3","url":"wss://m3.telyx.me/mailbox"}]}"#;
+        let tag = "11".repeat(32);
+
+        // An identical directory at the same version changes nothing and is not
+        // newer, so the client does no work.
+        let same = dispatch(&json!({
+            "op": "directory.placementDelta", "current": current, "next": current, "tag": tag,
+        }))
+        .expect("delta");
+        assert_eq!(same["newer"], json!(false));
+        assert_eq!(same["added"].as_array().unwrap().len(), 0);
+        assert_eq!(same["removed"].as_array().unwrap().len(), 0);
+
+        // Growing the constellation is newer, and the delta agrees with the crate.
+        let bigger = r#"{"version":2,"replicas":2,"mailboxes":[
+            {"id":"m1","url":"wss://m1.telyx.me/mailbox"},
+            {"id":"m2","url":"wss://m2.telyx.me/mailbox"},
+            {"id":"m3","url":"wss://m3.telyx.me/mailbox"},
+            {"id":"m4","url":"wss://m4.telyx.me/mailbox"}]}"#;
+        let grown = dispatch(&json!({
+            "op": "directory.placementDelta", "current": current, "next": bigger, "tag": tag,
+        }))
+        .expect("delta");
+        assert_eq!(grown["newer"], json!(true));
+        // The new placement is still two mailboxes: kept plus added.
+        let kept = grown["kept"].as_array().unwrap().len();
+        let added = grown["added"].as_array().unwrap().len();
+        assert_eq!(kept + added, 2, "the new placement holds replicas mailboxes");
     }
 }
