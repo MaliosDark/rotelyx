@@ -65,13 +65,34 @@ than nine connections, and a session is a task and a few tags rather than a
 held socket. The connection ceiling stops binding, and the same host holds an
 order of magnitude more. See `docs/FRONT.md`.
 
-## What it cannot do yet
+## Constellation, and failover
 
-There is no failover between mailboxes. A conversation's tag lives on one
-mailbox, so if it is down the conversation's delivery pauses until it returns;
-nothing is lost, because envelopes wait up to seven days. Redundancy across
-mailboxes, whether by client side mirroring or server side replication, is not
-built.
+A mailbox can belong to a constellation: run it with `--directory <file>` and it
+serves that constellation's directory at `/directory`. A client fetches the
+directory, computes on its own which mailboxes hold a conversation's tag, and
+writes to and reads from all of them, so the conversation survives one being
+down and its load spreads. No mailbox talks to another, and none learns the
+whole of a conversation. `docs/CONSTELLATION.md` has the design; the directory
+format and placement live in the `rotelyx-directory` crate.
+
+Without the flag the endpoint is closed and a client that finds nothing there
+uses its one configured mailbox, which is the one-replica case of the same
+placement. Nothing changes for a single mailbox.
+
+The `constellation` example is a client that exercises the whole path against real
+mailboxes:
+
+```sh
+cargo run --release --example constellation -- directory.json "a phrase" roundtrip "hi"
+```
+
+It computes placement, deposits to every replica, collects from every replica,
+and deduplicates by digest. Deposit with all replicas up, stop one, then
+collect: the message still arrives from the survivor.
+
+The phone application does not yet fetch a directory, so its conversations still
+live on one mailbox until that wiring lands; the protocol and the client core
+are in place.
 
 ## Set the ceiling to the machine
 
