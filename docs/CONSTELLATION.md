@@ -146,6 +146,71 @@ where it held one, which is cheap on the front (a session is a task and a few
 tags) and is the reason constellation and the front belong in the same design: the
 front is what makes `K` subscriptions per conversation affordable.
 
+## Prior art, and why this gap exists
+
+It is worth stating plainly why a technique this old, applied to a problem this
+common, appears not to have been built. The honest answer is not that nobody
+thought a server should not see the social graph, nor that nobody knows
+rendezvous hashing, which is from 1996 and is a standard tool in databases and
+caches. It is that the field forked years ago into three lines of work, and
+each line made an early architectural commitment that put this particular
+combination off its path.
+
+**The centralized line, Signal, does not federate on principle.** Its founder
+argued publicly that metadata protection needs to evolve quickly and that
+centralized systems evolve faster than constellation ones, so Signal protects
+metadata in the center, with sealed sender and private groups, and never
+pursued constellation metadata privacy. There was no reason for it to build a
+constellation blind store, because constellation was the thing it had decided against.
+
+**The constellation line, Matrix and XMPP, federates in a way that is hostile to
+metadata by construction.** A homeserver sees who talks to whom, when, and in
+which rooms, because routing is by account and room and the server must know the
+graph to route. Blindness cannot be bolted onto that. The constellation line has
+constellation and not metadata privacy.
+
+**The metadata-private line, SimpleX, is the closest, and its address model is
+what stops it here.** It removes user identifiers and uses a separate unlinkable
+queue per contact, which is a real metadata-privacy result. But a queue's
+address is pinned to one server when the queue is created, and redundancy is
+handled by the client using more than one queue, duplicating the whole channel,
+rather than derived from the address. Because the address is a queue on a
+server rather than a label that can be placed, it cannot be hash placed or
+replicated across servers without changing the queue model.
+
+**The academic line, systems such as Vuvuzela, XRD, and the 2025 PingPong
+design, solves metadata privacy with heavy machinery:** mix networks,
+differential privacy noise, coordination rounds, or secure enclaves running
+oblivious algorithms. These aim higher than we do, at unobservability against a
+global passive adversary, and they pay for it in cost or in trusted hardware
+that no phone messenger ships. A system in that line would not reach for plain
+rendezvous hashing, because its threat model demands obliviousness rather than
+an opaque label.
+
+The ingredient that makes the combination a small step here, and a rewrite
+everywhere else, is our address. A conversation is addressed by an opaque tag
+derived from the group secret that rotates every hour, not by an account and
+not by a queue pinned to a server. Rendezvous hashing can place that tag across
+K servers precisely because the tag already hides the conversation, so the
+placement leaks nothing new. The people who had rotating opaque labels had
+committed to a queue-pinned model; the people who had constellation had committed
+to a graph-aware model; and the people who cared most about metadata had
+committed against constellation entirely. Standing on a blind mailbox addressed by
+a rotating tag, with a front that makes K subscriptions cheap, is the one
+vantage point from which this is the obvious next step rather than a departure.
+
+The honest framing is therefore not that this is unprecedented cleverness. The
+mathematics is old and the goal is old. What is new is the vantage point, and
+the claim is narrow and defensible: among the systems that actually ship, none
+does blind, sharded, K-replicated store and forward with placement computed by
+the client from a shared rotating label. That is the gap, and it is the gap
+this design fills.
+
+Sources consulted: Signal on sealed sender and its centralization argument,
+Matrix homeserver metadata discussions, the SimpleX messaging protocol and its
+client-managed redundancy, the rendezvous hashing literature, and the 2025
+PingPong metadata-private messaging paper.
+
 ## What it does not defend against
 
 It does not hide the constellation from a network observer, who sees a device reach
