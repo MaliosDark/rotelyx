@@ -584,6 +584,19 @@
     </div>
   </section>
 
+  <!-- ================= FRONT ================= -->
+  <section>
+    <div class="sec-head col">
+      <p class="eyebrow">The front</p>
+      <h2>One connection, and nobody who sees both halves</h2>
+      <p>The mailbox is blind to content and not to shape. A device subscribes to the tags of every conversation it is in, so a single connection asking for many tags tells the operator those tags belong to one device: the social graph, with no message read. The answer before the front was one connection per conversation, which the operator cannot group, but a device in nine conversations then opens nine connections, and the ceiling on a mailbox becomes a few hundred devices rather than a few hundred thousand.</p>
+    </div>
+    <div class="col">
+      <p>A front is a relay between devices and the mailbox that reads neither side's secret. A device opens one connection, to the front, and runs its conversations as sealed sessions inside it. The front sees the device's address and opaque blobs. The mailbox sees sessions from the front, each with its own tags, with no address and no way to tell which belong to one device. Neither party holds both halves, so the connection shape stops being a fingerprint.</p>
+      <p>A session is sealed to the mailbox's hybrid public key, post quantum for the same reason the message layer is: a record of which tags a device fetched is worth as much in fifteen years as today. The one thing the front rewrites is the session identifier. A device names its sessions itself and two devices will collide, so the front issues each a fresh identifier from a counter that never repeats and rewrites it both ways; the device's own identifier means nothing past its connection. A test runs two devices choosing the same identifier over one upstream connection and shows one device's envelope never reaches the other. The guarantee holds against the front alone and against the mailbox alone, not against one operator running both and joining the logs, which is why a front is an ordinary relay anyone can run. No deployed messenger offers one connection per device and a server that cannot learn which conversations a device holds at the same time.</p>
+    </div>
+  </section>
+
   <!-- ================= MEETING ================= -->
   <section>
     <div class="sec-head col">

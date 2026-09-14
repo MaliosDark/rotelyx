@@ -387,7 +387,7 @@
     than an afterthought.
   </p>
   <p>
-    Rotelyx makes four contributions. First, it composes a hybrid post quantum
+    Rotelyx makes five contributions. First, it composes a hybrid post quantum
     key encapsulation mechanism with the Messaging Layer Security standard
     (RFC 9420) through the pre shared key input the standard already defines,
     obtaining post quantum epoch keys without modifying MLS. Second, it inverts
@@ -399,7 +399,12 @@
     correspondent without either party holding an address for the other, by
     deriving a mailbox rendezvous from a 120 bit code small enough to fit in a QR
     symbol at a correction level that leaves room for a mark, and it states
-    plainly the one guarantee that construction cannot provide.
+    plainly the one guarantee that construction cannot provide. Fifth, it places
+    a front between devices and the mailbox that lets a device hold a single
+    connection carrying every conversation as a sealed session, so no party
+    holds both a device's address and the set of tags it reads, closing the
+    connection shape leak that a per conversation socket otherwise pays for with
+    capacity.
   </p>
   <p>
     We report measured characteristics of the implementation, including a
@@ -1126,6 +1131,164 @@
       mailbox that is two members with nothing special cased. The alternative,
       a local store that bypasses the protocol, would have been a second code
       path holding plaintext under different rules.
+    </p>
+  </div>
+</section>
+
+<!-- ================= 6b: the front ================= -->
+<section>
+  <h2>The front: unlinkable connections</h2>
+  <div class="col">
+    <p>
+      The blind mailbox is blind to content. It is not blind to shape. A
+      conversation is addressed by a rotating tag, and a device subscribes to
+      the tags of every conversation it is in, so a single connection that asks
+      for many tags tells the operator that those tags belong to one device.
+      That is the social graph, recovered without reading a byte of any message.
+      The mailbox never sees who is behind a connection, but it sees which
+      questions arrive together, and questions that arrive together are a
+      fingerprint.
+    </p>
+    <p>
+      The implemented answer, before this section, was to open one connection
+      per conversation, so the operator sees connections that share nothing and
+      cannot be grouped. That holds the property at a cost. A device in nine
+      conversations opens nine connections, an operator limits connections per
+      source address to bound abuse, and the ceiling on a single mailbox is then
+      a few hundred devices rather than a few hundred thousand. The property was
+      preserved and the capacity was spent.
+    </p>
+  </div>
+
+  <div class="col">
+    <p>
+      A <b>front</b> removes the trade. It is a relay placed between devices and
+      the mailbox that can read neither side's secret. A device opens one
+      connection, to the front, and runs its conversations as sealed sessions
+      inside it. The front sees the device's address and a stream of opaque
+      blobs. The mailbox sees sessions arriving from the front, each with its own
+      tags, with no address attached and no way to tell which sessions belong to
+      one device. Neither party holds both halves. The connection shape that was
+      a fingerprint is gone, because the party that could group the tags no
+      longer knows where they came from, and the party that knows where they
+      came from cannot read the tags.
+    </p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 860 250" role="img" aria-label="A front carries many devices' sealed sessions over few connections to the mailbox, so neither the front nor the mailbox holds both the address and the tags">
+      <defs>
+        <marker id="arf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g font-family="inherit" font-size="12" fill="currentColor">
+        <rect x="20" y="40" width="120" height="34" rx="6" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="80" y="61" text-anchor="middle">device A</text>
+        <rect x="20" y="108" width="120" height="34" rx="6" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="80" y="129" text-anchor="middle">device B</text>
+        <rect x="20" y="176" width="120" height="34" rx="6" fill="none" stroke="currentColor" stroke-opacity=".5"/>
+        <text x="80" y="197" text-anchor="middle">device C</text>
+
+        <rect x="360" y="96" width="140" height="58" rx="8" fill="none" stroke="currentColor" stroke-opacity=".75"/>
+        <text x="430" y="121" text-anchor="middle">front</text>
+        <text x="430" y="139" text-anchor="middle" font-size="10.5" fill-opacity=".65">address, no tags</text>
+
+        <rect x="700" y="96" width="140" height="58" rx="8" fill="none" stroke="currentColor" stroke-opacity=".75"/>
+        <text x="770" y="121" text-anchor="middle">mailbox</text>
+        <text x="770" y="139" text-anchor="middle" font-size="10.5" fill-opacity=".65">tags, no address</text>
+
+        <line x1="140" y1="57" x2="358" y2="118" stroke="currentColor" stroke-opacity=".55" marker-end="url(#arf)"/>
+        <line x1="140" y1="125" x2="358" y2="125" stroke="currentColor" stroke-opacity=".55" marker-end="url(#arf)"/>
+        <line x1="140" y1="193" x2="358" y2="132" stroke="currentColor" stroke-opacity=".55" marker-end="url(#arf)"/>
+        <line x1="500" y1="119" x2="698" y2="121" stroke="currentColor" stroke-opacity=".55" marker-end="url(#arf)"/>
+        <line x1="500" y1="131" x2="698" y2="129" stroke="currentColor" stroke-opacity=".55" marker-end="url(#arf)"/>
+        <text x="250" y="30" text-anchor="middle" font-size="10.5" fill-opacity=".6">one connection each, sessions sealed inside</text>
+        <text x="600" y="30" text-anchor="middle" font-size="10.5" fill-opacity=".6">few connections, sessions not groupable</text>
+      </g>
+    </svg>
+    <figcaption>
+      Neither the front nor the mailbox holds both the address of a device and
+      the set of tags it reads. A device is one connection at the front; a
+      conversation is one session at the mailbox; the two are never joined.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <p>
+      A session is a sealed channel between the device and the mailbox that the
+      front forwards without reading. The device encapsulates to the mailbox's
+      hybrid public key, which the mailbox generates once and serves at a fixed
+      path, and both ends derive two keys from the shared secret, one per
+      direction, bound to an eight byte session identifier the device chooses.
+      Frames are sealed with XChaCha20 Poly1305 under a counter that starts at
+      zero and never repeats within a session, so a reused nonce is a
+      programming error a test catches rather than a probability. The
+      construction is post quantum, using the same X25519 and ML-KEM-768 hybrid
+      the message layer and the wake tickets use, for the reason a routing
+      record is worth protecting for decades: a record that a device fetched a
+      particular set of tags is worth as much to an adversary in fifteen years
+      as it is today, which is the harvest now decrypt later argument applied to
+      the social graph rather than to content.
+    </p>
+  </div>
+
+  <div class="col">
+    <p>
+      The front's own task is the identifier it rewrites. A device names its
+      sessions with an identifier it chose, and two devices will choose the same
+      one, so if the front forwarded that identifier as it received it the
+      mailbox would deliver one device's envelopes to a session another device
+      opened under the same name. The front therefore issues every session a
+      fresh identifier from a counter that never repeats across the whole front,
+      keeps the device's own identifier beside it, and rewrites the identifier
+      to the front's on the way to the mailbox and back to the device's on the
+      way out. The device's identifier means nothing past its own connection.
+      This is the single correctness property of the multiplexer, and it is held
+      by a test that runs two devices choosing the same session identifier over
+      one shared upstream connection and shows that one device's envelope never
+      reaches the other while each still receives its own.
+    </p>
+  </div>
+
+  <div class="col">
+    <p>
+      What each party may observe is then bounded by construction. The front
+      learns that a device is talking to it, and how much, and nothing about
+      which conversations. The mailbox learns the tags and never an address. The
+      guarantee holds against each operator alone. It does not hold against a
+      front and a mailbox run by the same operator who joins their logs, and
+      that limit is stated rather than hidden: a front is an ordinary relay that
+      anyone can run, and running one that is not the mailbox operator's is the
+      answer to it, in the same way that the relay chaining design answers the
+      correlation a single relay could perform. The property is one connection
+      per device and a delivery server that cannot learn which conversations a
+      device holds, at the same time, which no deployed messenger provides. A
+      single connection is the design of Signal, WhatsApp and Telegram, whose
+      servers know exactly which conversations a device holds. Per conversation
+      isolation is offered by SimpleX and shipped disabled, over a connection
+      that can still be correlated. Session lets the server observe everything
+      about one identity, and Briar and Cwtch have no server to correlate at all
+      but require both parties online. Combining the two, one connection and an
+      unlinkable server, is what this component does.
+    </p>
+  </div>
+
+  <div class="col">
+    <p>
+      For capacity the effect is that the per address connection limit at the
+      mailbox counts fronts, not devices. A front is stateless in the sense that
+      matters, holding only the live routing of sessions to upstream
+      connections, and is added the way a relay is added. The ceiling on a
+      deployment stops being the number of devices one mailbox can hold and
+      becomes the number of fronts in front of it, each of which multiplexes
+      many devices over a small pool of upstream connections. The component is
+      implemented across the mailbox server, a front process, the client
+      engine, and the application, is inert until a mailbox is started with a
+      front key, and changes nothing for a device that connects to the mailbox
+      directly. It was verified on a handset: pointed at a mailbox with a front
+      in front of it, the device held one connection that carried all of its
+      sessions and joined a live group through it.
     </p>
   </div>
 </section>
@@ -2596,7 +2759,7 @@
   <div class="col">
     <p>
       The implementation is written in Rust across nineteen first party crates
-      plus a vendored transport tree, and is exercised by 597 tests. The Android
+      plus a vendored transport tree, and is exercised by 611 tests. The Android
       client is a separate tree with a suite of its own, not counted here. The
       distribution of those tests is more informative than the count.
     </p>
@@ -2606,7 +2769,7 @@
     <table>
       <thead><tr><th>Component</th><th class="num">Tests</th><th>Notable coverage</th></tr></thead>
       <tbody>
-        <tr><td>Blind mailbox, its server and its client</td><td class="num">97</td><td>Expiry enforced on collection rather than only on sweep, and a wrong passphrase rejected against a warm cache</td></tr>
+        <tr><td>Blind mailbox, its server and its client</td><td class="num">99</td><td>Expiry enforced on collection rather than only on sweep, and a wrong passphrase rejected against a warm cache</td></tr>
         <tr><td>Voice codec</td><td class="num">95</td><td>Real speech, deliberate stressors, and the transform against a slower reference</td></tr>
         <tr><td>Identity, framing, admission</td><td class="num">80</td><td>Admission control verified over live QUIC connections, not only in unit tests</td></tr>
         <tr><td>Browser, phone and desktop clients</td><td class="num">74</td><td>The same engine in all three, the C ABI crossed in both directions, and two clients meeting through a code at a running mailbox</td></tr>
@@ -2617,6 +2780,7 @@
         <tr><td>Transport and path policy</td><td class="num">26</td><td>Live connections, and a guard that fails the build on any third party hostname</td></tr>
         <tr><td>Room acoustics</td><td class="num">20</td><td>The echo canceller, the noise suppressor and the dereverberator, against recorded speech</td></tr>
         <tr><td>Relay and its status page</td><td class="num">19</td><td>Refusal to start on an empty allowlist, and admission limits under load</td></tr>
+        <tr><td>The front and its sealed session</td><td class="num">12</td><td>A session sealed end to end that the front cannot read, and two devices choosing the same session identifier over one connection that never cross</td></tr>
         <tr><td>Terminal client</td><td class="num">10</td><td>The operator&rsquo;s serialised view scanned byte wise for plaintext, and a relayed address carrying no IP</td></tr>
       </tbody>
     </table>
@@ -2756,6 +2920,8 @@
         <tr><td>Phone number to register</td><td class="t-risk">Required</td><td class="t-good">No</td><td class="t-good">No</td><td class="t-good">No</td></tr>
         <tr><td>Identifier others know you by</td><td class="t-mid">A number, or a username</td><td class="t-good">None of any kind</td><td class="t-mid">A key, exchanged out of band</td><td class="t-good">A different address per invitation</td></tr>
         <tr><td>Who must run the delivery servers</td><td class="t-risk">Signal</td><td class="t-good">Anyone, including the user</td><td class="t-good">Nobody, devices sync directly</td><td class="t-good">Anyone, including the user</td></tr>
+        <tr><td>Server can group your conversations</td><td class="t-risk">Yes, it knows the account</td><td class="t-mid">Isolation is optional and off by default</td><td class="t-good">No server</td><td class="t-good">No, one connection per device through a front</td></tr>
+        <tr><td>Connections per device to the server</td><td class="t-good">One</td><td class="t-mid">One, correlatable</td><td class="t-good">None, peer to peer</td><td class="t-good">One, through a front</td></tr>
         <tr><td>Delivers with no internet at all</td><td class="t-risk">No</td><td class="t-risk">No</td><td class="t-good">Yes, Bluetooth or a local network</td><td class="t-risk">No</td></tr>
         <tr><td>Post quantum key exchange</td><td class="t-good">Yes</td><td class="t-good">Yes</td><td class="t-risk">No</td><td class="t-good">Yes, hybrid</td></tr>
         <tr><td>Group encryption</td><td class="t-mid">Sender keys</td><td class="t-mid">Pairwise</td><td class="t-mid">Pairwise</td><td class="t-good">MLS tree</td></tr>
@@ -2859,6 +3025,7 @@
         <tr><td>2</td><td>20 August 2026</td><td>Padding measured and twice corrected, reachability and abuse resistance, groups, the media chapter and the codec</td></tr>
         <tr><td>3</td><td>25 August 2026</td><td>Meeting codes, a call between two implementations, echo cancellation measured against a room, the listening sessions corrected</td></tr>
         <tr><td>4</td><td>27 August 2026</td><td>Five rounds of review. The mailbox no longer stores framing an operator can read, the post quantum wrap is bound and signed, collection is acknowledged rather than destructive, one request type removed, and the composition checked in ProVerif. Two findings are fixed and deliberately not described here yet; see section 12</td></tr>
+        <tr><td>5</td><td>14 September 2026</td><td>The front: one connection per device to the mailbox with no party holding both the address and the tags, closing the connection shape leak without the per device socket cost, verified on a handset</td></tr>
       </tbody>
     </table>
   </div>
