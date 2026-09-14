@@ -5779,6 +5779,7 @@ dependencies = [
  "rotelyx-codec",
  "rotelyx-core",
  "rotelyx-crypto",
+ "rotelyx-directory",
  "rotelyx-media",
  "rotelyx-net",
  "rotelyx-wasm",

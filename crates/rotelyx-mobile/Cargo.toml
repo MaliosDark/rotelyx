@@ -22,6 +22,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # logic, and if anything ever does, that is the bug.
 rotelyx-crypto = { path = "../rotelyx-crypto" }
 rotelyx-wasm = { path = "../rotelyx-wasm" }
+rotelyx-directory = { path = "../rotelyx-directory" }
 rotelyx-codec = { workspace = true }
 rotelyx-media = { path = "../rotelyx-media" }
 rotelyx-net = { workspace = true }

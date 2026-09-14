@@ -343,6 +343,41 @@ What it must never do is overwrite a group id that is already written down.
 That would make one row answer for two conversations, and the next rejoin would
 pour one group's messages into the other's history.
 
+### Reaching the mailbox through a front
+
+A front is a relay between a phone and the mailbox that reads neither side's
+secret: the phone opens one connection to the front and runs its conversations
+as sealed sessions inside it, so the mailbox sees sessions with no address and
+no way to group them. See `docs/FRONT.md`. These operations run the phone's end
+of a front session.
+
+| Op | Args | Returns |
+|---|---|---|
+| `front.open` | `key` (the mailbox front key, base64), `id` (session id, base64) | `{handle, hello}` |
+| `front.seal` | `handle`, `payload` (base64) | sealed, base64 |
+| `front.unseal` | `handle`, `envelope` (base64) | payload, base64 |
+| `front.free` | `handle` | bool |
+
+`front.open` returns the hello to send to the front once, and a handle. Sealing
+advances a counter, so the session is kept on the handle rather than recomputed;
+`front.free` when the connection closes. Without a front the phone connects
+straight to `/mailbox` and none of this is used.
+
+### Constellation placement
+
+| Op | Args | Returns |
+|---|---|---|
+| `directory.placement` | `directory` (the JSON a mailbox serves at `/directory`), `tag` (hex) | array of `{id, url}`, most preferred first |
+
+`directory.placement` is pure computation and needs no handle. Given the
+constellation directory and the tag a message is about to be deposited or collected
+under, it returns which mailboxes hold that tag. Both ends of a conversation
+compute the same set from the same tag and directory, so a depositor writes
+where a collector reads without either being told where the other looked. A
+client that never fetches a directory never calls this and keeps its one
+configured mailbox, which is the one-replica case of the same placement. See
+`docs/CONSTELLATION.md`.
+
 ## Building
 
 ```sh

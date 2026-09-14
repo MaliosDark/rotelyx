@@ -131,6 +131,17 @@ fn str_arg(req: &Value, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("missing string argument `{name}`"))
 }
 
+/// A 32 byte tag from its hex, the shape a tag travels in on the mailbox wire.
+fn tag_from_hex(s: &str) -> Result<[u8; 32], String> {
+    let bytes = data_encoding::HEXLOWER_PERMISSIVE
+        .decode(s.as_bytes())
+        .map_err(|_| "the tag is not hex".to_string())?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "a tag must be 32 bytes".to_string())
+}
+
 fn u64_arg(req: &Value, name: &str) -> Result<u64, String> {
     req.get(name)
         .and_then(|v| v.as_u64())
@@ -411,6 +422,28 @@ fn dispatch(req: &Value) -> Res {
         "front.free" => {
             let handle = u64_arg(req, "handle")?;
             return Ok(json!(lock().fronts.remove(&handle).is_some()));
+        }
+
+        // Constellation placement: given the directory and a tag, which mailboxes
+        // hold that tag, most preferred first. Pure computation, no handle: the
+        // caller passes the directory it fetched and the tag it is about to
+        // deposit or subscribe under, and gets back the mailboxes to talk to.
+        // Both ends compute the same set from the same tag and directory, so a
+        // depositor writes where a collector reads without either being told.
+        // See `docs/CONSTELLATION.md`. Inert for a client that never fetches a
+        // directory: it keeps its one configured mailbox, the K=1 case.
+        "directory.placement" => {
+            let directory = str_arg(req, "directory")?;
+            let dir = rotelyx_directory::Directory::from_json(directory.as_bytes())
+                .map_err(|_| "the directory is not valid".to_string())?;
+            let tag_hex = str_arg(req, "tag")?;
+            let tag = tag_from_hex(&tag_hex)?;
+            let placed: Vec<Value> = dir
+                .placement(&tag)
+                .into_iter()
+                .map(|m| json!({ "id": m.id, "url": m.url }))
+                .collect();
+            return Ok(json!(placed));
         }
         _ => {}
     }
@@ -1245,5 +1278,41 @@ mod front_tests {
         // Freed, and gone.
         assert_eq!(dispatch(&json!({"op": "front.free", "handle": handle})).unwrap(), json!(true));
         assert!(dispatch(&json!({"op": "front.seal", "handle": handle, "payload": payload})).is_err());
+    }
+
+    /// The placement op turns a directory and a tag into the mailboxes to talk
+    /// to, in order, and agrees with the directory crate the mailbox serves.
+    /// This is the Dart engine's constellation path exercised through the same JSON
+    /// the phone would send: fetch the directory, then ask where a tag lives.
+    #[test]
+    fn the_placement_op_names_the_mailboxes_for_a_tag() {
+        let directory = r#"{"version":1,"replicas":2,"mailboxes":[
+            {"id":"m1","url":"wss://m1.telyx.me/mailbox"},
+            {"id":"m2","url":"wss://m2.telyx.me/mailbox"},
+            {"id":"m3","url":"wss://m3.telyx.me/mailbox"}]}"#;
+        let tag = "11".repeat(32);
+
+        let placed = dispatch(&json!({"op": "directory.placement", "directory": directory, "tag": tag}))
+            .expect("placement");
+        let list = placed.as_array().expect("a list");
+        assert_eq!(list.len(), 2, "K=2 returns two mailboxes");
+        for m in list {
+            assert!(m["url"].as_str().expect("url").starts_with("wss://"));
+            assert!(m["id"].as_str().is_some());
+        }
+
+        // The engine and the mailbox that serves the directory agree on the set.
+        let dir = rotelyx_directory::Directory::from_json(directory.as_bytes()).expect("dir");
+        let expected: Vec<String> =
+            dir.placement(&[0x11; 32]).into_iter().map(|m| m.id).collect();
+        let got: Vec<String> = list.iter().map(|m| m["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(got, expected, "the op orders mailboxes exactly as the crate does");
+
+        // A single-mailbox directory is the K=1 case, and a client with no
+        // directory never calls this: it keeps its one configured mailbox.
+        let one = r#"{"version":1,"replicas":2,"mailboxes":[{"id":"m1","url":"wss://m1.telyx.me/mailbox"}]}"#;
+        let placed = dispatch(&json!({"op": "directory.placement", "directory": one, "tag": tag}))
+            .expect("placement");
+        assert_eq!(placed.as_array().expect("a list").len(), 1);
     }
 }
