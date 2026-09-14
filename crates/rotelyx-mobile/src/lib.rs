@@ -455,6 +455,11 @@ fn dispatch(req: &Value) -> Res {
         // conversation that opened and would not send. Returns the commit, which
         // the caller must deliver before anything else.
         "session.rekeyAfterRestore" => json!(engine(s.rekey_after_restore())?),
+        // Whether that commit is still owed. A caller that collected what the
+        // mailbox was holding first asks this before rekeying: a commit from
+        // somebody else has settled the debt, and answering it with our own
+        // is the second commit at one epoch that splits a group.
+        "session.needsRekeyAfterRestore" => json!(s.needs_rekey_after_restore()),
 
         "session.trustRestoredState" => {
             engine(s.trust_restored_state())?;
@@ -551,6 +556,12 @@ fn dispatch(req: &Value) -> Res {
         "session.rosterDetail" => json!(engine(s.roster_detail())?),
 
         "session.roster" => json!(engine(s.roster())?),
+        // What names a conversation for as long as it exists: not the epoch,
+        // which moves; not the label, which two groups can share; not the
+        // meeting code, which is spent. It is here so the application can tell
+        // that a group it is joining is one it already has a history of, and
+        // keep that history instead of starting a second row beside it.
+        "session.groupId" => json!(engine(s.group_id())?),
         "session.epoch" => json!(s.epoch()),
         "session.memberCount" => json!(s.member_count()),
         "session.safetyNumber" => json!(engine(s.safety_number())?),

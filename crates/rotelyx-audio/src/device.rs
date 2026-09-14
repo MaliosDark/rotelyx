@@ -17,6 +17,20 @@
 //! two channels and playback writes the same sample to both, which is correct
 //! for a voice call and wrong for anything else.
 //!
+//! # A member of a conversation that is not a person
+//!
+//! [`Capture::from_file`] and [`Playback::nowhere`] put a call on a machine
+//! with no sound card and nobody in front of it: what would have gone to the
+//! microphone is read from a file, and what would have gone to the speaker is
+//! dropped (or written down, by `ROTELYX_CALL_DUMP`, which already existed for
+//! exactly this reason -- a person at a terminal cannot listen to a call to
+//! check it works).
+//!
+//! That is how the load test speaks: a program generates speech, writes it into
+//! a pipe, and a member of the group says it. Nothing about the call knows the
+//! difference, which is the point -- a test that took a different path through
+//! the code would be measuring the test.
+//!
 //! # The lock in the callback
 //!
 //! An audio callback must not block, and these take a mutex. That is a real
@@ -89,14 +103,25 @@ impl Drop for DeviceThread {
 /// The microphone.
 pub struct Capture {
     buffer: Buffer,
-    _thread: DeviceThread,
+    /// None when nothing is being read from: a call fed from a file that has
+    /// ended, which sends silence rather than failing.
+    _thread: Option<DeviceThread>,
     channels: usize,
+    /// Whether this is a file rather than a device.
+    ///
+    /// It changes one thing, and that thing matters: a microphone that has
+    /// fallen behind is holding audio that is *late*, and the call throws the
+    /// excess away rather than delivering a conversation that drifts further
+    /// behind for ever. A file is not late. It is a queue of speech waiting to
+    /// be said, and discarding it deletes words -- measured, a third of every
+    /// utterance. See `Call::send_all_ready`.
+    from_a_file: bool,
 }
 
 /// The speaker.
 pub struct Playback {
     buffer: Buffer,
-    _thread: DeviceThread,
+    _thread: Option<DeviceThread>,
 }
 
 /// Ask a device for exactly what the codec wants.
@@ -184,9 +209,98 @@ impl Capture {
 
         Ok(Self {
             buffer,
-            _thread: thread,
+            _thread: Some(thread),
             channels: taps,
+            from_a_file: false,
         })
+    }
+
+    /// A microphone fed from a file, for a member that is not a person.
+    ///
+    /// The file holds 32 bit float samples, little endian, mono, at the codec's
+    /// rate -- the same bytes `ROTELYX_CALL_DUMP` writes, so what one call
+    /// heard can be fed straight into another. A FIFO is the usual choice: the
+    /// program on the other end writes an utterance whenever it has one, and is
+    /// reopened when it closes, so one pipe serves a whole conversation.
+    ///
+    /// Samples are handed over at the rate they would have been spoken. Reading
+    /// a three second clip in one go and pushing it all would overrun the
+    /// backlog and most of it would be dropped as stale, which is correct for a
+    /// microphone falling behind and wrong for a file: the file is not late,
+    /// it is early.
+    ///
+    /// When there is nothing to read the call sends nothing, which is what a
+    /// person who is not talking sounds like.
+    pub fn from_file(path: std::path::PathBuf) -> Result<Self> {
+        use std::io::Read as _;
+
+        let buffer: Buffer = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_BACKLOG)));
+        let sink = Arc::clone(&buffer);
+
+        // A tenth of a second in hand: enough that a scheduling hiccup does
+        // not cut a word, short enough that hanging up does not leave speech
+        // still waiting to be said.
+        const AHEAD: usize = SAMPLE_RATE as usize / 10;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let joiner = std::thread::Builder::new()
+            .name("rotelyx-feed".into())
+            .spawn(move || {
+                let mut bytes = [0u8; 4096];
+                let mut spare: Vec<u8> = Vec::new();
+                'outer: while !flag.load(Ordering::Relaxed) {
+                    // Opening blocks until something writes, which is what a
+                    // FIFO does and what makes this wait quietly rather than
+                    // spin.
+                    let Ok(mut file) = std::fs::File::open(&path) else {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    };
+                    loop {
+                        if flag.load(Ordering::Relaxed) {
+                            break 'outer;
+                        }
+                        if drain_lock(&sink).len() >= AHEAD {
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                            continue;
+                        }
+                        let read = match file.read(&mut bytes) {
+                            Ok(0) => break, // the writer closed; wait for the next
+                            Ok(n) => n,
+                            Err(_) => break,
+                        };
+                        spare.extend_from_slice(&bytes[..read]);
+                        let whole = spare.len() / 4 * 4;
+                        {
+                            let mut b = drain_lock(&sink);
+                            for s in spare[..whole].chunks_exact(4) {
+                                b.push_back(f32::from_le_bytes([s[0], s[1], s[2], s[3]]));
+                            }
+                            while b.len() > MAX_BACKLOG {
+                                b.pop_front();
+                            }
+                        }
+                        spare.drain(..whole);
+                    }
+                }
+            })
+            .context("starting the thread that reads speech from a file")?;
+
+        Ok(Self {
+            buffer,
+            _thread: Some(DeviceThread {
+                stop,
+                joiner: Some(joiner),
+            }),
+            channels: 1,
+            from_a_file: true,
+        })
+    }
+
+    /// Whether what is waiting here is late audio or queued speech.
+    pub fn from_a_file(&self) -> bool {
+        self.from_a_file
     }
 
     /// Take exactly `n` samples, or nothing if that many have not arrived.
@@ -265,8 +379,20 @@ impl Playback {
 
         Ok(Self {
             buffer,
-            _thread: thread,
+            _thread: Some(thread),
         })
+    }
+
+    /// A speaker on a machine with none, for a member that is nobody.
+    ///
+    /// Everything queued is thrown away. What was going to be played is still
+    /// offered to `ROTELYX_CALL_DUMP` before it reaches here, so a call with no
+    /// speaker can still be listened to afterwards, or transcribed as it runs.
+    pub fn nowhere() -> Self {
+        Self {
+            buffer: Arc::new(Mutex::new(VecDeque::new())),
+            _thread: None,
+        }
     }
 
     /// Queue decoded audio.

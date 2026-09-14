@@ -153,6 +153,59 @@ enum Command {
         bot: bool,
     },
 
+    /// Meet a phone through the mailbox, and stay in the conversation.
+    ///
+    /// The transport the phone client speaks. `listen` and `connect` are the
+    /// direct one, which no phone dials. With a code or link from a phone,
+    /// this knocks and joins; with `--host`, it shows a code for a phone to
+    /// read; with neither, it carries on the conversation this identity
+    /// already has.
+    Meet {
+        /// A meeting code or link from a phone. Omit to host or to carry on.
+        #[arg(allow_hyphen_values = true)]
+        code: Option<String>,
+
+        /// What this side is called in the conversation.
+        #[arg(long, default_value = "bot")]
+        name: String,
+
+        /// The mailbox to meet at. A link that names one wins over the
+        /// default; this flag wins over both.
+        #[arg(long, value_name = "URL")]
+        mailbox: Option<String>,
+
+        /// Mint a code and wait at it, rather than reading one.
+        #[arg(long)]
+        host: bool,
+
+        /// Route calls through this relay. Without it there are no calls.
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
+
+        /// Where a call of more than two meets, which the relay publishes at
+        /// `/room`.
+        ///
+        /// `auto` reads it from the relay named by `--relay`, which is what
+        /// anybody running both would want and saves pasting a long address.
+        /// Without it a group call is refused rather than opened half deaf:
+        /// with no room, two members hear each other and the rest hear
+        /// nothing.
+        #[arg(long, value_name = "ADDRESS|auto")]
+        room: Option<String>,
+
+        /// A PNG the others show beside what this side says, the way a phone
+        /// shows a person's picture. Small: it travels as one message.
+        #[arg(long, value_name = "FILE")]
+        picture: Option<PathBuf>,
+
+        /// Speak JSON instead of sentences, for a program rather than a
+        /// person. The same events and instructions as `listen --bot`, plus
+        /// `proposed` and `confirm`: on this transport somebody has to agree
+        /// before a third person is in.
+        #[arg(long)]
+        bot: bool,
+    },
+
     /// Dial a peer and report whether a direct path is ever established.
     ///
     /// # What this is for
@@ -218,6 +271,10 @@ macro_rules! aside {
         if $wire == Wire::Json { eprintln!($($arg)*) } else { println!($($arg)*) }
     };
 }
+
+// Declared here rather than with the others at the top, because it uses the
+// macro above and a `macro_rules!` is only visible below its definition.
+mod meet;
 
 /// The identity this member is in the roster under.
 ///
@@ -384,6 +441,32 @@ fn start_call(conversation: &Conversation, me: &Member, paths: PathPolicy) -> Re
     );
 }
 
+/// Ask a relay where its room is.
+///
+/// The relay serves the room's address at `/room`, as plain text, because it is
+/// an address and not a secret: it names the relay, which the caller is already
+/// talking to. Read once at start rather than per call, the way the phone holds
+/// it in its configuration.
+async fn room_address(relay: &str) -> Result<String> {
+    let url = format!("{}/room", relay.trim_end_matches('/'));
+    let body = reqwest::get(&url)
+        .await
+        .with_context(|| format!("asking {url} where its room is"))?
+        .error_for_status()
+        .with_context(|| {
+            format!("{url} did not answer with a room: the relay may be running without --room")
+        })?
+        .text()
+        .await
+        .context("reading the room address")?;
+
+    let address = body.trim().to_string();
+    if address.is_empty() {
+        bail!("{url} answered with nothing");
+    }
+    Ok(address)
+}
+
 /// This member's sender index, agreed without exchanging anything.
 ///
 /// Every frame is keyed per sender, so the two sides must not pick the same
@@ -444,11 +527,13 @@ async fn chat(
                     (Wire::Json, Some(raw)) => match bot::parse(&raw) {
                         Ok(BotCommand::Send { text }) => Some(text),
                         Ok(BotCommand::Members) => {
-                            for who in conversation.roster() {
-                                wire.emit(&Event::Joined {
-                                    who: short_id(&who.identity),
-                                });
-                            }
+                            wire.emit(&Event::Roster {
+                                members: conversation
+                                    .roster()
+                                    .iter()
+                                    .map(|who| short_id(&who.identity))
+                                    .collect(),
+                            });
                             wire.emit(&Event::Members {
                                 count: conversation.member_count(),
                             });
@@ -490,6 +575,32 @@ async fn chat(
                             continue;
                         }
                         Ok(BotCommand::Quit) => None,
+                        // Admission on this transport is the invitation
+                        // itself: whoever holds a code the listener issued
+                        // is in. There is no proposal to agree to.
+                        Ok(BotCommand::Picture { .. }) => {
+                            wire.emit(&Event::refused(
+                                "pictures travel on the mailbox transport; this is a direct session",
+                            ));
+                            continue;
+                        }
+                        // A direct session refuses calls outright: it has no
+                        // call setup to agree a per-call key with, so every
+                        // call inside an epoch would reuse the first one's
+                        // nonces. `start_call` says the same thing at length.
+                        Ok(BotCommand::Call) | Ok(BotCommand::Hangup) => {
+                            wire.emit(&Event::refused(
+                                "calls belong to the mailbox transport, which carries the \
+                                 signalling that keys them: use `meet`",
+                            ));
+                            continue;
+                        }
+                        Ok(BotCommand::Confirm) | Ok(BotCommand::Dismiss) => {
+                            wire.emit(&Event::refused(
+                                "nothing is proposed on a direct session: people are let in by invitation, not by agreement",
+                            ));
+                            continue;
+                        }
                         Err(problem) => {
                             wire.emit(&Event::refused(problem));
                             continue;
@@ -948,6 +1059,55 @@ async fn main() -> Result<()> {
             .await?;
             resume::save(&paths, &here, &me, &conversation, &passphrase)?;
             endpoint.close().await;
+        }
+
+        Command::Meet {
+            code,
+            name,
+            mailbox,
+            host,
+            relay,
+            room,
+            picture,
+            bot,
+        } => {
+            let wire = if bot { Wire::Json } else { Wire::Human };
+            let picture = match picture {
+                Some(path) => Some(
+                    std::fs::read(&path)
+                        .with_context(|| format!("reading the picture at {}", path.display()))?,
+                ),
+                None => None,
+            };
+            // `auto` means ask the relay. The address changes only when the
+            // relay's identity file does, so a caller that pastes it is not
+            // wrong -- this is for the common case of running both.
+            let room = match room.as_deref() {
+                Some("auto") => Some(
+                    room_address(relay.as_deref().context(
+                        "--room auto needs --relay: the room belongs to a relay",
+                    )?)
+                    .await?,
+                ),
+                other => other.map(str::to_string),
+            };
+
+            meet::meet(
+                &paths.identity,
+                identity,
+                &passphrase,
+                meet::Args {
+                    code,
+                    name,
+                    mailbox,
+                    host,
+                    relay,
+                    room,
+                    picture,
+                    wire,
+                },
+            )
+            .await?;
         }
 
         Command::Probe {

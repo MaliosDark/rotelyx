@@ -25,32 +25,7 @@ use rotelyx_crypto::{Conversation, Member, Received};
 use rotelyx_net::{NetConfig, PathPolicy, RelayPolicy, RelayUrl, SecretKey};
 use tokio::sync::mpsc;
 
-/// What the window asks a *running* session to do.
-///
-/// Starting a session is not here: that goes through the `start` IPC command,
-/// which decides the role once and then owns the task. Only in-session
-/// messages travel on this channel.
-#[derive(Debug)]
-pub enum Command {
-    Send {
-        text: String,
-    },
-    /// Start talking. Refused, with a reason, on a session that may go direct.
-    StartCall,
-    /// Stop talking. The session stays up.
-    EndCall,
-    Hangup,
-    /// Remove a member, by the key that identifies them.
-    ///
-    /// A key rather than a name: two members can choose the same label, and a
-    /// position in the tree shifts as people come and go, so a caller holding
-    /// one across an epoch would remove somebody else.
-    Remove {
-        key: String,
-    },
-    /// Say who is here, so the window can offer to remove one of them.
-    WhoIsHere,
-}
+pub use rotelyx_meeting::{Command, Event};
 
 /// A member's identity, short enough to read and long enough to mean something.
 ///
@@ -62,88 +37,6 @@ fn hex_id(identity: &[u8]) -> String {
         .take(8)
         .map(|b| format!("{b:02x}"))
         .collect::<String>()
-}
-
-/// What the engine tells the window. Serialised to the webview as JSON.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum Event {
-    Status {
-        text: String,
-    },
-    Listening {
-        addr: String,
-        id: String,
-    },
-    Connected {
-        peer: String,
-        safety_number: String,
-        direct: bool,
-    },
-    Message {
-        text: String,
-    },
-    CallStarted {
-        kbit: usize,
-        mono: bool,
-    },
-    /// Milliseconds of audio waiting to be played.
-    ///
-    /// Sent while a call runs because it is the one number that tells a person
-    /// what they are about to hear: a figure that keeps climbing is the call
-    /// falling behind, and after the call it is too late to know.
-    CallLevel {
-        queued_ms: usize,
-    },
-    /// `concealed` is frames that arrived and could not be turned into sound.
-    ///
-    /// Reported beside `received` because the two together are the difference
-    /// between a call that is quiet and a call that is wrong. A frame the
-    /// decoder cannot use is concealed rather than counted, which is right for
-    /// packet loss and hides a format mismatch completely: a real call ran with
-    /// eleven received frames out of three thousand and said nothing at all.
-    CallEnded {
-        sent: u64,
-        received: u64,
-        concealed: u64,
-        queued_ms: usize,
-        dropped_ms: usize,
-    },
-    /// The membership changed, with who rather than only how many.
-    ///
-    /// A commit can remove one member and add another at once, which leaves the
-    /// count where it was. An event carrying only a number then reports "2
-    /// members" while the person on the other side has been replaced. See ADV-7
-    /// in the threat model: surfacing membership changes is a security control,
-    /// and a change without names is not surfaced.
-    GroupChanged {
-        members: usize,
-        added: Vec<String>,
-        removed: Vec<String>,
-    },
-    /// Everybody in the conversation, with the key each is removed by.
-    Members {
-        members: Vec<Present>,
-    },
-    Disconnected {
-        reason: String,
-    },
-    Error {
-        text: String,
-    },
-}
-
-/// One member, as the window needs to show and act on them.
-///
-/// Not `rotelyx_crypto::Member`, which is this side's own signing identity. A
-/// name collision worth keeping apart: one is who we are, the other is a row on
-/// a list of who is here.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct Present {
-    /// What they called themselves. It proves nothing on its own.
-    pub label: String,
-    /// What removing them takes.
-    pub key: String,
 }
 
 /// Everything one window needs to run a session.
@@ -485,6 +378,8 @@ impl Engine {
             peer: peer.to_string(),
             safety_number: rotelyx_core::safety_number(&my_name, &peer),
             direct,
+            members: conversation.member_count(),
+            epoch: conversation.epoch(),
         });
     }
 
@@ -562,10 +457,14 @@ impl Engine {
             tokio::select! {
                 command = rx.recv() => {
                     match command {
-                        // Both belong to a conversation met through a code,
-                        // which is the other transport. A session on this one
-                        // has exactly two members and no roster to act on.
-                        Some(Command::Remove { .. }) | Some(Command::WhoIsHere) => {}
+                        // All of these belong to a conversation met through a
+                        // code, which is the other transport. A session on this
+                        // one has exactly two members and no roster to act on.
+                        Some(Command::Remove { .. })
+                        | Some(Command::WhoIsHere)
+                        | Some(Command::Confirm)
+                        | Some(Command::Dismiss)
+                        | Some(Command::Picture { .. }) => {}
                         Some(Command::Send { text }) => {
                             match conversation.send(me, text.as_bytes()) {
                                 Ok(ciphertext) => {
@@ -662,6 +561,7 @@ impl Engine {
                     match conversation.receive(me, &frame.payload) {
                         Ok(Received::Message { bytes: plaintext, .. }) => self.emit(Event::Message {
                             text: String::from_utf8_lossy(&plaintext).into_owned(),
+                            from: None,
                         }),
                         // A commit. Surfacing it is a security control: MLS makes
                         // membership changes visible and a silent UI discards
@@ -675,6 +575,7 @@ impl Engine {
                                     .iter()
                                     .map(|p| hex_id(&p.identity))
                                     .collect(),
+                                by: change.by.as_ref().map(|p| hex_id(&p.identity)),
                             })
                         }
                         // A request to admit somebody, which changes nothing

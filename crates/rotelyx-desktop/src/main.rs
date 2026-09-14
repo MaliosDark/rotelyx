@@ -15,11 +15,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod chats;
 mod engine;
 mod handshake;
 mod keyfile;
-mod meeting;
 mod resume;
 
 use std::path::PathBuf;
@@ -28,11 +26,13 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use rotelyx_core::store::{self, Paths, StoredInvitation};
 use rotelyx_core::{epoch_at, Identity, Invitation};
-use rotelyx_net::EndpointAddr;
 use tauri::{Emitter, Manager};
 use tokio::sync::mpsc;
 
 use engine::{Command, Engine, Event};
+use rotelyx_meeting as meeting;
+use rotelyx_meeting::chats;
+pub(crate) use rotelyx_meeting::{decode_addr, encode_addr};
 
 /// Process wide state. One identity, one session at a time.
 struct App {
@@ -60,18 +60,6 @@ fn now_epoch() -> Result<u64> {
         .context("system clock is before the unix epoch")?
         .as_secs();
     Ok(epoch_at(secs))
-}
-
-pub(crate) fn encode_addr(addr: &EndpointAddr) -> Result<String> {
-    let json = serde_json::to_vec(addr).context("encoding address")?;
-    Ok(data_encoding::BASE64URL_NOPAD.encode(&json))
-}
-
-pub(crate) fn decode_addr(s: &str) -> Result<EndpointAddr> {
-    let bytes = data_encoding::BASE64URL_NOPAD
-        .decode(s.trim().as_bytes())
-        .context("address is not valid base64")?;
-    serde_json::from_slice(&bytes).context("address is not a valid Rotelyx address")
 }
 
 // ---------------------------------------------------------------------------
@@ -631,6 +619,16 @@ fn open_chat(
             &id,
             calls_as,
             relay,
+            // Where a group call meets. The window has no setting for it yet,
+            // so a call here is a call of two; `ROTELYX_ROOM` is what the
+            // relay prints at `/room`, for anybody testing a group one.
+            std::env::var("ROTELYX_ROOM").ok(),
+            // The desktop has no picture of its own yet; the phone draws an
+            // initial for it, as it does for anybody without one.
+            None,
+            // And carries on with the door shut: adding somebody to an old
+            // conversation is not on the desktop's screen yet.
+            None,
             emit.clone(),
             &mut rx,
         )
@@ -789,7 +787,9 @@ fn meet(
             receipts.unwrap_or(false),
             calls_as,
             relay,
+            std::env::var("ROTELYX_ROOM").ok(),
             keeping,
+            None,
             emit.clone(),
             &mut rx,
         )

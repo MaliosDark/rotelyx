@@ -146,12 +146,15 @@ impl From<Error> for JsValue {
 ///
 /// The first eight bytes of the identity, which is what every surface shows
 /// and what a caller naming an admin has to be able to hand back.
-fn short(identity: &[u8]) -> String {
-    identity
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect()
+/// A member's identity as the string every other field already uses for it.
+///
+/// This is the label the member joined under, the same value `receive` puts
+/// in `from` and `rosterDetail` puts in `label`. It used to be the first eight
+/// bytes as hex, which named a person "52697461" in one place and "Rita" in
+/// every other, so a client comparing the two (the admins list against the
+/// roster, say) never found a match and a bot greeted a hex string.
+fn label(identity: &[u8]) -> String {
+    String::from_utf8_lossy(identity).into_owned()
 }
 
 fn err(e: impl std::fmt::Display) -> Error {
@@ -384,7 +387,7 @@ impl Session {
             .conversation
             .as_ref()
             .ok_or_else(|| Error::new("no conversation yet"))?;
-        let names: Vec<String> = group.admins().iter().map(|who| short(who)).collect();
+        let names: Vec<String> = group.admins().iter().map(|who| label(who)).collect();
         serde_json::to_string(&names).map_err(|e| Error::new(format!("{e}")))
     }
 
@@ -411,11 +414,13 @@ impl Session {
         // rule off without saying so.
         let roster = group.roster();
         let mut admins: Vec<Vec<u8>> = Vec::with_capacity(wanted.len());
-        for label in &wanted {
+        for wanted_label in &wanted {
             let found = roster
                 .iter()
-                .find(|p| p.well_formed && &short(&p.identity) == label)
-                .ok_or_else(|| Error::new(format!("no member of this conversation is {label}")))?;
+                .find(|p| p.well_formed && &label(&p.identity) == wanted_label)
+                .ok_or_else(|| {
+                    Error::new(format!("no member of this conversation is {wanted_label}"))
+                })?;
             if !admins.contains(&found.identity) {
                 admins.push(found.identity.clone());
             }
@@ -894,9 +899,9 @@ impl Session {
                 }
             }
             rotelyx_crypto::Received::MembershipChanged(change) => {
-                let added: Vec<String> = change.added.iter().map(|p| short(&p.identity)).collect();
+                let added: Vec<String> = change.added.iter().map(|p| label(&p.identity)).collect();
                 let removed: Vec<String> =
-                    change.removed.iter().map(|p| short(&p.identity)).collect();
+                    change.removed.iter().map(|p| label(&p.identity)).collect();
                 let members = self
                     .conversation
                     .as_ref()
@@ -911,14 +916,14 @@ impl Session {
                     // act on; "she let him in" is one the rest of the group can
                     // weigh. Absent only when the commit came from outside the
                     // membership.
-                    "by": change.by.as_ref().map(|p| short(&p.identity)),
+                    "by": change.by.as_ref().map(|p| label(&p.identity)),
                 })
             }
             rotelyx_crypto::Received::AdditionProposed { by, joining } => {
-                let joining: Vec<String> = joining.iter().map(|p| short(&p.identity)).collect();
+                let joining: Vec<String> = joining.iter().map(|p| label(&p.identity)).collect();
                 serde_json::json!({
                     "kind": "proposed",
-                    "by": by.as_ref().map(|p| short(&p.identity)),
+                    "by": by.as_ref().map(|p| label(&p.identity)),
                     "joining": joining,
                 })
             }
@@ -933,12 +938,12 @@ impl Session {
                     value["added"] = serde_json::json!(change
                         .added
                         .iter()
-                        .map(|p| short(&p.identity))
+                        .map(|p| label(&p.identity))
                         .collect::<Vec<_>>());
                     value["removed"] = serde_json::json!(change
                         .removed
                         .iter()
-                        .map(|p| short(&p.identity))
+                        .map(|p| label(&p.identity))
                         .collect::<Vec<_>>());
                     value["members"] = serde_json::json!(self
                         .conversation
@@ -1496,6 +1501,20 @@ impl Session {
             .ok_or_else(|| Error::new("no conversation yet"))?
             .trust_restored_state();
         Ok(())
+    }
+
+    /// Whether a reopened session still owes the group a fresh epoch.
+    ///
+    /// A caller that drains what the mailbox was holding before it rekeys
+    /// asks this afterwards: a commit somebody else made in the meantime
+    /// settles the debt, and answering it with a rekey of our own is the
+    /// second commit at one epoch that splits a group.
+    #[wasm_bindgen(js_name = needsRekeyAfterRestore)]
+    pub fn needs_rekey_after_restore(&self) -> bool {
+        self.conversation
+            .as_ref()
+            .map(|c| c.needs_rekey())
+            .unwrap_or(false)
     }
 
     #[wasm_bindgen(js_name = rekeyAfterRestore)]
@@ -2809,6 +2828,53 @@ mod tests {
             }
         }
         sessions
+    }
+
+    /// Everything that names a member names them the same way.
+    ///
+    /// A message says `from: "member2"`, the roster says `label: "member2"`,
+    /// and the admins list and every membership change used to say
+    /// "6d656d62657232", which is the same eight bytes as hex. A client
+    /// comparing the admins list against the roster never found anybody,
+    /// and a bot greeting whoever `added` named greeted a hex string.
+    #[test]
+    fn a_member_is_named_the_same_way_in_every_event() {
+        let mut group = group_of(2);
+
+        // A membership change names who arrived and who let them in.
+        let carol = Session::new("carol").expect("identity");
+        let proposal = group[0]
+            .propose(&carol.key_package().expect("kp"))
+            .expect("propose");
+        let heard = group[1].receive(&proposal).expect("hear the request");
+        let heard: serde_json::Value = serde_json::from_str(&heard).expect("json");
+        assert_eq!(heard["kind"], "proposed");
+        assert_eq!(heard["by"], "member0");
+        assert_eq!(heard["joining"][0], "carol");
+
+        let invitation = group[1].confirm().expect("confirm");
+        let applied = group[0].receive(&invitation.commit).expect("apply");
+        let applied: serde_json::Value = serde_json::from_str(&applied).expect("json");
+        assert_eq!(applied["kind"], "membership");
+        assert_eq!(applied["added"][0], "carol");
+        assert_eq!(applied["by"], "member1");
+
+        // And the admins list takes the labels the roster shows, and gives
+        // them back.
+        let roster: Vec<serde_json::Value> =
+            serde_json::from_str(&group[0].roster_detail().expect("roster")).expect("json");
+        assert!(roster.iter().any(|m| m["label"] == "member1"));
+        group[0]
+            .set_admins(r#"["member1"]"#)
+            .expect("a label the roster shows names an admin");
+        group[0].settle().expect("settle");
+        let admins: Vec<String> =
+            serde_json::from_str(&group[0].admins().expect("admins")).expect("json");
+        assert_eq!(admins, vec!["member1".to_string()]);
+        assert!(
+            group[0].set_admins(r#"["6d656d62657231"]"#).is_err(),
+            "hex is not a name anybody in the roster has"
+        );
     }
 
     /// A message must reach every other member, not just whichever one

@@ -179,8 +179,23 @@ impl Call {
             .context("preparing to send audio")?;
 
         // The devices last, so a configuration error costs nothing.
-        let capture = device::Capture::open()?;
-        let playback = device::Playback::open()?;
+        //
+        // Two environment variables put a call on a machine with no sound card
+        // and nobody in front of it, which is how the load test speaks and
+        // listens: `ROTELYX_CALL_FEED` names a file (usually a FIFO) holding
+        // what this member says, and `ROTELYX_CALL_DEAF` says there is no
+        // speaker to play what it hears. They are read here rather than passed
+        // in because every caller of this function would otherwise have to
+        // carry two arguments it has no opinion about, and because the third
+        // one, `ROTELYX_CALL_DUMP`, is already read this way.
+        let capture = match std::env::var_os("ROTELYX_CALL_FEED") {
+            Some(path) => device::Capture::from_file(path.into())?,
+            None => device::Capture::open()?,
+        };
+        let playback = match std::env::var_os("ROTELYX_CALL_DEAF") {
+            Some(_) => device::Playback::nowhere(),
+            None => device::Playback::open()?,
+        };
 
         Ok(Self {
             capture,
@@ -273,8 +288,14 @@ impl Call {
 
         // Still behind after draining what a tick allows: the excess is old
         // audio and keeping it only moves the delay forward.
+        //
+        // Except when it is not old. A call fed from a file holds speech that
+        // has not been said yet, and throwing it away deletes words: measured
+        // on the load test, a third of every utterance vanished and the
+        // listener recorded something that no longer matched what was spoken.
+        // A microphone cannot get ahead; a file does nothing else.
         let keep = WINDOW + FRAME * MAX_PER_TICK;
-        if self.capture.backlog() > keep {
+        if !self.capture.from_a_file() && self.capture.backlog() > keep {
             let dropped = self.capture.backlog() - keep;
             self.capture.discard(dropped);
             self.dropped_samples += dropped as u64;

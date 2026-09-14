@@ -1621,6 +1621,13 @@ impl Conversation {
         self.restored_needs_rekey = false;
     }
 
+    /// Whether this copy still owes the group a fresh epoch before it may
+    /// send. True from being reopened until it has rekeyed or has applied a
+    /// commit somebody else made since, which clears the debt the same way.
+    pub fn needs_rekey(&self) -> bool {
+        self.restored_needs_rekey
+    }
+
     pub fn rekey_after_restore(&mut self, member: &Member) -> Result<Vec<u8>, GroupError> {
         let (commit, _welcome, _group_info) = self
             .group
@@ -1737,11 +1744,51 @@ impl Conversation {
         framed.extend_from_slice(&self.sent_seq.to_be_bytes());
         framed.extend_from_slice(plaintext);
 
-        self.group
-            .create_message(&sender.provider, &sender.signer, &framed)
-            .map_err(mls)?
-            .tls_serialize_detached()
-            .map_err(codec)
+        // Sent past the proposals waiting in the store, if they are all Adds.
+        //
+        // OpenMLS refuses to create an application message while any proposal
+        // is pending, at the sender, and every receiver of a proposal stores
+        // it. So from the moment one member asked to let somebody in until
+        // another member agreed, nobody in the group could say anything: the
+        // request that carries the newcomer's name and where they are waiting
+        // never went out, and the person who could have agreed was never
+        // told what to. The phone client swallowed the error, so the group
+        // simply went quiet.
+        //
+        // The refusal guards against a message reaching somebody a pending
+        // Remove is about to take out. This group never holds one of those:
+        // a removal is committed on the spot. An Add admits nobody until it is
+        // committed, so a message sent beside it reaches exactly the members
+        // it would have reached the moment before, and the proposals go back
+        // where they were the moment after, still referenced by the commit
+        // that will act on them. Anything other than an Add keeps the
+        // refusal.
+        let parked: Vec<QueuedProposal> = self.group.pending_proposals().cloned().collect();
+        if parked
+            .iter()
+            .any(|p| !matches!(p.proposal(), Proposal::Add(_)))
+        {
+            return self
+                .group
+                .create_message(&sender.provider, &sender.signer, &framed)
+                .map_err(mls)?
+                .tls_serialize_detached()
+                .map_err(codec);
+        }
+        for proposal in &parked {
+            self.group
+                .remove_pending_proposal(sender.provider.storage(), proposal.proposal_reference_ref())
+                .map_err(|e| GroupError::Mls(format!("{e:?}")))?;
+        }
+        let created = self
+            .group
+            .create_message(&sender.provider, &sender.signer, &framed);
+        for proposal in parked {
+            self.group
+                .store_pending_proposal(sender.provider.storage(), proposal)
+                .map_err(|e| GroupError::Mls(format!("{e:?}")))?;
+        }
+        created.map_err(mls)?.tls_serialize_detached().map_err(codec)
     }
 
     /// Process an incoming message.

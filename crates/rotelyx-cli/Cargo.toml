@@ -12,6 +12,10 @@ authors.workspace = true
 rotelyx-core.workspace = true
 rotelyx-crypto.workspace = true
 rotelyx-mailbox = { path = "../rotelyx-mailbox" }
+# The phone's transport. `meet` is the desktop's meeting loop on stdin and
+# stdout, so a bot reaches a phone with a flag and nothing else changed.
+rotelyx-meeting = { path = "../rotelyx-meeting" }
+rotelyx-wasm = { path = "../rotelyx-wasm" }
 # Devices and calls, shared with the desktop window.
 rotelyx-audio = { path = "../rotelyx-audio" }
 

@@ -23,6 +23,7 @@ rotelyx-net.workspace = true
 # mailbox, which is the only place a phone can be reached.
 rotelyx-wasm = { path = "../rotelyx-wasm" }
 rotelyx-mailbox-client = { path = "../rotelyx-mailbox-client" }
+rotelyx-meeting = { path = "../rotelyx-meeting" }
 # For the addressing bucket, which must be the same number in every client.
 rotelyx-mailbox = { path = "../rotelyx-mailbox" }
 

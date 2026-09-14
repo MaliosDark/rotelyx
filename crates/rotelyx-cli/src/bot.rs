@@ -100,6 +100,24 @@ pub enum Event {
     /// The size after a membership change.
     Members { count: usize },
 
+    /// Everybody here, by label, in answer to `members`. Not `joined`: that
+    /// is an arrival, and a bot that greets arrivals used to greet the whole
+    /// room every time anybody asked who was in it.
+    Roster { members: Vec<String> },
+
+    /// Somebody proposed letting `who` in, and it takes one more member to
+    /// agree. Answer with `confirm` or `dismiss`. Only on a conversation met
+    /// through the mailbox: on the direct transport there is nobody to ask.
+    Proposed {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+        who: String,
+    },
+
+    /// The meeting code this bot is waiting at, for whoever should join it,
+    /// and the same thing as a link the phone opens. Only when hosting.
+    Code { code: String, link: String },
+
     /// A call is running.
     CallStarted { kbit_per_second: usize, mono: bool },
     /// A call stopped, with what it did.
@@ -161,6 +179,15 @@ impl fmt::Display for Event {
             Event::Joined { who } => write!(f, "[joined: {who}]"),
             Event::Left { who } => write!(f, "[left: {who}]"),
             Event::Members { count } => write!(f, "[the group is now {count} members]"),
+            Event::Roster { members } => write!(f, "[here: {}]", members.join(", ")),
+            Event::Proposed { by, who } => write!(
+                f,
+                "[{} wants to let {who} in: /confirm or /dismiss]",
+                by.as_deref().unwrap_or("somebody")
+            ),
+            Event::Code { code, link } => {
+                write!(f, "waiting at {code}\n  or open on a phone: {link}")
+            }
             Event::CallStarted {
                 kbit_per_second,
                 mono,
@@ -203,6 +230,24 @@ pub enum Command {
     /// group is a bot that can do this, and the people in the group can see
     /// it did.
     Remove { who: String },
+    /// Show the others this picture, a PNG or JPEG as base64, the way a
+    /// person's picture is shown. Small: it travels as one message.
+    Picture { base64: String },
+    /// Start talking: ring the conversation, and open the audio when somebody
+    /// answers.
+    ///
+    /// A member that is a program still needs a voice and ears. Both come from
+    /// `ROTELYX_CALL_FEED` and `ROTELYX_CALL_DUMP`, which put a file where the
+    /// microphone and the speaker would be, so a machine with no sound card
+    /// can be in a call. Without them this opens the real devices, which is
+    /// what a person at a terminal wants.
+    Call,
+    /// Stop talking. The conversation stays.
+    Hangup,
+    /// Agree to the addition somebody proposed. See `Event::Proposed`.
+    Confirm,
+    /// Forget it without agreeing. The newcomer keeps waiting.
+    Dismiss,
     /// Leave.
     Quit,
 }
@@ -252,6 +297,14 @@ mod tests {
             Command::Remove { who: "4f2a".into() }
         );
         assert_eq!(parse(r#"{"do":"quit"}"#).unwrap(), Command::Quit);
+        assert_eq!(parse(r#"{"do":"confirm"}"#).unwrap(), Command::Confirm);
+        assert_eq!(
+            parse(r#"{"do":"picture","base64":"aGk="}"#).unwrap(),
+            Command::Picture { base64: "aGk=".into() }
+        );
+        assert_eq!(parse(r#"{"do":"dismiss"}"#).unwrap(), Command::Dismiss);
+        assert_eq!(parse(r#"{"do":"call"}"#).unwrap(), Command::Call);
+        assert_eq!(parse(r#"{"do":"hangup"}"#).unwrap(), Command::Hangup);
     }
 
     #[test]
@@ -303,6 +356,17 @@ mod tests {
             Event::Joined { who: "a".into() },
             Event::Left { who: "a".into() },
             Event::Members { count: 2 },
+            Event::Roster {
+                members: vec!["a".into(), "b".into()],
+            },
+            Event::Proposed {
+                by: Some("a".into()),
+                who: "b".into(),
+            },
+            Event::Code {
+                code: "RTLX1".into(),
+                link: "https://rotelyx.com/i#RTLX1".into(),
+            },
             Event::CallStarted {
                 kbit_per_second: 19,
                 mono: true,

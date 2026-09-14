@@ -107,6 +107,54 @@ fn two_members_between_them_can() {
 }
 
 #[test]
+fn the_group_can_still_talk_while_somebody_is_being_asked_about() {
+    // The proposal on its own admits nobody, and the other member cannot act
+    // on it without being told where the newcomer is waiting. That travels as
+    // a message, sent right after the proposal, so a group that cannot say
+    // anything while a proposal is pending is a group in which nobody can
+    // ever be let in. Which is what happened: the library refused to create
+    // any application message while a proposal was in its store, at the
+    // proposer and at every member who had heard it.
+    let (alice, bob, mut a, mut b) = pair();
+    let carol = Member::new(b"carol").expect("identity");
+    let kp = carol.key_package().expect("key package");
+
+    let proposal = a
+        .propose_invite(&alice, kp.key_package())
+        .expect("alice proposes");
+    b.receive(&bob, &proposal).expect("bob hears it");
+
+    // Both of them can still speak, and are heard.
+    let said = a
+        .send(&alice, b"carol is waiting at the meeting place")
+        .expect("alice can still send with her own proposal pending");
+    let heard = b.receive(&bob, &said).expect("bob hears it");
+    assert!(
+        matches!(&heard, Received::Message { bytes, .. } if bytes == b"carol is waiting at the meeting place"),
+        "bob heard something else: {heard:?}"
+    );
+
+    let reply = b
+        .send(&bob, b"letting her in")
+        .expect("bob can still send with alice's proposal pending");
+    let heard = a.receive(&alice, &reply).expect("alice hears it");
+    assert!(matches!(&heard, Received::Message { bytes, .. } if bytes == b"letting her in"));
+
+    // And the proposal is still there to be acted on: sending did not lose it.
+    let (commit, welcome) = b.confirm_additions(&bob).expect("bob confirms");
+    b.settle(&bob).expect("apply our own commit");
+    a.receive(&alice, &commit).expect("alice applies it");
+    let tree = b.ratchet_tree().expect("tree");
+    let mut c = Conversation::join(&carol, &welcome.expect("a welcome"), &tree).expect("carol joins");
+    assert_eq!(c.member_count(), 3);
+    assert_eq!(a.member_count(), 3);
+
+    // After the commit the three of them talk as one group.
+    let said = c.send(&carol, b"thanks").expect("carol sends");
+    assert!(matches!(a.receive(&alice, &said).expect("alice hears carol"), Received::Message { .. }));
+}
+
+#[test]
 fn the_proposer_cannot_be_the_second_pair_of_eyes() {
     let (alice, bob, mut a, mut b) = pair();
 
