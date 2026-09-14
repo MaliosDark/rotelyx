@@ -30,6 +30,7 @@
 //! separate. Two devices on one tag both receive. What it costs is that an
 //! envelope nobody acknowledges sits until its TTL.
 
+mod front;
 mod limits;
 mod tickets;
 mod vault;
@@ -393,6 +394,18 @@ enum Command {
         /// Where to keep the in-flight state until the signature comes back.
         #[arg(long)]
         state: PathBuf,
+    },
+
+    /// Run as a front: a websocket multiplexer in front of a mailbox, so many
+    /// phones reach it over few connections and it cannot tell which sessions
+    /// belong to one phone. See `docs/FRONT.md`.
+    Front {
+        /// The mailbox to sit in front of, as a ws URL, e.g. ws://host:3341.
+        #[arg(long, value_name = "URL")]
+        mailbox: String,
+        /// Where phones reach this front.
+        #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:3342")]
+        bind: SocketAddr,
     },
 
     /// Client side: turn a blind signature into a usable token.
@@ -1991,6 +2004,30 @@ impl Default for Waking {
 /// clippy went on reporting this function while the annotation looked like it
 /// had been dealt with.
 #[allow(clippy::too_many_arguments)]
+/// Run as a front: a multiplexer between phones and a mailbox.
+///
+/// It connects a pool to the mailbox's `/front`, serves the phone-facing
+/// `/front` and `/front-key`, and forwards sealed sessions between the two.
+/// The mailbox and the phones each see one half; the front reads neither
+/// secret. See `crate::front` and `docs/FRONT.md`.
+async fn run_front_proxy(mailbox: &str, bind: SocketAddr) -> Result<()> {
+    let front = front::Front::connect(mailbox)
+        .await
+        .context("a front needs a mailbox started with --front-key")?;
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("binding the front to {bind}"))?;
+    info!(%bind, mailbox, "front listening");
+    warn!("this front sees phone addresses and sealed blobs. It cannot see tags or content");
+    axum::serve(
+        listener,
+        front.router().into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .context("serving the front")?;
+    Ok(())
+}
+
 /// The front key, from a file, made on first use.
 ///
 /// A front seals phone sessions to this key, so it has to be the same across a
@@ -2215,6 +2252,7 @@ async fn main() -> Result<()> {
             state,
             signature,
         }) => return blind_redeem(&public, &state, &signature),
+        Some(Command::Front { mailbox, bind }) => return run_front_proxy(&mailbox, bind).await,
         None => {}
     }
 
@@ -3167,6 +3205,119 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             .expect("serve");
         });
         (format!("ws://{addr}"), public, server)
+    }
+
+    /// A front in front of a real mailbox, one upstream connection, and the
+    /// mailbox's public front key. The whole point is exercised: two phones,
+    /// one upstream, the same session id.
+    async fn spawn_front_proxy() -> (String, String, rotelyx_crypto::HybridPublicKey) {
+        let (base, public, _server) = spawn_front_server().await;
+        // One upstream connection, so if two phones' sessions were going to
+        // cross at the mailbox, this is the arrangement that makes them.
+        let front = front::Front::connect_with(&base, 1).await.expect("front");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                front.router().into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve front");
+        });
+        (format!("ws://{addr}"), base, public)
+    }
+
+    /// Open one sealed session on a front connection and subscribe to a tag.
+    async fn open_session(
+        client: &mut Client,
+        public: &rotelyx_crypto::HybridPublicKey,
+        id: [u8; rotelyx_crypto::SESSION_ID_LEN],
+        tag: &Tag,
+    ) -> rotelyx_crypto::FrontSession {
+        let (mut session, hello) =
+            rotelyx_crypto::FrontSession::open_to(public, id).expect("open");
+        let s_b64 = BASE64.encode(id.as_slice());
+        client
+            .send(WsMessage::Text(
+                serde_json::json!({"s": s_b64, "hello": BASE64.encode(hello.to_bytes().as_slice())})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("hello");
+        let subscribe = serde_json::json!({"op": "subscribe", "tags": [tag_hex(tag)]}).to_string();
+        let sealed = session.seal(subscribe.as_bytes()).expect("seal");
+        client
+            .send(WsMessage::Text(
+                serde_json::json!({"s": s_b64, "b": BASE64.encode(&sealed)}).to_string().into(),
+            ))
+            .await
+            .expect("subscribe");
+        let ready = recv_front(client, &mut session).await;
+        assert_eq!(ready["op"], "ready", "subscribe accepted: {ready}");
+        session
+    }
+
+    /// Two phones on one front, each choosing the same session id, subscribed
+    /// to different tags, never receive each other's envelopes.
+    ///
+    /// This is the property the whole front exists to keep: the id a phone
+    /// chose means nothing past its own connection, so one upstream connection
+    /// carrying both must not deliver one phone's tag to the other's session.
+    #[tokio::test]
+    async fn two_phones_with_the_same_session_id_never_cross() {
+        let (front_url, mailbox_url, public) = spawn_front_proxy().await;
+
+        let same_id = [9u8; rotelyx_crypto::SESSION_ID_LEN];
+        let tag_a = Tag::from_bytes(&[0xa1; 32]).expect("tag");
+        let tag_b = Tag::from_bytes(&[0xb2; 32]).expect("tag");
+
+        let mut phone_a = connect(&format!("{front_url}/front")).await;
+        let mut phone_b = connect(&format!("{front_url}/front")).await;
+        let mut sess_a = open_session(&mut phone_a, &public, same_id, &tag_a).await;
+        let mut sess_b = open_session(&mut phone_b, &public, same_id, &tag_b).await;
+
+        // A deposit under A's tag, straight to the mailbox behind the front.
+        let mut depositor = connect(&format!("{mailbox_url}/mailbox")).await;
+        let envelope = Envelope::seal(tag_a, b"for A only").expect("seal");
+        depositor
+            .send(WsMessage::Text(
+                serde_json::json!({"op": "deposit", "envelope": BASE64.encode(&envelope.to_bytes())})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("deposit");
+        recv_json(&mut depositor).await;
+
+        // A is handed it; B, with the same id but a different tag, is not.
+        let to_a = recv_front(&mut phone_a, &mut sess_a).await;
+        assert_eq!(to_a["op"], "envelope", "A gets its own deposit");
+
+        let b_saw = tokio::time::timeout(
+            Duration::from_millis(400),
+            recv_front(&mut phone_b, &mut sess_b),
+        )
+        .await;
+        assert!(b_saw.is_err(), "B must not receive A's envelope despite the shared id");
+
+        // And B does get its own, under the same id but its own tag: the front
+        // routes by which session, not by the id the two happened to share.
+        let mut depositor = connect(&format!("{mailbox_url}/mailbox")).await;
+        let for_b = Envelope::seal(tag_b, b"for B only").expect("seal");
+        depositor
+            .send(WsMessage::Text(
+                serde_json::json!({"op": "deposit", "envelope": BASE64.encode(&for_b.to_bytes())})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("deposit");
+        recv_json(&mut depositor).await;
+        let to_b = recv_front(&mut phone_b, &mut sess_b).await;
+        assert_eq!(to_b["op"], "envelope", "B gets its own deposit");
+
     }
 
     /// A phone reaches the mailbox through a front, sealed the whole way, and

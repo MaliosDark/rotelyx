@@ -104,13 +104,14 @@ one phone cannot hold a thousand.
    existing test passes unchanged, and a phone reaching the mailbox through a
    front, sealed the whole way, is tested end to end. Deploys on its own and
    changes nothing for a phone that does not use it.
-3. **Next.** The front itself: a small websocket multiplexer that serves the
-   `{s, hello|b|close}` framing to phones and forwards it onto a few upstream
-   `/front` connections, remapping session ids so two phones never collide at
-   the mailbox. This is where the socket saving at the mailbox comes from --
-   many phones over few upstream connections -- and it is the one piece whose
-   bug would be a privacy bug (two phones' sessions crossing), so it is built
-   and tested with somebody watching rather than overnight.
+3. **Done.** The front itself, `rotelyx-mailbox-server front --mailbox <url>`:
+   a websocket multiplexer that serves the `{s, hello|b|close}` framing and
+   `/front-key` to phones and forwards onto a pool of upstream `/front`
+   connections, giving every session a fresh upstream id from a counter that
+   never repeats and rewriting it both ways. The property that the id a phone
+   chose means nothing past its own connection is held by a test: two phones
+   choosing the same session id on one shared upstream connection, and one's
+   envelope never reaching the other while each still gets its own.
 4. **Next.** `rotelyx-wasm` and `rotelyx-mobile`: `front.open`, `front.seal`,
    `front.unseal`, so the phone seals with the same engine it does everything
    else with.

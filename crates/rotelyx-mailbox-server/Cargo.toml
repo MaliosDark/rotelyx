@@ -20,6 +20,8 @@ rotelyx-push = { path = "../rotelyx-push" }
 rotelyx-crypto = { path = "../rotelyx-crypto" }
 
 axum = { version = "0.8", features = ["ws"] }
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
 tokio.workspace = true
 futures-lite.workspace = true
 serde.workspace = true
@@ -67,7 +69,5 @@ reqwest = { version = "0.13", default-features = false, features = ["http2", "ru
 # The minter, for the paid-tier tests. Test-only: see rotelyx-capability/src/testing.rs.
 rotelyx-capability = { path = "../rotelyx-capability", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "net"] }
-tokio-tungstenite = "0.28"
-futures-util = "0.3"
 rotelyx-crypto = { path = "../rotelyx-crypto" }
 rotelyx-wasm = { path = "../rotelyx-wasm" }
