@@ -15,6 +15,7 @@ rotelyx-mailbox-server --bind 0.0.0.0:3341 --max-connections 500000
 | `/mailbox` | WebSocket. Deposit and subscribe |
 | `/front` | WebSocket. A front's multiplexed sessions, with `--front-key` |
 | `/front-key` | The public front key, with `--front-key` |
+| `/directory` | The constellation this mailbox belongs to, with `--directory` |
 | `/ping` | Health probe |
 | `/` | Landing page, self contained |
 

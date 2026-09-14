@@ -261,9 +261,13 @@ the whole path is ready and turned on.
    moving no tag, and an unknown field being ignored rather than refused. No
    network, no signing. The reviewable core, the way the front's sealed session
    was.
-2. `rotelyx-mailbox-server`: serve the current directory over HTTPS at a fixed
-   path, and accept `--directory` so a mailbox knows the constellation it is part
-   of. Inert without it: a mailbox with no directory is a constellation of one.
+2. **Done.** `rotelyx-mailbox-server`: serves the directory at `/directory`,
+   with a `--directory <file>` flag so a mailbox knows the constellation it is part
+   of. The file is validated at load, so a typo stops startup rather than a
+   client, and served verbatim, so a field a newer operator adds reaches clients
+   unchanged. Inert without the flag: a mailbox with no directory closes the
+   endpoint, and a client that gets nothing there treats it as a constellation of
+   one.
 3. The client's mailbox layer: pin the operator's domain rather than the exact
    hostnames, fetch the directory, and given a tag compute the placement, deposit
    to all replicas, subscribe to all replicas, and deduplicate by digest, which

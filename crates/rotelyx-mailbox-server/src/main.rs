@@ -390,6 +390,19 @@ struct Args {
     /// phones connect straight to `/mailbox` as before. See `docs/FRONT.md`.
     #[arg(long, value_name = "PATH")]
     front_key: Option<PathBuf>,
+
+    /// The constellation directory this mailbox belongs to, served at `/directory`.
+    ///
+    /// A JSON file listing every mailbox in the constellation and how many hold
+    /// each tag (see `rotelyx-directory` and `docs/CONSTELLATION.md`). A client
+    /// fetches it, computes on its own which mailboxes hold a conversation's
+    /// tag, and writes to and reads from those. The file is served verbatim, so
+    /// a field a newer operator adds reaches clients unchanged, and it is only
+    /// validated at load, not rewritten. Without this the `/directory` endpoint
+    /// is closed and a client that finds nothing treats this mailbox as a
+    /// constellation of one, which is exactly today's behaviour.
+    #[arg(long, value_name = "PATH")]
+    directory: Option<PathBuf>,
 }
 
 #[derive(clap::Subcommand)]
@@ -500,6 +513,13 @@ struct Server {
     /// `docs/FRONT.md` and the `--front-key` flag. Absent means `/front` is
     /// closed and phones connect straight to `/mailbox`.
     front_key: Option<rotelyx_crypto::HybridSecretKey>,
+
+    /// The constellation directory served at `/directory`, as the raw JSON bytes
+    /// loaded from `--directory`. Held verbatim rather than reparsed so a field
+    /// this build does not know still reaches a client. Absent means the
+    /// endpoint is closed: this mailbox is a constellation of one. See
+    /// `docs/CONSTELLATION.md`.
+    directory: Option<Vec<u8>>,
 
     /// Hands out connection ids. Never leaves the process and identifies a
     /// socket, not a person.
@@ -1544,6 +1564,26 @@ async fn front_key_handler(State(server): State<Arc<Server>>) -> Response {
     }
 }
 
+/// The constellation directory, verbatim.
+///
+/// A client fetches this to learn the constellation this mailbox belongs to, then
+/// computes on its own which mailboxes hold a conversation's tag. The bytes are
+/// served exactly as `--directory` loaded them, so a field a newer operator put
+/// in the file reaches the client unchanged; this build validated only that it
+/// parses. Absent means the endpoint is closed, and a client that gets a 404
+/// falls back to treating this mailbox as a constellation of one, which is the old
+/// single-mailbox behaviour.
+async fn directory_handler(State(server): State<Arc<Server>>) -> Response {
+    match server.directory.as_ref() {
+        None => (StatusCode::NOT_FOUND, "this mailbox serves no directory\n").into_response(),
+        Some(bytes) => (
+            [(header::CONTENT_TYPE, "application/json")],
+            bytes.clone(),
+        )
+            .into_response(),
+    }
+}
+
 /// A front's multiplexed connection.
 ///
 /// One websocket carries many phones' sessions. Each frame names a session by
@@ -1971,6 +2011,7 @@ fn router_full(
         Vec::new(),
         limits::TOTAL_CONNECTIONS,
         None,
+        None,
     )
 }
 
@@ -2067,6 +2108,21 @@ fn load_or_make_front_key(path: &Path) -> Result<rotelyx_crypto::HybridSecretKey
     Ok(secret)
 }
 
+/// The constellation directory, from a file, validated but kept verbatim.
+///
+/// Read the file, confirm it parses as a directory so a typo fails at startup
+/// rather than at a client, and return the raw bytes to serve unchanged. Parsing
+/// ignores fields this build does not know (see `rotelyx-directory`), so a file
+/// a newer operator wrote still loads here and reaches clients with its extra
+/// fields intact.
+fn load_directory(path: &Path) -> Result<Vec<u8>> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading the directory at {}", path.display()))?;
+    rotelyx_directory::Directory::from_json(&bytes)
+        .with_context(|| format!("the directory at {} is not valid", path.display()))?;
+    Ok(bytes)
+}
+
 fn router_stateful(
     ttl_seconds: u64,
     keepalive: Duration,
@@ -2082,6 +2138,7 @@ fn router_stateful(
     exempt: Vec<std::net::IpAddr>,
     max_connections: usize,
     front_key: Option<rotelyx_crypto::HybridSecretKey>,
+    directory: Option<Vec<u8>>,
 ) -> (Router, Arc<Server>) {
     let _ = ttl_seconds;
     let (wake, _) = broadcast::channel(1024);
@@ -2109,6 +2166,7 @@ fn router_stateful(
         limits: limits::Limits::with_max(exempt, max_connections),
         trusted_proxies,
         front_key,
+        directory,
     });
 
     // Reclaim memory from envelopes nobody collected.
@@ -2201,6 +2259,7 @@ fn router_stateful(
         .route("/mailbox", get(ws_handler))
         .route("/front", get(front_handler))
         .route("/front-key", get(front_key_handler))
+        .route("/directory", get(directory_handler))
         .with_state(Arc::clone(&server));
 
     (router, server)
@@ -2519,6 +2578,14 @@ async fn main() -> Result<()> {
         Some(path) => Some(load_or_make_front_key(path)?),
     };
 
+    // The constellation directory, if this mailbox is part of one. Validated here
+    // so a bad file stops startup rather than surprising a client, and held as
+    // the raw bytes so it is served exactly as written.
+    let directory = match args.directory.as_ref() {
+        None => None,
+        Some(path) => Some(load_directory(path)?),
+    };
+
     let (app, server) = router_stateful(
         args.ttl,
         KEEPALIVE,
@@ -2534,6 +2601,7 @@ async fn main() -> Result<()> {
         args.exempt_address.clone(),
         args.max_connections,
         front_secret,
+        directory,
     );
 
     // The word the page shows, judged every fifteen seconds from what this
@@ -2670,6 +2738,7 @@ mod tests {
             Vec::new(),
             limits::TOTAL_CONNECTIONS,
             None,
+            None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2720,6 +2789,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             limits::TOTAL_CONNECTIONS,
+            None,
             None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -3208,6 +3278,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             Vec::new(),
             limits::TOTAL_CONNECTIONS,
             Some(secret),
+            None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -3333,6 +3404,82 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         let to_b = recv_front(&mut phone_b, &mut sess_b).await;
         assert_eq!(to_b["op"], "envelope", "B gets its own deposit");
 
+    }
+
+    /// Start a server carrying a given directory (or none) and return its base
+    /// http URL. Only the `/directory` endpoint is exercised through this.
+    async fn spawn_directory_server(directory: Option<Vec<u8>>) -> String {
+        let (app, _server) = router_stateful(
+            DEFAULT_TTL_SECONDS,
+            KEEPALIVE,
+            None,
+            Meter::default(),
+            None,
+            Mailbox::new(DEFAULT_TTL_SECONDS),
+            None,
+            rotelyx_capability::blind::BlindVerifier::new(),
+            false,
+            Waking::default(),
+            Vec::new(),
+            Vec::new(),
+            limits::TOTAL_CONNECTIONS,
+            None,
+            directory,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve");
+        });
+        format!("http://{addr}")
+    }
+
+    /// A mailbox given a directory serves it verbatim, and a client parses it
+    /// back into the same set of mailboxes. This is the join between phase two
+    /// (serving) and the directory crate (placement): what a client fetches is
+    /// what it computes placement from.
+    #[tokio::test]
+    async fn a_mailbox_serves_the_directory_it_was_given() {
+        // A directory with a field this build has no name for, to prove it is
+        // served verbatim and not reparsed into a shape that drops it.
+        let raw = br#"{"version":5,"replicas":2,"region":"later","mailboxes":[{"id":"m1","url":"wss://m1.telyx.me/mailbox"},{"id":"m2","url":"wss://m2.telyx.me/mailbox"}]}"#;
+        let base = spawn_directory_server(Some(raw.to_vec())).await;
+
+        let served = reqwest::get(format!("{base}/directory"))
+            .await
+            .expect("directory")
+            .bytes()
+            .await
+            .expect("body");
+        assert_eq!(&served[..], &raw[..], "the file must be served byte for byte");
+
+        let parsed = rotelyx_directory::Directory::from_json(&served).expect("parse");
+        assert_eq!(parsed.version, 5);
+        assert_eq!(parsed.replicas, 2);
+        let placed: Vec<String> = parsed
+            .placement(&[0x11; 32])
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(placed.len(), 2, "both mailboxes hold the tag at K=2");
+    }
+
+    /// A mailbox with no directory closes the endpoint, so an old client and a
+    /// single-mailbox deployment fall back to a constellation of one.
+    #[tokio::test]
+    async fn a_mailbox_without_a_directory_closes_the_endpoint() {
+        let base = spawn_directory_server(None).await;
+        let answer = reqwest::get(format!("{base}/directory"))
+            .await
+            .expect("request");
+        assert_eq!(answer.status(), reqwest::StatusCode::NOT_FOUND);
     }
 
     /// A phone reaches the mailbox through a front, sealed the whole way, and
@@ -4428,6 +4575,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             Vec::new(),
             Vec::new(),
             limits::TOTAL_CONNECTIONS,
+            None,
             None,
         );
         tokio::spawn(async move {
