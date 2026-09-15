@@ -90,9 +90,40 @@ It computes placement, deposits to every replica, collects from every replica,
 and deduplicates by digest. Deposit with all replicas up, stop one, then
 collect: the message still arrives from the survivor.
 
-The phone application does not yet fetch a directory, so its conversations still
-live on one mailbox until that wiring lands; the protocol and the client core
-are in place.
+The phone application uses a constellation when its build carries one. It does
+not fetch the directory: the list is compiled in, for the same reason the
+mailbox list is, which is that a device asking a server where its mailboxes are
+would be handing that server the address of every user and the hour they opened
+the application. `/directory` is served for clients that would rather ask, and
+for an operator checking what a mailbox believes it is part of.
+
+What the application does with it: one connection per mailbox, each address
+subscribed only on the mailboxes that hold it, deposits to those same ones, and
+the second copy of an envelope dropped on arrival. A mailbox going down is not
+reported as a disconnection while another still answers.
+
+Two honest limits. The browser build cannot compute placement yet, because that
+lives in the native core, so it uses every mailbox in the directory instead:
+more traffic, same delivery. And a device pointed at a mailbox outside the
+constellation stays on that one alone, which is deliberate, since spreading
+somebody's mail onto servers they did not choose is the opposite of why they
+would run their own.
+
+## The name on the page
+
+`--name <NAME>` puts that name in the corner of the landing page, on a small
+seal. It exists so a person opening the page can compare the name they were told
+to expect against the one the server states, beside the URL in the address bar.
+
+It is worth being exact about what that is and is not. It is a convenience for a
+human. It is **not** a security control: a page that copies the markup can state
+any name it likes, and nothing about the seal is checked by anything. What
+actually establishes that a mailbox is the right one is the TLS certificate, the
+domain it is under, and the safety numbers two people compare in the
+application. Presenting a badge as proof would teach people to trust a picture,
+which is worse than having no badge at all.
+
+Without the flag the page shows no name, exactly as every build before it.
 
 ## Set the ceiling to the machine
 

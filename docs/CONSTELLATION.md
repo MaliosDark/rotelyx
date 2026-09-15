@@ -280,9 +280,26 @@ the whole path is ready and turned on.
    subscribe to, the ones to drop, and the ones kept (carrying their new address,
    so a move is reconnected to). A set change that did not reorder a tag's top
    set is a no-op for that tag. Both are on the mobile ABI as
-   `directory.placementDelta`. What remains is the application wiring: the phone
-   fetching a directory on a schedule and applying the delta to its live
-   subscriptions.
+   `directory.placementDelta`.
+5. **Done, and running.** The application: the phone keeps one connection per
+   mailbox, subscribes each address only on the mailboxes that hold it, deposits
+   to those same ones, drops the second copy of an envelope on arrival, and
+   treats a mailbox going down as nothing to report while another still answers.
+   The directory is **compiled into the build** rather than fetched, for the
+   reason the mailbox list already was: a device that asked a server which
+   mailboxes to use would be telling that server the address of every user and
+   when they opened the application. Changing the set costs a release, which is
+   the right price for infrastructure. `Directory::supersedes` and
+   `placement_delta` are therefore built and tested but not yet on the path a
+   phone takes; they are what a fetched directory would use.
+
+Two limits worth stating plainly. The browser build cannot compute placement,
+because placement lives in the native core, so it falls back to using every
+mailbox in the directory: the set it writes to still contains the set the other
+end reads from, so delivery is unaffected and only the traffic saving is lost.
+And a device pointed at a mailbox outside the constellation stays on that one
+alone, deliberately: spreading somebody's mail onto servers they did not choose
+is the opposite of the reason to run your own.
 
 Not built, and deliberately deferred: constant-rate cover traffic (decoy tags),
 which was considered and set aside because the front, the constellation, and the

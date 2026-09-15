@@ -34,9 +34,15 @@ place anything hard to classify ended up:
 
 | Name | Purpose | Status |
 |---|---|---|
-| `amber.telyx.me` | Relay for peers that cannot hole punch | DNS and nginx configured, **backend not yet running** |
-| `m1.telyx.me` | Blind mailbox | **Live and verified**, `101` through the full chain |
+| `amber.telyx.me` | Relay for peers that cannot hole punch | **Live**, serving its page and its room |
+| `orvexa.telyx.me` | Blind mailbox, constellation member | **Live and verified**, `101` through the full chain |
+| `caelix.telyx.me` | Blind mailbox, constellation member | **Live and verified** |
+| `nyxara.telyx.me` | Blind mailbox, constellation member | **Live and verified** |
 | `rotelyx.com` | Static site and browser client | Content in `site/`, ready to upload |
+
+The three mailboxes are one **constellation**: each conversation's mail is kept
+on two of them, so one going down loses nothing. See
+[the constellation](#3c-the-constellation) below and `docs/CONSTELLATION.md`.
 
 ### Network layout
 
@@ -286,7 +292,7 @@ rotelyx-mailbox-server --bind 0.0.0.0:3341 --max-connections 500000 \
 ### nginx
 
 Same shape as the relay, different port and path. Add to **both** the `:80` and
-`:443` blocks for `m1.telyx.me`, before `location /`:
+`:443` blocks for `orvexa.telyx.me`, before `location /`:
 
 ```nginx
 	location /mailbox {
@@ -382,6 +388,107 @@ serve an expired envelope.
 | Connecting addresses | **Yes** |
 
 The last three are ADV-3, and the reason every client refuses a direct path: taking one would trade this exposure for handing the peer an address instead.
+
+---
+
+## 3c. The constellation
+
+Three mailboxes, each conversation's mail kept on two of them. One can be lost
+without losing anything, the load spreads, and no single mailbox sees the whole
+of a conversation. The design and why it is shaped this way are in
+`docs/CONSTELLATION.md`; this section is the operating side.
+
+### The directory
+
+One file, the same on every mailbox, naming the members and how many hold each
+address:
+
+```json
+{
+  "version": 1,
+  "replicas": 2,
+  "mailboxes": [
+    {"id": "orvexa", "url": "wss://orvexa.telyx.me/mailbox"},
+    {"id": "caelix", "url": "wss://caelix.telyx.me/mailbox"},
+    {"id": "nyxara", "url": "wss://nyxara.telyx.me/mailbox"}
+  ]
+}
+```
+
+`id` is what placement hashes, so **an id never changes** once it is in use:
+change one and every address it held moves to a different mailbox. `url` may
+change freely, which is what lets a mailbox move without a reshuffle. Bump
+`version` whenever the set changes.
+
+Serve it by starting each mailbox with `--directory /path/to/directory.json`.
+Without the flag `/directory` is closed and that mailbox is a constellation of
+one, which is the old single-mailbox behaviour.
+
+### Starting a member
+
+```sh
+rotelyx-mailbox-server --bind 0.0.0.0:3341 \
+    --name nyxara \
+    --directory ~/rotelyx-directory.json \
+    --mailbox-state ~/rmbx-store/store
+```
+
+`--name` only puts the name on the landing page for a person to read; it is not
+a security control and nothing checks it. `--mailbox-state` needs
+`ROTELYX_MAILBOX_PASSPHRASE` in the environment, because undelivered envelopes
+on disk in the clear would hand a seized machine the routing metadata the whole
+design exists to hide.
+
+Stop the service with **SIGINT, not SIGTERM**. The store is written on a five
+minute sweep and again on a graceful shutdown, and the graceful path listens for
+SIGINT; stopped with SIGTERM the process exits without that final write and a
+restart loses whatever arrived since the last sweep. Under systemd that is
+`KillSignal=SIGINT`.
+
+### nginx, per member
+
+Each hostname proxies to its own mailbox. The WebSocket location needs the
+upgrade headers and long timeouts; `/ping` is a plain proxy:
+
+```nginx
+location /mailbox {
+    proxy_pass http://MAILBOX_HOST:3341;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host       $host;
+    proxy_read_timeout 7d;
+    proxy_send_timeout 7d;
+    proxy_buffering off;
+}
+location = /ping { proxy_pass http://MAILBOX_HOST:3341; }
+```
+
+### The firewall, which is the one that bites
+
+A member whose mailbox is running and reachable from its own network can still
+answer `502` through nginx, because **`ufw` on the mailbox host blocks the port
+to the nginx host**. The symptom is exact and worth recognising: the origin is
+up, the operator can reach it locally, and every request through the proxy is a
+502. On each member:
+
+```sh
+sudo ufw allow from NGINX_HOST to any port 3341 proto tcp
+```
+
+### Checking it
+
+`/ping` on every member, then the whole path end to end:
+
+```sh
+cargo run --release --example constellation -- \
+    directory.json "a phrase" roundtrip "hello"
+```
+
+It places the address, deposits to both holders, collects from both, and
+deduplicates. To see the failover rather than assume it: deposit with every
+member up, stop one, then collect. The message still arrives from the survivor,
+and that is the whole claim.
 
 ---
 
@@ -632,8 +739,8 @@ curl -s -o /dev/null -w "%{http_code}\n" https://amber.telyx.me/ping
 | Endpoint | Result |
 |---|---|
 | `https://amber.telyx.me/relay` | `101 Switching Protocols` |
-| `https://m1.telyx.me/ping` | `200`, body `ok` |
-| `https://m1.telyx.me/mailbox` | `101 Switching Protocols` |
+| `https://orvexa.telyx.me/ping` | `200`, body `ok` |
+| `https://orvexa.telyx.me/mailbox` | `101 Switching Protocols` |
 | `https://rotelyx.com/mailbox` | `101 Switching Protocols` |
 
 Both run through Cloudflare, then pfSense doing HAProxy with TLS, then nginx on
