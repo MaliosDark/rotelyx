@@ -14,7 +14,7 @@ use rotelyx_mailbox_client::Mailbox;
 async fn main() {
     let url = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "wss://m1.telyx.me/mailbox".to_string());
+        .unwrap_or_else(|| "wss://orvexa.telyx.me/mailbox".to_string());
 
     // Nothing installs one for a binary, and `wss` needs it. The terminal
     // client learned this the same way.

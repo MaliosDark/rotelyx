@@ -42,7 +42,7 @@ const MAILBOX_MARK: char = '~';
 
 /// The mailbox a code names when it names none: Ideoa Labs production, the
 /// one the phone client ships with.
-pub const DEFAULT_MAILBOX: &str = "wss://m1.telyx.me/mailbox";
+pub const DEFAULT_MAILBOX: &str = "wss://orvexa.telyx.me/mailbox";
 
 pub struct Args {
     /// A code or link, read from the phone. Absent when hosting or resuming.

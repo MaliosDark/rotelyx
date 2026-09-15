@@ -1616,7 +1616,7 @@ measurement, and a number nobody wrote down has to be measured again.
       whose reference is not kept current is a verification that agrees with
       whatever it finds
 
-- [x] Deploy `rotelyx-mailbox-server` to `m1.telyx.me:3341`, verified
+- [x] Deploy `rotelyx-mailbox-server` to `orvexa.telyx.me:3341`, verified
       end to end: `101 Switching Protocols` through Cloudflare, pfSense and nginx
 - [x] Upload `site/` to `rotelyx.com`, and add the same `location /mailbox`
       block there so the page finds the mailbox at its own origin. Verified from

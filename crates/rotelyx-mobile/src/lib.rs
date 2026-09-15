@@ -1312,7 +1312,7 @@ mod front_tests {
     #[test]
     fn the_placement_op_names_the_mailboxes_for_a_tag() {
         let directory = r#"{"version":1,"replicas":2,"mailboxes":[
-            {"id":"m1","url":"wss://m1.telyx.me/mailbox"},
+            {"id":"m1","url":"wss://orvexa.telyx.me/mailbox"},
             {"id":"m2","url":"wss://m2.telyx.me/mailbox"},
             {"id":"m3","url":"wss://m3.telyx.me/mailbox"}]}"#;
         let tag = "11".repeat(32);
@@ -1335,7 +1335,7 @@ mod front_tests {
 
         // A single-mailbox directory is the K=1 case, and a client with no
         // directory never calls this: it keeps its one configured mailbox.
-        let one = r#"{"version":1,"replicas":2,"mailboxes":[{"id":"m1","url":"wss://m1.telyx.me/mailbox"}]}"#;
+        let one = r#"{"version":1,"replicas":2,"mailboxes":[{"id":"m1","url":"wss://orvexa.telyx.me/mailbox"}]}"#;
         let placed = dispatch(&json!({"op": "directory.placement", "directory": one, "tag": tag}))
             .expect("placement");
         assert_eq!(placed.as_array().expect("a list").len(), 1);
@@ -1347,7 +1347,7 @@ mod front_tests {
     #[test]
     fn the_delta_op_says_what_a_refresh_changes_for_a_tag() {
         let current = r#"{"version":1,"replicas":2,"mailboxes":[
-            {"id":"m1","url":"wss://m1.telyx.me/mailbox"},
+            {"id":"m1","url":"wss://orvexa.telyx.me/mailbox"},
             {"id":"m2","url":"wss://m2.telyx.me/mailbox"},
             {"id":"m3","url":"wss://m3.telyx.me/mailbox"}]}"#;
         let tag = "11".repeat(32);
@@ -1364,7 +1364,7 @@ mod front_tests {
 
         // Growing the constellation is newer, and the delta agrees with the crate.
         let bigger = r#"{"version":2,"replicas":2,"mailboxes":[
-            {"id":"m1","url":"wss://m1.telyx.me/mailbox"},
+            {"id":"m1","url":"wss://orvexa.telyx.me/mailbox"},
             {"id":"m2","url":"wss://m2.telyx.me/mailbox"},
             {"id":"m3","url":"wss://m3.telyx.me/mailbox"},
             {"id":"m4","url":"wss://m4.telyx.me/mailbox"}]}"#;

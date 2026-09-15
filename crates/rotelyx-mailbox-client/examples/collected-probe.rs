@@ -16,7 +16,7 @@ async fn main() {
 
     let url = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "wss://m1.telyx.me/mailbox".to_string());
+        .unwrap_or_else(|| "wss://orvexa.telyx.me/mailbox".to_string());
     println!("\n  {url}");
 
     let tag: String = std::iter::repeat_n("5c".to_string(), 32).collect();
