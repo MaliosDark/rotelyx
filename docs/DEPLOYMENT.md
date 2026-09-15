@@ -4,7 +4,7 @@ What is deployed, where, and why each choice was made. Written so that whoever
 picks this up later, including us on a different machine, does not have to
 reconstruct it from memory.
 
-Last updated 17 August 2026.
+Last updated 15 September 2026.
 
 ## Two addresses this document does not contain
 
@@ -162,13 +162,31 @@ week.
 
 ---
 
-## 3a. Neither service survives a reboot
+## 3a. Surviving a reboot
 
-There is no systemd unit for either the relay or the mailbox. They are started
-by hand, which means a reboot, an OOM kill or a crash takes the deployment down
-until somebody notices, and on 18 August somebody did: all three WebSocket
-endpoints were returning 502 while the static site kept returning 200, which is
-exactly the shape that makes an outage look like everything is fine.
+Every service now runs under systemd and comes back on its own: the mailbox,
+the relay, the notifier, and the front beside each mailbox.
+
+It was not always so, and the reason it changed is worth keeping. They were
+started by hand, and on 18 August all three WebSocket endpoints returned 502
+for an unknown length of time while the static site kept returning 200, which
+is exactly the shape that makes an outage look like everything is fine. Nothing
+had crashed loudly and nothing was watching.
+
+Two properties each unit needs, both learned the hard way:
+
+**`Restart=always`**, because a service that decided to stop is still a service
+nobody can reach.
+
+**`KillSignal=SIGINT`**, for anything holding `--mailbox-state`. The store is
+written on a sweep every few minutes and again on a graceful shutdown, and the
+graceful path listens for SIGINT. Stopped with systemd's default SIGTERM the
+process exits without that last write, so a restart loses whatever arrived
+since the sweep. The unit files in `docs/systemd` carry both.
+
+On a machine where the services run as a user rather than as root,
+`loginctl enable-linger <user>` is what keeps them running when nobody is
+logged in, and what brings them back after a reboot.
 
 The mailbox restarts cleanly because it holds nothing:
 
