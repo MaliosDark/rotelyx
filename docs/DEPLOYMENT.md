@@ -492,6 +492,65 @@ and that is the whole claim.
 
 ---
 
+## 3d. The fronts
+
+One front per mailbox, so a device holds one connection to each instead of one
+per conversation. See `docs/FRONT.md` for what a front is and what it does not
+do.
+
+On each member, beside its mailbox:
+
+```sh
+rotelyx-mailbox-server front --mailbox ws://127.0.0.1:3341 --bind 0.0.0.0:3343
+```
+
+`--mailbox` takes the **base** URL with no path. With `/mailbox` on the end the
+front asks for `/mailbox/front-key`, gets a 404, and exits saying the mailbox
+serves no front key, which sends you looking at the wrong machine.
+
+The mailbox must already carry `--front-key <path>`, which opens `/front` and
+publishes the key devices seal to. The key is generated on first use and kept,
+so it survives a restart; a key that changed would drop every live session.
+
+### The proxy
+
+`/front` needs its own location, with the upgrade headers, pointing at the
+front's port and not the mailbox's:
+
+```nginx
+location /front {
+    proxy_pass http://MAILBOX_HOST:3343;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host       $host;
+    proxy_read_timeout 7d;
+    proxy_send_timeout 7d;
+    proxy_buffering off;
+}
+```
+
+The catch-all will carry `/front` without the upgrade headers, and then the
+route looks configured and answers `400`. Check it with a real upgrade rather
+than a plain request, which is the only way to tell the two apart:
+
+```sh
+curl -s -i --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" \
+     -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: $(head -c 16 /dev/urandom | base64)" \
+     https://HOST/front | head -1
+```
+
+`101 Switching Protocols` is right. `400` is the missing headers. And open the
+port on the host firewall, the same trap as the mailbox port.
+
+### What a client needs
+
+The front's address and the mailbox's front key, per member. A client that has
+neither connects straight to the mailbox, which is what every build did before
+fronts existed and what a client falls back to when a front is unreachable.
+
+---
+
 ## 4. Running the relay
 
 ```sh

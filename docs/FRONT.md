@@ -147,3 +147,66 @@ their own front. It is not the wake-driven idle (zero sockets while nothing
 happens), which needs a push path on Android that this project does not have,
 and it is not the single envelope per group message, which becomes possible
 once the mailbox no longer sees which connections read a tag.
+
+## One front per mailbox, which is how it meets the constellation
+
+A front sits in front of **one** mailbox, because a session is sealed to that
+mailbox's key. A constellation has several mailboxes, so it has several fronts:
+one each, and a device holds one connection to each.
+
+That is the saving, and it is worth being exact about where it comes from. A
+device keeps a handful of conversations live, and without a front it opens a
+connection per conversation **per mailbox**: seven conversations across three
+mailboxes is twenty one connections. With a front per mailbox it is three,
+whatever the number of conversations, because every conversation is a session
+inside the one connection to that mailbox's front.
+
+Measured on a handset after this landed: three established connections, one to
+each front, and nothing else.
+
+The mailbox side does not grow either. A front holds a small fixed pool of
+connections to its mailbox and spreads every session across it, so the mailbox
+counts that pool and not the people behind it. Ten devices or ten thousand, the
+mailbox sees the same handful from the front. The sockets did not disappear:
+they moved to the piece that can be multiplied, since a front holds nothing and
+anybody can run another.
+
+## Running one
+
+```sh
+rotelyx-mailbox-server front --mailbox ws://127.0.0.1:3341 --bind 0.0.0.0:3343
+```
+
+The `--mailbox` value is the mailbox's **base** URL, with no path: the front
+appends what it needs. Giving it the `/mailbox` path produces a front that asks
+for `/mailbox/front-key` and exits saying the mailbox serves no front key,
+which reads like the wrong flag on the mailbox and is not.
+
+The mailbox it points at must be started with `--front-key`, which is what
+opens `/front` and publishes the key a device seals to.
+
+Behind a reverse proxy, `/front` needs its own location with the WebSocket
+upgrade headers, pointing at the front's port rather than the mailbox's. The
+proxy's catch-all will pass `/front` through without those headers, and the
+symptom is a `400` on what looks like a correctly configured route. The
+deployment guide carries the block.
+
+## A front that is not there
+
+A device that cannot reach its front connects to the mailbox directly instead.
+
+The front is an optimisation: it saves connections and stops the mailbox
+grouping a device's conversations. Neither is worth failing to deliver a
+message over, so a front that refuses or disappears costs the saving and
+nothing else. This is what makes a front safe to deploy, and safe to move.
+
+## Where the fronts are, and why that matters
+
+The point of a front is that **the front and the mailbox are different
+parties**: the front sees an address and opaque frames, the mailbox sees tags
+and no address, and neither holds both halves.
+
+Run on the same machine as its mailbox, one operator holds both halves and that
+property is not there. The connection saving is real either way; the privacy is
+not, until the fronts sit somewhere else. It is written here because a front
+deployed beside its mailbox looks finished and is only half of it.
