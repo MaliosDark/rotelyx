@@ -194,7 +194,36 @@ pub fn is_gone(error: &anyhow::Error) -> bool {
 }
 
 pub struct Mailbox {
-    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    /// The one connection, when this is a single mailbox. `None` when this is
+    /// a constellation, where the connections are in `peers` instead.
+    socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+
+    /// One connection per member, when this is a constellation.
+    ///
+    /// Empty for a single mailbox, which is every caller that opened this with
+    /// [`Mailbox::connect`] and is the behaviour this crate has always had. A
+    /// constellation keeps an address on the few members the placement names,
+    /// so losing one member loses nothing; see `docs/CONSTELLATION.md`. Every
+    /// method below behaves the same either way, so nothing calling this has to
+    /// know which it holds.
+    peers: Vec<Mailbox>,
+
+    /// The membership, when this is a constellation, for working out which
+    /// members hold an address.
+    directory: Option<rotelyx_directory::Directory>,
+
+    /// Envelopes already returned, so the copy from the second holder is not
+    /// returned twice. Bounded, because a session runs for a long time.
+    seen: std::collections::HashSet<String>,
+    seen_order: VecDeque<String>,
+
+    /// Which member to read from next, so no member is starved while another
+    /// is quiet.
+    next_peer: usize,
+
+    /// Where this connection went, so a constellation can match a member
+    /// against the placement it computed.
+    url: String,
     /// Envelopes that arrived while this side was waiting for an answer to
     /// something else.
     ///
@@ -229,11 +258,119 @@ impl Mailbox {
             .await
             .with_context(|| format!("connecting to {url}"))?;
         Ok(Self {
-            socket,
+            socket: Some(socket),
+            url: url.to_string(),
+            peers: Vec::new(),
+            directory: None,
+            seen: std::collections::HashSet::new(),
+            seen_order: VecDeque::new(),
+            next_peer: 0,
             pending: VecDeque::new(),
             token: None,
             presented: false,
         })
+    }
+
+    /// Open a constellation: one connection per member of `directory`.
+    ///
+    /// An address is then kept on the members the placement names rather than
+    /// on one server, so a member going down loses nothing. Both ends compute
+    /// the same members from the same address and the same directory, with
+    /// nothing exchanged.
+    ///
+    /// A member that refuses is not a failure while another answered: that is
+    /// the whole point of having more than one. It fails only when none of them
+    /// did.
+    pub async fn connect_constellation(directory_json: &str) -> Result<Self> {
+        let directory = rotelyx_directory::Directory::from_json(directory_json.as_bytes())
+            .context("reading the constellation directory")?;
+
+        let mut peers = Vec::new();
+        let mut refused = Vec::new();
+        for mailbox in &directory.mailboxes {
+            match Mailbox::connect(&mailbox.url).await {
+                Ok(peer) => peers.push(peer),
+                Err(e) => refused.push(format!("{}: {e}", mailbox.id)),
+            }
+        }
+        if peers.is_empty() {
+            bail!("no mailbox in the constellation answered: {}", refused.join("; "));
+        }
+
+        Ok(Self {
+            socket: None,
+            url: String::new(),
+            peers,
+            directory: Some(directory),
+            seen: std::collections::HashSet::new(),
+            seen_order: VecDeque::new(),
+            next_peer: 0,
+            pending: VecDeque::new(),
+            token: None,
+            presented: false,
+        })
+    }
+
+    /// Open whatever is right for `url`.
+    ///
+    /// The constellation when `url` is one of its members, so an address is
+    /// kept on more than one mailbox and losing one loses nothing. A single
+    /// mailbox otherwise, which is what somebody pointed at their own mailbox,
+    /// or following an invitation that names another one, asked for: spreading
+    /// their mail onto servers they did not choose would be the opposite of
+    /// running your own.
+    pub async fn connect_for(url: &str) -> Result<Self> {
+        if in_constellation(url) {
+            return Self::connect_constellation(CONSTELLATION).await;
+        }
+        Self::connect(url).await
+    }
+
+    /// Whether this is a constellation rather than a single mailbox.
+    fn spread(&self) -> bool {
+        !self.peers.is_empty()
+    }
+
+    /// The members holding `tag`, as indices into `peers`.
+    ///
+    /// Falls back to every member when the directory cannot place the address,
+    /// which still delivers: the set written to then contains whatever the
+    /// other end reads from.
+    fn holders_of(&self, tag_hex: &str) -> Vec<usize> {
+        let all: Vec<usize> = (0..self.peers.len()).collect();
+        let (Some(directory), Some(tag)) = (self.directory.as_ref(), tag_from_hex(tag_hex)) else {
+            return all;
+        };
+        let urls: Vec<String> = directory
+            .placement(&tag)
+            .into_iter()
+            .map(|m| m.url)
+            .collect();
+        if urls.is_empty() {
+            return all;
+        }
+        let picked: Vec<usize> = self
+            .peers
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| urls.iter().any(|u| u == &p.url))
+            .map(|(i, _)| i)
+            .collect();
+        if picked.is_empty() { all } else { picked }
+    }
+
+    /// Remember an envelope, and say whether it is the first sight of it.
+    fn first_sight(&mut self, envelope: &str) -> bool {
+        if !self.seen.insert(envelope.to_string()) {
+            return false;
+        }
+        self.seen_order.push_back(envelope.to_string());
+        if self.seen_order.len() > 4000 {
+            if let Some(old) = self.seen_order.pop_front() {
+                self.seen.remove(&old);
+            }
+        }
+        true
     }
 
     /// Listen on these tags, and take everything already waiting under them.
@@ -246,6 +383,35 @@ impl Mailbox {
     /// left while this side was away, which is the whole reason the mailbox
     /// exists. Written that way first, and both integration tests caught it.
     pub async fn subscribe(&mut self, tags: &[String]) -> Result<Vec<String>> {
+        if self.spread() {
+            // Each member is asked only for the addresses it holds, which is
+            // what keeps a constellation sharded rather than several copies of
+            // everything.
+            let mut grouped: Vec<Vec<String>> = vec![Vec::new(); self.peers.len()];
+            for tag in tags {
+                for i in self.holders_of(tag) {
+                    grouped[i].push(tag.clone());
+                }
+            }
+            let mut waiting = Vec::new();
+            for (i, its) in grouped.into_iter().enumerate() {
+                if its.is_empty() {
+                    continue;
+                }
+                match Box::pin(self.peers[i].subscribe(&its)).await {
+                    Ok(found) => waiting.extend(found),
+                    // A member that has gone is what the constellation absorbs.
+                    Err(_) => continue,
+                }
+            }
+            let mut out = Vec::new();
+            for envelope in waiting {
+                if self.first_sight(&envelope) {
+                    out.push(envelope);
+                }
+            }
+            return Ok(out);
+        }
         let refs: Vec<&str> = tags.iter().map(String::as_str).collect();
         self.send(&Request::Subscribe { tags: refs }).await?;
 
@@ -294,6 +460,16 @@ impl Mailbox {
         if envelopes_b64.is_empty() {
             return Ok(());
         }
+        if self.spread() {
+            // To every member: the copy that was read came from one holder and
+            // the other is still keeping its own until it is told. A receipt is
+            // honoured only for an address that connection listens on, so
+            // naming it everywhere costs nothing.
+            for peer in &mut self.peers {
+                let _ = Box::pin(peer.collected(envelopes_b64)).await;
+            }
+            return Ok(());
+        }
 
         let digests: Vec<String> = envelopes_b64
             .iter()
@@ -313,6 +489,21 @@ impl Mailbox {
     }
 
     pub async fn unsubscribe(&mut self, tags: &[String]) -> Result<()> {
+        if self.spread() {
+            let mut grouped: Vec<Vec<String>> = vec![Vec::new(); self.peers.len()];
+            for tag in tags {
+                for i in self.holders_of(tag) {
+                    grouped[i].push(tag.clone());
+                }
+            }
+            for (i, its) in grouped.into_iter().enumerate() {
+                if its.is_empty() {
+                    continue;
+                }
+                let _ = Box::pin(self.peers[i].unsubscribe(&its)).await;
+            }
+            return Ok(());
+        }
         let refs: Vec<&str> = tags.iter().map(String::as_str).collect();
         self.send(&Request::Unsubscribe { tags: refs }).await
     }
@@ -331,6 +522,28 @@ impl Mailbox {
     /// integration test caught it. Presence is not something this protocol
     /// carries, and a client that reported it would be inventing it.
     pub async fn deposit(&mut self, envelope: &str) -> Result<()> {
+        if self.spread() {
+            // To every member holding this address, so losing one loses
+            // nothing. The address is inside the envelope, which is where the
+            // mailbox reads it from too, so there is nothing to get wrong.
+            let holders = match tag_of_envelope(envelope) {
+                Some(tag) => self.holders_of(&tag),
+                None => (0..self.peers.len()).collect(),
+            };
+            let mut stored = 0usize;
+            let mut refused: Option<anyhow::Error> = None;
+            for i in holders {
+                match Box::pin(self.peers[i].deposit(envelope)).await {
+                    Ok(()) => stored += 1,
+                    Err(e) => refused = Some(e),
+                }
+            }
+            if stored > 0 {
+                return Ok(());
+            }
+            return Err(refused
+                .unwrap_or_else(|| anyhow::anyhow!("no member of the constellation stored it")));
+        }
         // Twice at most: once as whoever this connection already is, and once
         // more after presenting a held token. See `hold_token` for why the
         // token is not presented before it is needed.
@@ -413,7 +626,14 @@ impl Mailbox {
     /// [`Mailbox::authenticate`]; a caller that does nothing gets the fewest
     /// links, rather than the other way round.
     pub fn hold_token(&mut self, token: impl Into<String>) {
-        self.token = Some(Zeroizing::new(token.into()));
+        let token = token.into();
+        if self.spread() {
+            for peer in &mut self.peers {
+                peer.hold_token(token.clone());
+            }
+            return;
+        }
+        self.token = Some(Zeroizing::new(token));
     }
 
     /// Present the held token, if there is one that has not been presented.
@@ -466,6 +686,19 @@ impl Mailbox {
     /// A token of the wrong kind is refused by the mailbox by name rather than
     /// quietly leaving the caller on the free tier.
     pub async fn authenticate(&mut self, token: &str) -> Result<Granted> {
+        if self.spread() {
+            let mut granted: Option<Granted> = None;
+            let mut refused: Option<anyhow::Error> = None;
+            for peer in &mut self.peers {
+                match Box::pin(peer.authenticate(token)).await {
+                    Ok(g) => granted = Some(g),
+                    Err(e) => refused = Some(e),
+                }
+            }
+            return granted.ok_or_else(|| {
+                refused.unwrap_or_else(|| anyhow::anyhow!("no member accepted the token"))
+            });
+        }
         let token = token.trim();
         let request = if token.len() >= BLIND_TOKEN_MINIMUM {
             Request::AuthBlind { token }
@@ -511,6 +744,41 @@ impl Mailbox {
             return Ok(Some(envelope));
         }
 
+        if self.spread() {
+            // Round robin across the members, a slice at a time, so a quiet
+            // member never starves a busy one and a member that has gone is
+            // simply skipped. The copy held by the second holder is dropped,
+            // because both hold the same bytes.
+            let deadline = tokio::time::Instant::now() + timeout;
+            let members = self.peers.len();
+            let slice = Duration::from_millis(60);
+            loop {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if left.is_zero() {
+                    return Ok(None);
+                }
+                for _ in 0..members {
+                    let i = self.next_peer % members;
+                    self.next_peer = self.next_peer.wrapping_add(1);
+                    let wait = slice.min(
+                        deadline.saturating_duration_since(tokio::time::Instant::now()),
+                    );
+                    if wait.is_zero() {
+                        return Ok(None);
+                    }
+                    match Box::pin(self.peers[i].next_envelope(wait)).await {
+                        Ok(Some(envelope)) => {
+                            if self.first_sight(&envelope) {
+                                return Ok(Some(envelope));
+                            }
+                        }
+                        // A member that has gone is what the others are for.
+                        Ok(None) | Err(_) => continue,
+                    }
+                }
+            }
+        }
+
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let left = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -529,7 +797,11 @@ impl Mailbox {
 
     async fn send(&mut self, request: &Request<'_>) -> Result<()> {
         let text = serde_json::to_string(request).context("encoding a request")?;
-        self.socket
+        let socket = self
+            .socket
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("a constellation sends through its members"))?;
+        socket
             .send(Message::Text(text.into()))
             .await
             .map_err(|e| anyhow::Error::new(Gone).context(format!("sending to the mailbox: {e}")))
@@ -537,7 +809,11 @@ impl Mailbox {
 
     async fn next_reply(&mut self) -> Result<Reply> {
         loop {
-            let Some(message) = self.socket.next().await else {
+            let socket = self
+                .socket
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("a constellation reads from its members"))?;
+            let Some(message) = socket.next().await else {
                 return Err(anyhow::Error::new(Gone).context("the mailbox closed the connection"));
             };
             let message = message
@@ -710,4 +986,36 @@ mod tests {
             "the blind frame is not named the way the server reads it: {as_blind}"
         );
     }
+}
+
+/// A 32 byte address from its hex, the shape a tag travels in on the wire.
+fn tag_from_hex(s: &str) -> Option<[u8; 32]> {
+    let bytes = data_encoding::HEXLOWER_PERMISSIVE.decode(s.as_bytes()).ok()?;
+    bytes.as_slice().try_into().ok()
+}
+
+/// The address an envelope is written to, as hex.
+fn tag_of_envelope(envelope_b64: &str) -> Option<String> {
+    let bytes = data_encoding::BASE64.decode(envelope_b64.as_bytes()).ok()?;
+    let envelope = rotelyx_mailbox::Envelope::from_bytes(&bytes).ok()?;
+    Some(data_encoding::HEXLOWER.encode(envelope.tag().as_bytes()))
+}
+
+/// The constellation this build ships with.
+///
+/// Compiled in rather than fetched, for the reason the applications compile
+/// their mailbox list in: a client that asked a server which mailboxes to use
+/// would be telling that server the address of every user and when they were
+/// running. Changing the set costs a release, which is the right price for
+/// infrastructure. See `docs/CONSTELLATION.md`.
+pub const CONSTELLATION: &str = r#"{"version":1,"replicas":2,"mailboxes":[
+{"id":"orvexa","url":"wss://orvexa.telyx.me/mailbox"},
+{"id":"caelix","url":"wss://caelix.telyx.me/mailbox"},
+{"id":"nyxara","url":"wss://nyxara.telyx.me/mailbox"}]}"#;
+
+/// Whether `url` is a member of the constellation this build ships with.
+pub fn in_constellation(url: &str) -> bool {
+    rotelyx_directory::Directory::from_json(CONSTELLATION.as_bytes())
+        .map(|d| d.mailboxes.iter().any(|m| m.url == url))
+        .unwrap_or(false)
 }

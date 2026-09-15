@@ -14,6 +14,7 @@ authors.workspace = true
 # disagree about what an envelope is.
 rotelyx-wasm = { path = "../rotelyx-wasm" }
 rotelyx-mailbox = { path = "../rotelyx-mailbox" }
+rotelyx-directory = { path = "../rotelyx-directory" }
 
 anyhow.workspace = true
 thiserror.workspace = true

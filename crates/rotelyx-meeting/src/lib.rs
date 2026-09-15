@@ -373,7 +373,7 @@ pub async fn resume(
         text: format!("opening the conversation with {label}"),
     });
 
-    let mut mailbox = Mailbox::connect(&mailbox_url)
+    let mut mailbox = Mailbox::connect_for(&mailbox_url)
         .await
         .with_context(|| format!("the mailbox at {mailbox_url} did not answer"))?;
 
@@ -561,7 +561,7 @@ pub async fn run(
     events(Event::Status {
         text: format!("connecting to the mailbox at {mailbox_url}"),
     });
-    let mut mailbox = Mailbox::connect(mailbox_url)
+    let mut mailbox = Mailbox::connect_for(mailbox_url)
         .await
         .with_context(|| format!("the mailbox at {mailbox_url} did not answer"))?;
 
@@ -733,7 +733,7 @@ async fn reconnect(
             bail!("stopped while the mailbox was away");
         }
 
-        let mut mailbox = match Mailbox::connect(&meeting.mailbox_url).await {
+        let mut mailbox = match Mailbox::connect_for(&meeting.mailbox_url).await {
             Ok(mailbox) => mailbox,
             Err(e) => {
                 tracing::warn!(attempt, error = %e, "the mailbox is still away");

@@ -5652,6 +5652,7 @@ dependencies = [
  "data-encoding",
  "futures-util",
  "rotelyx-capability",
+ "rotelyx-directory",
  "rotelyx-mailbox",
  "rotelyx-wasm",
  "rustls",
