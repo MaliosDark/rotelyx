@@ -403,6 +403,18 @@ struct Args {
     /// constellation of one, which is exactly today's behaviour.
     #[arg(long, value_name = "PATH")]
     directory: Option<PathBuf>,
+
+    /// The name this mailbox shows on its landing page, for a person to check.
+    ///
+    /// Shown in the corner of the page, on a small holographic seal,
+    /// so a visitor can cross a name they were told to expect against the one
+    /// the server states, alongside the URL and its certificate. It is a
+    /// convenience for a human, not a security control: the real proof a mailbox
+    /// is genuine is the TLS certificate, the domain, and the safety numbers in
+    /// the app, none of which a copied badge can forge. Absent means the page
+    /// shows no name, exactly as every build before this one.
+    #[arg(long, value_name = "NAME")]
+    name: Option<String>,
 }
 
 #[derive(clap::Subcommand)]
@@ -520,6 +532,11 @@ struct Server {
     /// endpoint is closed: this mailbox is a constellation of one. See
     /// `docs/CONSTELLATION.md`.
     directory: Option<Vec<u8>>,
+
+    /// The name shown on the landing page, from `--name`. A convenience for a
+    /// person checking the server, never a security control. Absent shows no
+    /// name.
+    name: Option<String>,
 
     /// Hands out connection ids. Never leaves the process and identifies a
     /// socket, not a person.
@@ -1876,6 +1893,21 @@ fn landing_policy() -> &'static String {
     })
 }
 
+/// Escape the five characters that change meaning in HTML text, so a name from
+/// the command line cannot inject markup into the page it is shown on.
+fn html_escape(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '&' => "&amp;".into(),
+            '<' => "&lt;".into(),
+            '>' => "&gt;".into(),
+            '"' => "&quot;".into(),
+            '\'' => "&#39;".into(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
 async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
     let recorded = STATUS.recorded_count();
     let history = if recorded > 0 {
@@ -1939,9 +1971,32 @@ async fn landing(State(server): State<Arc<Server>>) -> impl IntoResponse {
         );
     }
 
+    // The name this mailbox was given, in the corner, so a person can cross it
+    // against the name they expected beside the URL in the bar. It is a
+    // convenience for a human and not a security check: a copied page can state
+    // any name, and the real proof is the certificate, the domain and the app's
+    // safety numbers. Absent name renders nothing, exactly as before the flag
+    // existed. The name is escaped because it comes from the command line and
+    // lands in HTML.
+    let badge = match server.name.as_deref().map(str::trim) {
+        Some(n) if !n.is_empty() => format!(
+            "<div class=\"seal\" role=\"note\" aria-label=\"This mailbox is named {name}\">\
+               <span class=\"seal-holo\" aria-hidden=\"true\"></span>\
+               <svg class=\"seal-shield\" viewBox=\"0 0 24 24\" aria-hidden=\"true\">\
+                 <path d=\"M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3Z\"/>\
+                 <path class=\"seal-check\" d=\"m8.5 12 2.4 2.4 4.6-4.8\"/>\
+               </svg>\
+               <b class=\"seal-name\">{name}</b>\
+             </div>",
+            name = html_escape(n),
+        ),
+        _ => String::new(),
+    };
+
     let page = include_str!("landing.html")
         .replace("/*STATUS-STYLE*/", rotelyx_status::STYLE)
         .replace("<!--STATUS-REFRESH-->", rotelyx_status::REFRESH)
+        .replace("<!--MAILBOX-SEAL-->", &badge)
         .replace("<!--STATUS-->", &block);
 
     (
@@ -2010,6 +2065,7 @@ fn router_full(
         Vec::new(),
         Vec::new(),
         limits::TOTAL_CONNECTIONS,
+        None,
         None,
         None,
     )
@@ -2139,6 +2195,7 @@ fn router_stateful(
     max_connections: usize,
     front_key: Option<rotelyx_crypto::HybridSecretKey>,
     directory: Option<Vec<u8>>,
+    name: Option<String>,
 ) -> (Router, Arc<Server>) {
     let _ = ttl_seconds;
     let (wake, _) = broadcast::channel(1024);
@@ -2167,6 +2224,7 @@ fn router_stateful(
         trusted_proxies,
         front_key,
         directory,
+        name,
     });
 
     // Reclaim memory from envelopes nobody collected.
@@ -2602,6 +2660,7 @@ async fn main() -> Result<()> {
         args.max_connections,
         front_secret,
         directory,
+        args.name.clone(),
     );
 
     // The word the page shows, judged every fifteen seconds from what this
@@ -2739,6 +2798,7 @@ mod tests {
             limits::TOTAL_CONNECTIONS,
             None,
             None,
+            None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -2789,6 +2849,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             limits::TOTAL_CONNECTIONS,
+            None,
             None,
             None,
         );
@@ -3279,6 +3340,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             limits::TOTAL_CONNECTIONS,
             Some(secret),
             None,
+            None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -3425,6 +3487,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             limits::TOTAL_CONNECTIONS,
             None,
             directory,
+            None,
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -3449,7 +3512,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
     async fn a_mailbox_serves_the_directory_it_was_given() {
         // A directory with a field this build has no name for, to prove it is
         // served verbatim and not reparsed into a shape that drops it.
-        let raw = br#"{"version":5,"replicas":2,"region":"later","mailboxes":[{"id":"m1","url":"wss://m1.telyx.me/mailbox"},{"id":"m2","url":"wss://m2.telyx.me/mailbox"}]}"#;
+        let raw = br#"{"version":5,"replicas":2,"region":"later","mailboxes":[{"id":"m1","url":"wss://orvexa.telyx.me/mailbox"},{"id":"m2","url":"wss://m2.telyx.me/mailbox"}]}"#;
         let base = spawn_directory_server(Some(raw.to_vec())).await;
 
         let served = reqwest::get(format!("{base}/directory"))
@@ -4575,6 +4638,7 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
             Vec::new(),
             Vec::new(),
             limits::TOTAL_CONNECTIONS,
+            None,
             None,
             None,
         );
