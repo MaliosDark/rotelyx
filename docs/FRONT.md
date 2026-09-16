@@ -206,7 +206,30 @@ The point of a front is that **the front and the mailbox are different
 parties**: the front sees an address and opaque frames, the mailbox sees tags
 and no address, and neither holds both halves.
 
-Run on the same machine as its mailbox, one operator holds both halves and that
-property is not there. The connection saving is real either way; the privacy is
-not, until the fronts sit somewhere else. It is written here because a front
-deployed beside its mailbox looks finished and is only half of it.
+Run on the same machine as its mailbox, one operator holds both halves and the
+property is not there at all. The connection saving is real either way, which
+is what makes that arrangement tempting: it looks finished and is half of it.
+
+So the fronts are **crossed**. Each member's front runs on a different
+member's machine, and points back at the mailbox it fronts for:
+
+| A device asking for | is served by the front on | which talks to the mailbox on |
+|---|---|---|
+| the first member | the third member's machine | the first member |
+| the second member | the first member's machine | the second member |
+| the third member | the second member's machine | the third member |
+
+Now no machine sees both halves of the same traffic. The machine that took the
+connection cannot read the tags inside it, and the machine holding those tags
+never saw where they came from. Taking one machine yields one half.
+
+The reverse proxy is what makes this a routing question rather than a protocol
+one: the member's `/front` location points at another machine's front port, and
+nothing in the client changes. A device still asks for
+`wss://<member>/front` and neither knows nor cares which machine answers.
+
+**What this is not.** Crossing protects against one machine being taken or
+compromised. It does not protect against the operator, who runs all of them and
+could put the halves together. That is not a gap in the arrangement, it is the
+reason the front is an ordinary program anybody can run: the property is only
+complete when the fronts belong to somebody else.

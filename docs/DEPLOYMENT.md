@@ -561,11 +561,38 @@ curl -s -i --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" \
 `101 Switching Protocols` is right. `400` is the missing headers. And open the
 port on the host firewall, the same trap as the mailbox port.
 
+### Cross them
+
+A front beside its own mailbox gives the connection saving and none of the
+privacy, because one machine then holds both the address and the tags. So each
+member's front runs on **another member's machine** and points back at the
+mailbox it fronts for.
+
+Two things to set, and they must agree:
+
+- The front process is started with `--mailbox ws://<the member it fronts
+  for>:3341`, not its own.
+- The member's `/front` location in the proxy points at the machine running its
+  front, not at `127.0.0.1`.
+
+A front that cannot reach the mailbox it fronts for exits at startup saying the
+mailbox serves no front key, so a mismatch here fails immediately rather than
+quietly serving the wrong mailbox. The same check as before proves it: the
+front is running, with no restarts, which means it reached its mailbox and read
+the key.
+
+Order matters when changing it. Move the processes first, then repoint the
+proxy. The other way round leaves `/front` aimed at a front that is not there
+yet, which clients survive by connecting to the mailbox directly, but there is
+no reason to spend that.
+
 ### What a client needs
 
-The front's address and the mailbox's front key, per member. A client that has
-neither connects straight to the mailbox, which is what every build did before
-fronts existed and what a client falls back to when a front is unreachable.
+The front's address and the mailbox's front key, per member. The address is the
+member's own hostname whichever machine answers it, so crossing the fronts
+changes nothing a client sees. A client that has neither connects straight to
+the mailbox, which is what every build did before fronts existed and what a
+client falls back to when a front is unreachable.
 
 ---
 
