@@ -96,9 +96,9 @@ devices from the moment the other person reads them. A read tick that is never
 inferred from anything. Encrypted history on the device, or a mode that writes
 nothing down at all and asks again next time. A conversation list that survives
 a restart, on the phone and in the desktop window. Removing somebody from a
-group, in the desktop window and the browser but **not yet on the phone**: the
-engine does it and the C ABI does not expose it, so the client most likely to be
-lost or stolen is the one that cannot revoke a device. Calls, between two
+group, on the phone as well as in the desktop window and the browser: the C ABI
+exposes it and the phone's chat screen offers it, so the client most likely to
+be lost or stolen is one that can revoke a device. Calls, between two
 desktops and between a phone and a desktop.
 
 What is not here is in [`TODO.md`](TODO.md), which lists only what is left.

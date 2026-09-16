@@ -1954,3 +1954,55 @@ frequencies checked by Goertzel the way a receiver would read them; a voice
 ring around the avatar drawn from both directions' levels; a name that is kept
 and suggested rather than demanded, which had been read from a setting nothing
 ever wrote; and the shipped strings gone over for store review.
+
+### The constellation, and the fronts in front of it, 15 September 2026
+
+A conversation's mail used to live on one mailbox. It now lives on two of
+three, chosen from the address itself, so a mailbox can be lost without losing
+anything and none of them holds the whole of a conversation.
+
+- [x] **Placement, in a crate that touches nothing.** `rotelyx-directory`: the
+      directory format and rendezvous hashing, with a frozen score vector so a
+      change that would re-place every live address fails a test rather than
+      happening quietly. Both ends compute the same holders from the same
+      address with nothing exchanged.
+- [x] **The mailbox serves the directory it belongs to.** `--directory`,
+      validated at load so a typo stops a start rather than a client, and
+      served verbatim so a field a newer operator adds reaches clients
+      unchanged. Closed without the flag, which is a constellation of one.
+- [x] **Every client uses it.** The phone, and through the shared client crate
+      the terminal, the desktop and meeting. One connection per member, each
+      address subscribed and deposited only on the members holding it, the
+      second copy dropped on arrival, and a member that has gone skipped rather
+      than reported.
+- [x] **Proved by taking one away.** Three mailboxes on separate machines
+      behind separate names. Deposit, stop one of the two holding that address,
+      collect: the message still arrived, through the production chain, TLS and
+      proxy included. Repeated through the Rust client with the same result.
+- [x] **A front per mailbox, so the connections did not multiply.** The
+      constellation on its own turned seven conversations into twenty one
+      connections. A front per member turns them into three, whatever the
+      number of conversations. Measured on a handset afterwards: three, and
+      nothing else.
+- [x] **A front that is not there costs the saving and nothing else.** A device
+      that cannot reach its front connects to the mailbox directly. The
+      optimisation is not worth failing to deliver a message over, and this is
+      what makes a front safe to move.
+
+Two mistakes worth keeping, both the same shape. The front wants the mailbox's
+base URL and was given the path, so it asked for `/mailbox/front-key` and
+exited saying the mailbox served no front key, which points at the wrong
+machine. Then the application was given the front's URL with `/front` already
+on it and asked for `/front/front`. Both were a path appended twice, found only
+by reading the error rather than the configuration.
+
+And one limit, written down rather than left to be discovered: the fronts run
+beside their own mailboxes, so one operator holds both halves and the privacy
+the front exists for is not there yet. The connection saving is. See
+`docs/FRONT.md`.
+
+Also done alongside: the mailbox states its name on its landing page, with the
+code saying plainly that a badge is not a security control; neither the mailbox
+page nor the relay page calls itself pre-release any more; and settings counts
+the conversations somebody has rather than the sessions ever opened, which had
+been reading twenty on a device with five groups.
