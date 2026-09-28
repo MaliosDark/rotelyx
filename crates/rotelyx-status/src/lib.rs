@@ -218,10 +218,22 @@ impl Status {
 
         // The oldest bucket anything is known about. Before it, grey means "no
         // record", which is not "down" and must not be drawn as though it were.
-        let known_from = recorded
-            .first()
-            .map(|(b, _)| *b)
-            .unwrap_or_else(|| now.saturating_sub(uptime.as_secs() / (BUCKET_MINUTES * 60)));
+        //
+        // With nothing recorded at all, that is every bucket. The obvious
+        // version derives the window from uptime instead, on the reasoning that
+        // a service up for two days should have two days of heartbeats, and it
+        // is wrong in the one case that matters: a service started without a
+        // status file cannot record anything, so uptime says "you should have
+        // records", none are found, and every bar is painted "not serving". A
+        // healthy mailbox then shows a wall of red, which is the worst possible
+        // thing for a page whose only job is to say whether it is up. An
+        // absence of records is not a record of absence.
+        let known_from = match recorded.first() {
+            Some((b, _)) => *b,
+            // Nothing known about any past bucket: leave them all grey.
+            None => now,
+        };
+        let _ = uptime;
 
         let mut out = String::with_capacity(BUCKETS * 64);
         out.push_str("<div class=\"bars\">");
@@ -355,6 +367,32 @@ pub const STYLE: &str = concat!(
 
 #[cfg(test)]
 mod tests {
+    /// A healthy service with nowhere to write its history draws no red at all.
+    ///
+    /// It drew ninety six red bars. The strip derived its window from uptime, so
+    /// a mailbox started without a status file was told it should have two days
+    /// of heartbeats, found none, and painted every half hour "not serving". The
+    /// page whose one job is to say whether the service is up said it had been
+    /// down for two days while it was answering requests, which is how it was
+    /// found: three mailboxes, one with a status file green and two without it
+    /// red, all three serving.
+    #[test]
+    fn nothing_recorded_is_grey_and_never_red() {
+        let status = Status::new();
+        // Up long enough that an uptime derived window would cover the strip.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let strip = status.strip();
+        assert_eq!(
+            count(&strip, "down"),
+            0,
+            "a service with no history must not claim it was not serving:\n{strip}"
+        );
+        assert!(
+            count(&strip, "unknown") > 0,
+            "the buckets nothing is known about should be grey"
+        );
+    }
+
     use super::*;
 
     fn count(html: &str, class: &str) -> usize {
