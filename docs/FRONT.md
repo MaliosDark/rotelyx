@@ -200,6 +200,34 @@ grouping a device's conversations. Neither is worth failing to deliver a
 message over, so a front that refuses or disappears costs the saving and
 nothing else. This is what makes a front safe to deploy, and safe to move.
 
+That only holds if the front **says no**. Both halves of it were wrong once, and
+the two failures compounded into a front that looked perfect and delivered
+nothing:
+
+**The front swallowed.** Its pool was opened once, in `Front::connect`, and
+never again. A mailbox restart killed every connection in it and left the front
+listening: it answered `/front-key` from the copy it read at startup, it
+upgraded every phone that asked, and it forwarded each sealed frame into a
+channel with nobody at the other end, discarding the error. Nothing anywhere
+said so. Now each slot reconnects on its own, backing off to fifteen seconds,
+and while no slot is connected the phone-facing `/front` answers `503`. A phone
+that is told no falls back; a phone that is accepted is lost.
+
+**The client would not fall back.** Whether a client spoke through a front was
+read off its configuration, which never changes, so a client that fell back
+still looked for a front session afterwards: it reported itself closed with a
+live socket in hand, and every send failed with "the front session is not open"
+while that socket sat unused. Configuration and current state are now two
+questions, `_hasFront` and `_throughFront`.
+
+Both are pinned by tests --
+`a_front_survives_its_mailbox_restarting` in the server and
+`a_front_that_is_down_does_not_take_the_mailbox_with_it_test.dart` in the
+application -- and a live front is checked with
+`cargo run -p rotelyx-mailbox-server --example front-probe -- wss://HOST`,
+which opens a real sealed session because nothing cheaper can tell the two
+states apart.
+
 ## Where the fronts are, and why that matters
 
 The point of a front is that **the front and the mailbox are different

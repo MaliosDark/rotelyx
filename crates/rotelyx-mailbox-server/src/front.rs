@@ -25,8 +25,9 @@
 //! every test in this file exists to hold.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -40,6 +41,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
+use tracing::{info, warn};
 
 /// How many connections the front holds to the mailbox. Sessions are spread
 /// across them, so this is the number of connections the mailbox counts from
@@ -67,13 +69,24 @@ struct PhoneSlot {
     phone_id: String,
 }
 
-/// One connection to the mailbox, and the sessions riding on it.
+/// One slot in the pool: a connection to the mailbox, the sessions riding on
+/// it, and whether it is up.
+///
+/// A slot outlives its connection. The task behind it reconnects for as long as
+/// the front runs, because a mailbox restart is ordinary and a front that gave
+/// up on one would go on listening with nothing behind it.
 struct Upstream {
     out: mpsc::Sender<String>,
     /// Upstream session id -> where its replies go. The reply from the mailbox
     /// names the upstream id; this is how it finds the phone and the id to
     /// rewrite back to.
     routes: Arc<Mutex<HashMap<u64, PhoneSlot>>>,
+    /// Whether this slot has a connection right now.
+    ///
+    /// Read before a session is placed on it. Without this the front would
+    /// accept a session onto a dead slot and drop every frame in silence, which
+    /// is exactly how a front with a healthy landing page delivered nothing.
+    alive: Arc<AtomicBool>,
 }
 
 /// The front's shared state: the pool, the id counter, the key it serves for
@@ -109,14 +122,26 @@ impl Front {
 
         let mut upstreams = Vec::with_capacity(pool);
         for _ in 0..pool.max(1) {
-            upstreams.push(spawn_upstream(mailbox).await?);
+            upstreams.push(spawn_upstream(mailbox.to_string()));
         }
-        Ok(Arc::new(Self {
+        let front = Arc::new(Self {
             upstreams,
             next_id: AtomicU64::new(1),
             cursor: AtomicU64::new(0),
             front_key,
-        }))
+        });
+
+        // Starting is still allowed to fail loudly. The slots reconnect for
+        // ever once the front is up, but a front that never reached the mailbox
+        // at all is a misconfiguration, and saying so at startup is worth more
+        // than a process that listens and serves nothing.
+        for _ in 0..50 {
+            if front.has_mailbox() {
+                return Ok(front);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        anyhow::bail!("no connection to the mailbox at {mailbox} came up")
     }
 
     /// The router a phone reaches: the multiplexed endpoint and the key.
@@ -127,8 +152,28 @@ impl Front {
             .with_state(Arc::clone(self))
     }
 
-    fn pick_upstream(&self) -> usize {
-        (self.cursor.fetch_add(1, Ordering::Relaxed) as usize) % self.upstreams.len()
+    /// The next slot with a connection, round robin, or `None` when the
+    /// mailbox is unreachable.
+    fn pick_upstream(&self) -> Option<usize> {
+        let n = self.upstreams.len();
+        if n == 0 {
+            return None;
+        }
+        let start = self.cursor.fetch_add(1, Ordering::Relaxed) as usize;
+        (0..n)
+            .map(|k| (start + k) % n)
+            .find(|&i| self.upstreams[i].alive.load(Ordering::Relaxed))
+    }
+
+    /// Whether any slot has a connection to the mailbox.
+    ///
+    /// A front with none of them is not a front: it can take a session and
+    /// never answer it. It says so instead, and the client goes to the mailbox
+    /// directly, which is what every build did before fronts existed.
+    pub fn has_mailbox(&self) -> bool {
+        self.upstreams
+            .iter()
+            .any(|u| u.alive.load(Ordering::Relaxed))
     }
 
     fn fresh_id(&self) -> u64 {
@@ -145,6 +190,16 @@ async fn key_handler(State(front): State<Arc<Front>>) -> Response {
 }
 
 async fn phone_handler(ws: WebSocketUpgrade, State(front): State<Arc<Front>>) -> Response {
+    // Refused rather than accepted and swallowed. A phone that is told no falls
+    // back to the mailbox itself; a phone that is accepted by a front with
+    // nothing behind it waits for an answer that is never coming.
+    if !front.has_mailbox() {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "this front has no connection to its mailbox\n",
+        )
+            .into_response();
+    }
     ws.on_upgrade(move |socket| async move { serve_phone(socket, front).await })
 }
 
@@ -197,7 +252,12 @@ async fn serve_phone(mut socket: WebSocket, front: Arc<Front>) {
                     if routes.contains_key(&frame.s) {
                         continue;
                     }
-                    let upstream = front.pick_upstream();
+                    let Some(upstream) = front.pick_upstream() else {
+                        // The mailbox went away between the upgrade and this
+                        // hello. Closing is the answer for the same reason the
+                        // upgrade is refused above.
+                        break;
+                    };
                     let upstream_id = front.fresh_id();
                     front.upstreams[upstream].routes.lock().await.insert(
                         upstream_id,
@@ -259,48 +319,92 @@ fn upstream_id_of(label: &str) -> Option<u64> {
     Some(u64::from_be_bytes(array))
 }
 
-/// Open one connection to the mailbox's `/front`, and a task that routes each
-/// reply to the phone that owns the upstream id, with the id rewritten back to
-/// the phone's own.
-async fn spawn_upstream(mailbox: &str) -> Result<Upstream> {
-    let url = format!("{}/front", mailbox.trim_end_matches('/'));
-    let (stream, _) = tokio_tungstenite::connect_async(&url)
-        .await
-        .with_context(|| format!("connecting to {url}"))?;
-    let (mut write, mut read) = stream.split();
-
+/// One slot in the pool, and the task that keeps it connected.
+///
+/// The slot is returned before anything is connected, and the task behind it
+/// connects, pumps frames both ways, and reconnects when the connection ends,
+/// for as long as the front runs. A mailbox restart is ordinary: it used to
+/// leave the front listening with a dead socket, accepting phones and dropping
+/// everything they sent, because the pool was opened once at startup and never
+/// again. Nothing announced it. That is what `alive` and this loop close.
+fn spawn_upstream(mailbox: String) -> Upstream {
     let (out, mut out_rx) = mpsc::channel::<String>(256);
     let routes: Arc<Mutex<HashMap<u64, PhoneSlot>>> = Arc::new(Mutex::new(HashMap::new()));
+    let alive = Arc::new(AtomicBool::new(false));
 
+    let routes_task = Arc::clone(&routes);
+    let alive_task = Arc::clone(&alive);
     tokio::spawn(async move {
-        while let Some(text) = out_rx.recv().await {
-            if write.send(UpstreamMessage::Text(text.into())).await.is_err() {
-                break;
+        let url = format!("{}/front", mailbox.trim_end_matches('/'));
+        let mut backoff = Duration::from_secs(1);
+        loop {
+            match tokio_tungstenite::connect_async(&url).await {
+                Ok((stream, _)) => {
+                    backoff = Duration::from_secs(1);
+                    // Frames queued while this slot was down name sessions the
+                    // mailbox never heard of, so they are dropped rather than
+                    // sent to a connection that would ignore them anyway.
+                    while out_rx.try_recv().is_ok() {}
+                    alive_task.store(true, Ordering::Relaxed);
+                    info!(%url, "front: upstream connected");
+
+                    let (mut write, mut read) = stream.split();
+                    loop {
+                        tokio::select! {
+                            outgoing = out_rx.recv() => {
+                                let Some(text) = outgoing else { return };
+                                if write.send(UpstreamMessage::Text(text.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            incoming = read.next() => {
+                                let Some(Ok(message)) = incoming else { break };
+                                let text = match message {
+                                    UpstreamMessage::Text(t) => t.to_string(),
+                                    UpstreamMessage::Close(_) => break,
+                                    _ => continue,
+                                };
+                                let Ok(frame) = serde_json::from_str::<Frame>(&text) else { continue };
+                                let Some(id) = upstream_id_of(&frame.s) else { continue };
+                                let slot = { routes_task.lock().await.get(&id).cloned() };
+                                let Some(slot) = slot else { continue };
+
+                                // The reply names the upstream id; the phone
+                                // knows its own. Rewrite `s` back before it
+                                // leaves the front, so the phone sees only the
+                                // id it chose.
+                                let Some(body) = frame.b else { continue };
+                                let rewritten =
+                                    serde_json::json!({ "s": slot.phone_id, "b": body }).to_string();
+                                let _ = slot.inbox.send(Message::Text(rewritten.into())).await;
+                            }
+                        }
+                    }
+
+                    alive_task.store(false, Ordering::Relaxed);
+                    // Every session on this connection died with it, and the
+                    // phones holding them are told so they open new ones. A
+                    // phone that is not told goes on sealing frames for a
+                    // session the mailbox has forgotten.
+                    let stranded: Vec<PhoneSlot> = {
+                        let mut held = routes_task.lock().await;
+                        held.drain().map(|(_, slot)| slot).collect()
+                    };
+                    let count = stranded.len();
+                    for slot in stranded {
+                        let _ = slot.inbox.send(Message::Close(None)).await;
+                    }
+                    warn!(%url, sessions = count, "front: upstream lost, reconnecting");
+                }
+                Err(error) => {
+                    alive_task.store(false, Ordering::Relaxed);
+                    warn!(%url, %error, "front: upstream will not connect");
+                }
             }
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(15));
         }
     });
 
-    let routes_in = Arc::clone(&routes);
-    tokio::spawn(async move {
-        while let Some(Ok(message)) = read.next().await {
-            let text = match message {
-                UpstreamMessage::Text(t) => t.to_string(),
-                UpstreamMessage::Close(_) => break,
-                _ => continue,
-            };
-            let Ok(frame) = serde_json::from_str::<Frame>(&text) else { continue };
-            let Some(id) = upstream_id_of(&frame.s) else { continue };
-            let slot = { routes_in.lock().await.get(&id).cloned() };
-            let Some(slot) = slot else { continue };
-
-            // The reply names the upstream id; the phone knows its own. Rewrite
-            // `s` back before it leaves the front, so the phone sees only the
-            // id it chose.
-            let Some(body) = frame.b else { continue };
-            let rewritten = serde_json::json!({ "s": slot.phone_id, "b": body }).to_string();
-            let _ = slot.inbox.send(Message::Text(rewritten.into())).await;
-        }
-    });
-
-    Ok(Upstream { out, routes })
+    Upstream { out, routes, alive }
 }

@@ -5692,6 +5692,7 @@ dependencies = [
  "rotelyx-push",
  "rotelyx-status",
  "rotelyx-wasm",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.11.0",

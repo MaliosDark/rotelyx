@@ -3616,6 +3616,163 @@ OF/2NxApJCzGCEDdfSp6VQO30hyhRANCAAQRWz+jn65BtOMvdyHKcvjBeBSDZH2r\n\
         assert_eq!(envelope["op"], "envelope", "the deposit reached the front: {envelope}");
     }
 
+    /// A mailbox restart does not leave the front listening with nothing
+    /// behind it.
+    ///
+    /// The bug this pins, in the order it happened in production: the pool was
+    /// opened once, in `Front::connect`, and never again. A mailbox restart
+    /// killed every connection in it, and the front went on accepting phones
+    /// and dropping every frame they sealed, in silence. Nothing said so:
+    /// `/front-key` still answered from memory, the landing page still said
+    /// Operational, and the upgrade still returned `101`. A phone waited for a
+    /// reply that was never coming.
+    ///
+    /// So: it works, the connection to the mailbox dies, the front says no
+    /// instead of swallowing, the mailbox answers again, and it works with
+    /// nobody having touched the front.
+    ///
+    /// What dies here is the **connection**, not the process. Aborting a test
+    /// mailbox's accept loop leaves the connections it already handed to tasks
+    /// of their own wide open, so the front would notice nothing; a relay in
+    /// between, taken away and put back on the same address, is the same event
+    /// seen from the front, which is the end this test is about.
+    #[tokio::test]
+    async fn a_front_survives_its_mailbox_restarting() {
+        let (mailbox_base, public, _server) = spawn_front_server().await;
+        let mailbox_addr: std::net::SocketAddr = mailbox_base
+            .trim_start_matches("ws://")
+            .parse()
+            .expect("the mailbox address");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind relay");
+        let relay_addr = listener.local_addr().expect("addr");
+        let relay = spawn_relay(listener, mailbox_addr);
+
+        let front = front::Front::connect_with(&format!("ws://{relay_addr}"), 1)
+            .await
+            .expect("front");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind front");
+        let front_addr = listener.local_addr().expect("addr");
+        let router = front.router();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve front");
+        });
+        let front_base = format!("ws://{front_addr}");
+
+        assert_eq!(
+            subscribe_through_front(&front_base, &public).await,
+            "ready",
+            "a session works before anything is restarted"
+        );
+
+        // The mailbox goes out of reach, connections and all.
+        relay.abort();
+        let noticed = tokio::time::timeout(Duration::from_secs(10), async {
+            while front.has_mailbox() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(noticed.is_ok(), "the front noticed its mailbox had gone");
+
+        // And it refuses, which is the whole point: a phone that is told no
+        // falls back to the mailbox itself, and a phone that is accepted by a
+        // front with nothing behind it is simply lost.
+        match tokio_tungstenite::connect_async(format!("{front_base}/front")).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(
+                    response.status(),
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "the front refuses while it has no mailbox"
+                );
+            }
+            other => panic!("the front took a session with no mailbox behind it: {other:?}"),
+        }
+
+        // The mailbox answers again on the same address. Nobody touches the
+        // front.
+        let listener = tokio::net::TcpListener::bind(relay_addr).await.expect("rebind relay");
+        let _relay = spawn_relay(listener, mailbox_addr);
+        let recovered = tokio::time::timeout(Duration::from_secs(60), async {
+            while !front.has_mailbox() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        assert!(recovered.is_ok(), "the front reconnected on its own");
+
+        assert_eq!(
+            subscribe_through_front(&front_base, &public).await,
+            "ready",
+            "a session works again after the restart"
+        );
+    }
+
+    /// A TCP relay that can be taken away.
+    ///
+    /// Every connection it carries is held in a `JoinSet` the one task owns, so
+    /// aborting that task drops them all and both ends see the connection end.
+    /// That is the point: a relay whose connections outlived it would prove
+    /// nothing about a front noticing.
+    fn spawn_relay(
+        listener: tokio::net::TcpListener,
+        to: std::net::SocketAddr,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut live = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((mut inbound, _)) = accepted else { return };
+                        live.spawn(async move {
+                            if let Ok(mut outbound) = tokio::net::TcpStream::connect(to).await {
+                                let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                            }
+                        });
+                    }
+                    _ = live.join_next(), if !live.is_empty() => {}
+                }
+            }
+        })
+    }
+
+    /// One session through a front, subscribed to a tag nobody uses, and the
+    /// `op` of whatever came back.
+    async fn subscribe_through_front(
+        front_base: &str,
+        public: &rotelyx_crypto::HybridPublicKey,
+    ) -> String {
+        let mut client = connect(&format!("{front_base}/front")).await;
+        let id = [0x29; rotelyx_crypto::SESSION_ID_LEN];
+        let (mut session, hello) =
+            rotelyx_crypto::FrontSession::open_to(public, id).expect("open");
+        let s_b64 = BASE64.encode(id.as_slice());
+        client
+            .send(WsMessage::Text(
+                serde_json::json!({"s": s_b64, "hello": BASE64.encode(hello.to_bytes().as_slice())})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .expect("hello");
+        let tag = Tag::from_bytes(&[0x51; 32]).expect("tag");
+        let subscribe = serde_json::json!({"op": "subscribe", "tags": [tag_hex(&tag)]}).to_string();
+        let sealed = session.seal(subscribe.as_bytes()).expect("seal");
+        client
+            .send(WsMessage::Text(
+                serde_json::json!({"s": s_b64, "b": BASE64.encode(&sealed)}).to_string().into(),
+            ))
+            .await
+            .expect("subscribe");
+        let reply = recv_front(&mut client, &mut session).await;
+        reply["op"].as_str().unwrap_or("nothing").to_string()
+    }
+
     /// Read one framed reply from the front and open it for this session.
     async fn recv_front(
         client: &mut Client,

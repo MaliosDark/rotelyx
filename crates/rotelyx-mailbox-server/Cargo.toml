@@ -67,6 +67,12 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
 reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "json"] }
 
 [dev-dependencies]
+# TLS for the `front-probe` example, which checks a live `wss://` front. Only
+# here: the server itself is reached through nginx and needs no TLS of its own.
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls"] }
+
 # The minter, for the paid-tier tests. Test-only: see rotelyx-capability/src/testing.rs.
 rotelyx-capability = { path = "../rotelyx-capability", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "net"] }
