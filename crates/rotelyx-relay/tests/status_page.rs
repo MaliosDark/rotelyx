@@ -89,8 +89,6 @@ async fn the_page_shows_a_status_strip() {
     assert!(page.contains("Operational"), "no status");
     assert!(page.contains("class=\"bars\""), "no availability strip");
 
-    // Freshly started: one bucket of history, and it is the newest, so the
-    // green bar must be the last one before the strip closes.
     // Counted inside the strip only: the legend below it uses the same classes
     // for its swatches, so counting the whole page inflates every total by one
     // and the arithmetic quietly stops adding to 96.
@@ -100,32 +98,47 @@ async fn the_page_shows_a_status_strip() {
         .and_then(|t| t.split("</div>").next())
         .expect("the strip");
 
-    let up = strip.matches("class=\"up\"").count();
-    let part = strip.matches("class=\"part\"").count();
-    let down = strip.matches("class=\"down\"").count();
-    let unknown = strip.matches("class=\"unknown\"").count();
+    // Each bar's class attribute, in order. Read rather than counted with
+    // `matches`, because a bar carries more than its colour: the one in
+    // progress is `part` **and** the level it is at, and every bar carries a
+    // `title`. Counting exact strings like `class="up"` silently found nothing
+    // once the markup gained either, so the totals stopped adding to 96 and
+    // said so nowhere.
+    let bars: Vec<&str> = strip
+        .split("<i class=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+    assert_eq!(bars.len(), 96, "the strip is 96 half hours");
+
+    let in_progress = bars.iter().filter(|c| c.starts_with("part")).count();
+    let down = bars.iter().filter(|c| **c == "down").count();
 
     // With no status file, the only thing known is this process, which started
     // seconds ago: one bucket in progress and no claim about anything before.
-    assert_eq!(part, 1, "the bucket in progress");
-    assert_eq!(up, 0, "no whole bucket has been served");
+    assert_eq!(in_progress, 1, "the bucket in progress");
     assert_eq!(
         down, 0,
         "with no record, nothing may be asserted as an outage"
     );
-    assert_eq!(up + part + down + unknown, 96, "the strip is 96 half hours");
     assert!(
-        strip.ends_with("<i class=\"part\"></i>"),
+        bars.last().expect("a bar").starts_with("part"),
         "the newest bucket must be on the right, beside the `now` label"
     );
 
     // The legend has to name every colour the strip can draw, or a red bar
-    // appears one day with nothing saying what it means.
-    for colour in ["up", "part", "down", "unknown"] {
-        assert!(
-            page.contains(&format!("<i class=\"{colour}\"></i>")),
-            "the legend does not show `{colour}`"
-        );
+    // appears one day with nothing saying what it means. Taken from the bars
+    // themselves rather than from a list written here, so a colour added to
+    // the strip and not to the legend fails this even though nobody thought to
+    // add it to a test. `part` is not a colour: the bucket in progress is
+    // drawn in the colour of the level it is at, which is named already.
+    for bar in &bars {
+        for colour in bar.split_whitespace().filter(|c| *c != "part") {
+            assert!(
+                page.contains(&format!("<i class=\"{colour}\"></i>")),
+                "the strip draws `{colour}` and the legend does not name it"
+            );
+        }
     }
 
     server.shutdown().await.ok();
@@ -184,12 +197,48 @@ async fn the_page_publishes_no_traffic_and_no_infrastructure() {
         );
     }
 
-    // And the policy that keeps it script-free stays shut. A live status page
-    // is the usual reason somebody loosens a CSP; this one did not.
+    // And the policy stays shut.
+    //
+    // This asserted the page was script-free, and it stopped being true: the
+    // page gained a decorative canvas, so the policy gained a `script-src`
+    // pinning that script's sha256. The assertion failed for the right reason
+    // and then sat failing, because the commit that added the canvas did not
+    // run this test. So the rule is written out rather than implied:
+    //
+    // - `default-src 'none'`, so nothing is fetchable by default.
+    // - `script-src` may name **only** a hash. A hash admits exactly the
+    //   bytes that shipped; `'unsafe-inline'` admits anything an injection
+    //   writes into the document, which is the whole attack this closes, and a
+    //   host or a scheme admits whatever that host serves tomorrow.
+    //
+    // A live status page is the usual reason somebody loosens a CSP. Decoration
+    // turned out to be another, and neither may open it past one pinned hash.
     assert!(
-        body.contains("default-src 'none'") && !body.contains("script-src"),
-        "the content security policy has been loosened"
+        body.contains("default-src 'none'"),
+        "the content security policy no longer denies by default"
     );
+    if let Some(rest) = body.split("script-src").nth(1) {
+        let directive = rest.split(';').next().unwrap_or("").trim();
+        assert!(
+            directive.contains("'sha256-"),
+            "script-src names no hash: `{directive}`"
+        );
+        for opening in ["unsafe-inline", "unsafe-eval", "*", "http:", "https:", "data:"] {
+            assert!(
+                !directive.contains(opening),
+                "script-src admits `{opening}`, not just the script that shipped: `{directive}`"
+            );
+        }
+    }
+
+    // Nothing is fetched from anywhere, which is what makes the policy above
+    // something the page can actually keep.
+    for remote in ["src=\"http", "src='http", "href=\"http", "href='http"] {
+        assert!(
+            !body.contains(remote),
+            "the page fetches something remote: `{remote}`"
+        );
+    }
 
     server.shutdown().await.ok();
 }
