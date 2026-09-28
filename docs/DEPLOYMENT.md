@@ -164,8 +164,36 @@ week.
 
 ## 3a. Surviving a reboot
 
-Every service now runs under systemd and comes back on its own: the mailbox,
-the relay, the notifier, and the front beside each mailbox.
+Every service runs under systemd, and how well it comes back depends on which
+kind of unit it is. **A transient unit does not survive a reboot.** One made
+with `systemd-run` lives in `/run` and is gone when the machine restarts, so a
+service started that way is running under systemd and still absent after a power
+cut. Only a unit **file** comes back.
+
+Every mailbox and every front is now a unit **file**, `enabled`, on a host with
+`loginctl enable-linger` set. Checked with
+`systemctl --user show -p Transient --value <unit>` and
+`systemctl --user is-enabled <unit>`:
+
+| Machine | Services as unit files | Survives a reboot |
+|---|---|---|
+| `orvexa`'s host | mailbox, relay, notifier, front for `caelix` | yes |
+| `caelix`'s host | mailbox, relay, front for `nyxara` | yes |
+| `nyxara`'s host | mailbox, front for `orvexa` | yes |
+
+All six mailbox and front units were transient until 28 September, and the
+mailbox was the harder half to convert: a unit file needs
+`ROTELYX_MAILBOX_PASSPHRASE` from an `EnvironmentFile`, and a passphrase that
+only ever lived in a `systemd-run --setenv` dies with the process. `nyxara`'s was
+recovered from the running process's own `/proc/<pid>/environ` into
+`~/.config/rotelyx/mailbox.env` **before** it was stopped, which is the only
+moment that is possible. `caelix`'s was already gone: its store from before that
+restart is kept as `store.unreadable-20260928` and cannot be opened by anybody.
+See **Do not drop `--front-key`** below for the restart that did it.
+
+Proven rather than assumed: each mailbox was restarted through its new unit, came
+back `active` with its store the same size it went down with, and the front in
+front of it reconnected on its own within four seconds without being touched.
 
 It was not always so, and the reason it changed is worth keeping. They were
 started by hand, and on 18 August all three WebSocket endpoints returned 502
@@ -516,11 +544,17 @@ One front per mailbox, so a device holds one connection to each instead of one
 per conversation. See `docs/FRONT.md` for what a front is and what it does not
 do.
 
-On each member, beside its mailbox:
+The simplest form, beside the mailbox it fronts for:
 
 ```sh
 rotelyx-mailbox-server front --mailbox ws://127.0.0.1:3341 --bind 0.0.0.0:3343
 ```
+
+**That is not how these three are deployed**, and the reason is
+[Cross them](#cross-them) below: a front on the same machine as its mailbox
+gives the connection saving and none of the privacy. Each of ours names another
+member's mailbox and runs as a unit file, so it comes back after a reboot and
+keeps reconnecting on its own.
 
 `--mailbox` takes the **base** URL with no path. With `/mailbox` on the end the
 front asks for `/mailbox/front-key`, gets a 404, and exits saying the mailbox
@@ -577,9 +611,58 @@ Two things to set, and they must agree:
 
 A front that cannot reach the mailbox it fronts for exits at startup saying the
 mailbox serves no front key, so a mismatch here fails immediately rather than
-quietly serving the wrong mailbox. The same check as before proves it: the
-front is running, with no restarts, which means it reached its mailbox and read
-the key.
+quietly serving the wrong mailbox.
+
+**A front that is running proves nothing about whether it is carrying
+traffic.** It answers `/front-key` from a copy it read at startup and it
+upgrades every phone that asks, so a landing page saying Operational, a key of
+the right length and a `101` are all still there when the mailbox behind it has
+gone. Until 28 September the pool was opened once at startup and never again, so
+a mailbox restart left the front swallowing every frame its phones sealed, in
+silence, for as long as nobody restarted it by hand. Two things close that:
+
+- Each slot in the pool reconnects on its own, backing off to fifteen seconds.
+- While **no** slot is connected the front answers the phone-facing `/front`
+  with `503`, so a client falls back to the mailbox directly instead of waiting
+  for an answer that is not coming.
+
+The check that actually proves a front carries a session is
+`front-probe`, which does what a phone does -- fetch the key, open a sealed
+session to it, subscribe, and wait for the `ready` that answers a subscribe:
+
+```sh
+cargo run -p rotelyx-mailbox-server --example front-probe -- wss://HOST
+```
+
+It exits non-zero on silence, which is the failure every cheaper check misses.
+
+### Do not drop `--front-key`
+
+A mailbox started without `--front-key` closes `/front` and `/front-key`
+outright, and then **every front pointing at it dies**: a front reads the key at
+startup, so it exits with "a front needs a mailbox started with `--front-key`"
+and cannot come back until the flag does.
+
+This is easy to do by accident, because it looks fine from outside. The public
+`/front-key` keeps answering with the right key for as long as the old front
+process is alive, since it serves its own cached copy; comparing that against
+what a client has pinned confirms a key that the mailbox is no longer serving at
+all. Ask the **mailbox** directly instead:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' http://MAILBOX_HOST:3341/front-key
+```
+
+`404` means the flag is missing. On 28 September both `caelix` and `nyxara` were
+restarted without it to add `--status`, which took their fronts down and left a
+phone reporting that the front session for `nyxara` was not open while the
+mailbox itself was healthy. Restarting `caelix` also lost its
+`ROTELYX_MAILBOX_PASSPHRASE`, which had only ever been passed with
+`systemd-run --setenv`; that store cannot be opened by anyone and is kept as
+`store.unreadable-20260928`. It runs on a new passphrase, in an
+`EnvironmentFile` this time, with `--mailbox-state` back. Keep the whole command
+line with the unit, and the passphrase in a file beside it, never only in a
+process's environment.
 
 Order matters when changing it. Move the processes first, then repoint the
 proxy. The other way round leaves `/front` aimed at a front that is not there
