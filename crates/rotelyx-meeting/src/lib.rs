@@ -2358,6 +2358,30 @@ mod tests {
         }
     }
 
+    /// A port nobody else has written down.
+    ///
+    /// These tests used fixed numbers, 3394 to 3400, and
+    /// `rotelyx-mailbox-client/tests/against_the_server.rs` uses 3391 to 3399.
+    /// Those are different test binaries and `cargo test --workspace` runs them
+    /// at the same time, so two of them fight over one number. Whoever binds
+    /// second gets nothing, and `start` returning `None` makes that test
+    /// **pass without running**, so the collision is invisible. Worse, a test
+    /// that restarts its mailbox on a fixed number can come back to the other
+    /// binary's mailbox, which knows nothing about its conversation: that is
+    /// what "nothing crossed after the restart" was, once, in a workspace run
+    /// and never on its own.
+    ///
+    /// Asking the kernel removes the shared number. The port is released before
+    /// the child binds it, which is a small race with nothing else on the
+    /// machine, rather than a certain collision with a name in another file.
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("a free port")
+            .local_addr()
+            .expect("its address")
+            .port()
+    }
+
     async fn start(port: u16) -> Option<Server> {
         let binary = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -2384,7 +2408,11 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        None
+        // Not built is a skip, above. A mailbox that was started and never
+        // answered is a failure: returning `None` here made the caller return
+        // early and report `ok`, so six seconds of nothing looked like a
+        // passing test.
+        panic!("the mailbox was started on {port} and never answered in six seconds")
     }
 
     /// Where a test reads back what the window was told.
@@ -2459,7 +2487,7 @@ mod tests {
     /// safety number, and that what one types the other reads.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_code_shown_and_read_becomes_a_conversation() {
-        let Some(server) = start(3394).await else {
+        let Some(server) = start(free_port()).await else {
             return;
         };
 
@@ -2636,7 +2664,7 @@ mod tests {
     /// three of them ended up in one epoch rather than two.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_third_person_in_takes_two_of_the_first_two() {
-        let Some(server) = start(3398).await else {
+        let Some(server) = start(free_port()).await else {
             return;
         };
         let code = rotelyx_wasm::new_meeting_code().expect("entropy");
@@ -2754,7 +2782,8 @@ mod tests {
     /// socket error and the bot process ended with it.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_conversation_survives_the_mailbox_restarting() {
-        let Some(server) = start(3399).await else {
+        let port = free_port();
+        let Some(server) = start(port).await else {
             return;
         };
         let code = rotelyx_wasm::new_meeting_code().expect("entropy");
@@ -2769,7 +2798,7 @@ mod tests {
         // of a mailbox with no state on disk is.
         drop(server);
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let Some(_server) = start(3399).await else {
+        let Some(_server) = start(port).await else {
             panic!("the mailbox did not come back");
         };
 
@@ -2826,7 +2855,7 @@ mod tests {
     /// receiving. This is the test that would have caught it.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_group_restarted_all_at_once_is_still_one_group() {
-        let Some(server) = start(3400).await else {
+        let Some(server) = start(free_port()).await else {
             return;
         };
         let code = rotelyx_wasm::new_meeting_code().expect("entropy");
@@ -3314,7 +3343,7 @@ mod tests {
     /// message sent after the reopen is one the other side can actually read.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_conversation_survives_being_closed() {
-        let Some(server) = start(3397).await else {
+        let Some(server) = start(free_port()).await else {
             return;
         };
 
@@ -3481,7 +3510,7 @@ mod tests {
     /// a roster would pass a count and leave the device reading everything.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_removed_member_stops_receiving() {
-        let Some(server) = start(3396).await else {
+        let Some(server) = start(free_port()).await else {
             return;
         };
 
@@ -3635,7 +3664,7 @@ mod tests {
     /// window says "waiting", and that is the honest thing for it to say.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_code_nobody_is_waiting_at_simply_waits() {
-        let Some(server) = start(3395).await else {
+        let Some(server) = start(free_port()).await else {
             return;
         };
 

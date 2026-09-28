@@ -14,18 +14,21 @@ use rotelyx_mailbox_client::Mailbox;
 
 /// The server, on a port of its own, killed when the test ends.
 ///
-/// # Ports are chosen by hand, and that has already cost something
+/// # Ports are asked for, never chosen by hand
 ///
-/// In use: 3391, 3392, 3393, 3396, 3397, 3398, 3399. **Pick one that is not.**
+/// They used to be a list kept in this comment, and a test that reused a number
+/// did not fail on the collision: `start` succeeds as soon as something answers,
+/// and what answers is the other test's server, started with different
+/// arguments. That is how a token test landed on a server with no issuer key
+/// and reported that a valid token had been refused. The list also crossed
+/// crate boundaries, where nobody was maintaining it at all:
+/// `rotelyx-meeting` had picked 3399 as well, a different test binary that
+/// `cargo test --workspace` runs at the same time, and its restart test came
+/// back to *this* file's mailbox and found its conversation gone.
 ///
-/// These tests run in parallel and each starts a server of its own. A test that
-/// reuses a port does not fail on the collision: `start` succeeds as soon as
-/// something answers, and what answers is the other test's server, started with
-/// different arguments. That is how a token test landed on a server with no
-/// issuer key and reported that a valid token had been refused.
-///
-/// Binding port zero would end this, and the server would have to print the
-/// port it chose for a test to find it, which it does not.
+/// So [`free_port`] asks the kernel instead. The port is released before the
+/// child binds it, which is a small race against nothing else on the machine,
+/// rather than a certainty against a number written in two files.
 struct Server {
     child: Child,
     port: u16,
@@ -44,6 +47,15 @@ async fn start(port: u16) -> Option<Server> {
 
 /// The same, with extra arguments, so a test can ask for a server that accepts
 /// tokens.
+/// A port nobody else has written down. See the note on `Server`.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("a free port")
+        .local_addr()
+        .expect("its address")
+        .port()
+}
+
 async fn start_with(port: u16, extra: &[&str]) -> Option<Server> {
     let binary = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -93,7 +105,7 @@ fn envelope(tag_hex: &str, bytes: usize) -> String {
 /// One side leaves an envelope, the other collects it.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_envelope_crosses_the_mailbox() {
-    let Some(server) = start(3391).await else {
+    let Some(server) = start(free_port()).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
@@ -133,7 +145,7 @@ async fn an_envelope_crosses_the_mailbox() {
 /// Nobody listening is held, not lost. That is what a mailbox is for.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_envelope_with_nobody_listening_is_held() {
-    let Some(server) = start(3392).await else {
+    let Some(server) = start(free_port()).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
@@ -158,7 +170,7 @@ async fn an_envelope_with_nobody_listening_is_held() {
 /// A tag nobody deposited under stays empty, and waiting on it is not an error.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_empty_tag_times_out_rather_than_failing() {
-    let Some(server) = start(3393).await else {
+    let Some(server) = start(free_port()).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
@@ -194,7 +206,7 @@ async fn an_empty_tag_times_out_rather_than_failing() {
 /// derive a tag could drain it.
 #[tokio::test(flavor = "multi_thread")]
 async fn delivery_holds_and_a_receipt_releases() {
-    let Some(server) = start(3396).await else {
+    let Some(server) = start(free_port()).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
@@ -251,7 +263,7 @@ async fn delivery_holds_and_a_receipt_releases() {
 /// away.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_receipt_for_a_tag_nobody_subscribed_to_removes_nothing() {
-    let Some(server) = start(3397).await else {
+    let Some(server) = start(free_port()).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
@@ -308,7 +320,7 @@ async fn a_token_moves_a_client_off_the_free_tier() {
     const SECRET: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
     let public = rotelyx_capability::testing::public_hex(SECRET);
 
-    let Some(server) = start_with(3398, &["--issuer", &public]).await else {
+    let Some(server) = start_with(free_port(), &["--issuer", &public]).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
@@ -357,8 +369,7 @@ async fn a_token_from_an_unknown_issuer_is_refused() {
     const OURS: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
     const THEIRS: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
-    let Some(server) = start_with(
-        3399,
+    let Some(server) = start_with(free_port(),
         &["--issuer", &rotelyx_capability::testing::public_hex(OURS)],
     )
     .await
@@ -406,7 +417,7 @@ async fn a_held_token_stays_unpresented_until_it_is_needed() {
     const SECRET: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
     let public = rotelyx_capability::testing::public_hex(SECRET);
 
-    let Some(server) = start_with(3395, &["--issuer", &public]).await else {
+    let Some(server) = start_with(free_port(), &["--issuer", &public]).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
@@ -457,7 +468,7 @@ async fn a_held_token_stays_unpresented_until_it_is_needed() {
 /// envelope, that test would pass with the token never presented at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_free_tier_refuses_what_the_token_was_needed_for() {
-    let Some(server) = start(3390).await else {
+    let Some(server) = start(free_port()).await else {
         return;
     };
     let url = format!("ws://127.0.0.1:{}/mailbox", server.port);
